@@ -39,7 +39,7 @@ git push
 
 ## 3. Deploy via Blueprint (5 min)
 
-The repo already includes `server/render.yaml` so Render configures everything for you.
+The repo includes `render.yaml` at the **repo root** so Render configures everything for you.
 
 1. Render dashboard → **New +** → **Blueprint**
 2. Connect your `techvibedz/anime-mobile` repo (authorize if asked)

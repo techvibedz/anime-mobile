@@ -15,8 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
   && rm -rf /var/lib/apt/lists/*
 
-# HF Spaces run as user with UID 1000
-RUN useradd -m -u 1000 user
+# HF Spaces run as user with UID 1000.
+# The node:20-bookworm-slim base already has a `node` user at UID 1000, so
+# delete it first.
+RUN userdel -r node 2>/dev/null || true \
+ && useradd -m -u 1000 user \
+ && mkdir -p /home/user/app \
+ && chown -R user:user /home/user
+
 USER user
 ENV HOME=/home/user PATH=/home/user/.local/bin:$PATH
 WORKDIR /home/user/app

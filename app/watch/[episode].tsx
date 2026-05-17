@@ -155,7 +155,29 @@ export default function WatchScreen() {
   const isWebView = active?.status === "webview";
   const iframeUrl = getIframeUrl(active?.server);
 
-  const player = useVideoPlayer(videoUrl ?? "", (p) => {
+  // CDNs (mp4upload, streamwish, voe, …) refuse playback without the
+  // origin's Referer header. Derive it from the embed iframe URL so the
+  // native player passes the same Referer the embed page would.
+  const videoSource = (() => {
+    if (!videoUrl) return "";
+    try {
+      const origin = iframeUrl ? new URL(iframeUrl).origin : null;
+      if (!origin) return videoUrl;
+      return {
+        uri: videoUrl,
+        headers: {
+          Referer: origin + "/",
+          Origin: origin,
+          "User-Agent":
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        },
+      };
+    } catch {
+      return videoUrl;
+    }
+  })();
+
+  const player = useVideoPlayer(videoSource as any, (p) => {
     if (videoUrl && resumeMs > 0) {
       p.currentTime = resumeMs / 1000;
     }
@@ -173,6 +195,36 @@ export default function WatchScreen() {
     const t2 = setTimeout(tryPlay, 1500);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [videoUrl, player]);
+
+  // Auto-fall back to WebView if the native player errors out within 5s of
+  // the source being set (most likely cause: CDN rejected request without
+  // valid cookies even after we passed Referer/Origin headers).
+  useEffect(() => {
+    if (!videoUrl || !player) return;
+    const idx = activeIdx;
+    const sub = (player as any).addListener?.("statusChange", (status: any) => {
+      const s = status?.status ?? status?.state ?? status;
+      if (s === "error" || status?.error) {
+        setServers((p) => p.map((srv, i) =>
+          i === idx ? { ...srv, status: "webview" as ServerStatus, videoUrl: null } : srv
+        ));
+      }
+    });
+    // Failsafe: if the player hasn't started after 8s and duration is still 0, fall back.
+    const failTimer = setTimeout(() => {
+      try {
+        if (player.duration === 0 && player.currentTime === 0) {
+          setServers((p) => p.map((srv, i) =>
+            i === idx ? { ...srv, status: "webview" as ServerStatus, videoUrl: null } : srv
+          ));
+        }
+      } catch {}
+    }, 8000);
+    return () => {
+      try { sub?.remove?.(); } catch {}
+      clearTimeout(failTimer);
+    };
+  }, [videoUrl, player, activeIdx]);
 
   const scheduleHide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);

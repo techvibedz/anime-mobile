@@ -159,11 +159,41 @@ _waitFor(
 
 // ──────────────────────────────────────────────────────────────
 // EPISODES — anime detail + episode list (witanime).
-// Server data is encoded in _zG/_zH variables and decoded by the site's own
-// abz100.js into iframes. We just wait for DOM to settle and scrape episode
-// anchors directly.
+// Episodes are stored in window.processedEpisodeData as
+// '<base64_encrypted>.<base64_key>' and decoded via XOR. We replicate
+// that decoder client-side instead of trying to scrape rendered DOM
+// (which uses onclick handlers, not anchors, and is unreliable).
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_EPISODES_WIT = `(function(){${HELPERS}
+function decodeEpisodeData(raw) {
+  if (!raw) return [];
+  try {
+    var parts = String(raw).split('.');
+    if (parts.length !== 2) return [];
+    var encBin = atob(parts[0]);
+    var keyBin = atob(parts[1]);
+    var bytes = new Uint8Array(encBin.length);
+    for (var i = 0; i < encBin.length; i++) {
+      bytes[i] = encBin.charCodeAt(i) ^ keyBin.charCodeAt(i % keyBin.length);
+    }
+    var json = (typeof TextDecoder !== 'undefined')
+      ? new TextDecoder('utf-8').decode(bytes)
+      : String.fromCharCode.apply(null, bytes);
+    return JSON.parse(json);
+  } catch (e) { return []; }
+}
+function findProcessedData() {
+  // 1) Live JS variable set by the site's own scripts
+  try { if (typeof window.processedEpisodeData === 'string') return window.processedEpisodeData; } catch (e) {}
+  // 2) Fallback: scan inline <script> tags for the raw assignment
+  var scripts = document.querySelectorAll('script');
+  for (var i = 0; i < scripts.length; i++) {
+    var t = scripts[i].textContent || '';
+    var m = t.match(/processedEpisodeData\\s*=\\s*['"]([^'"]+)['"]/);
+    if (m) return m[1];
+  }
+  return null;
+}
 function scrape() {
   var titleEl = document.querySelector('.anime-details-title') || document.querySelector('h1');
   var posterImg = document.querySelector('.anime-thumbnail img');
@@ -171,26 +201,36 @@ function scrape() {
   var genres = [];
   document.querySelectorAll('.anime-genres a').forEach(function (a) { genres.push(a.textContent.trim()); });
 
-  // Episodes — witanime sidebar has decoded onclick or anchor hrefs.
-  var seen = {};
-  var episodes = [];
-  document.querySelectorAll('a[href*="/episode/"], li.DivEpisodeContainer a, .episodes-card-container a').forEach(function (a) {
-    var href = a.getAttribute('href') || '';
-    if (!href || seen[href]) return;
-    if (!/\\/episode\\//.test(href)) return;
-    seen[href] = true;
-    var label = (a.textContent || '').trim();
-    var numMatch = label.match(/(\\d+)/) || href.match(/(\\d+)\\/?$/);
-    var num = numMatch ? parseInt(numMatch[1], 10) : episodes.length + 1;
-    episodes.push({
-      title: label || ('Episode ' + num),
+  var raw = findProcessedData();
+  var decoded = decodeEpisodeData(raw);
+  var episodes = decoded.map(function (ep) {
+    var url = ep.url || '';
+    if (url && url.indexOf('http') !== 0) url = 'https://witanime.you/' + url.replace(/^\\//, '');
+    var num = typeof ep.number === 'string' ? parseInt(ep.number, 10) : (ep.number || 0);
+    return {
+      title: ((ep.type || '') + ' ' + (ep.number != null ? ep.number : '')).trim() || ('Episode ' + num),
       number: num,
-      type: '',
-      screenshot: '',
-      href: href,
-    });
-  });
+      type: ep.type || '',
+      screenshot: ep.screenshot || '',
+      href: url || null,
+    };
+  }).filter(function (e) { return e.href; });
   episodes.sort(function (a, b) { return a.number - b.number; });
+
+  // DOM fallback if decoder yielded nothing
+  if (episodes.length === 0) {
+    var seen = {};
+    document.querySelectorAll('a[href*="/episode/"]').forEach(function (a) {
+      var href = a.getAttribute('href') || '';
+      if (!href || seen[href] || !/\\/episode\\//.test(href)) return;
+      seen[href] = true;
+      var label = (a.textContent || '').trim();
+      var numMatch = label.match(/(\\d+)/) || href.match(/(\\d+)\\/?$/);
+      var num = numMatch ? parseInt(numMatch[1], 10) : episodes.length + 1;
+      episodes.push({ title: label || ('Episode ' + num), number: num, type: '', screenshot: '', href: href });
+    });
+    episodes.sort(function (a, b) { return a.number - b.number; });
+  }
 
   return {
     title: (titleEl && titleEl.textContent.trim()) || '',
@@ -198,14 +238,20 @@ function scrape() {
     synopsis: (synopsisEl && synopsisEl.textContent.trim()) || '',
     genres: genres,
     episodes: episodes,
+    _debug: { hasProcessedData: !!raw, decodedCount: decoded.length },
   };
 }
+// Wait for either processedEpisodeData OR detail-title to appear (CF passed).
 _waitFor(
-  function(){ return !!document.querySelector('.anime-details-title, .anime-page-link, .anime-thumbnail'); },
+  function(){
+    return !!findProcessedData()
+        || !!document.querySelector('.anime-details-title, .anime-page-link, .anime-thumbnail');
+  },
   function(ok, reason){
     if (ok) {
-      // After detail loads, give 2s for episode JS to inject episode links.
-      setTimeout(function(){ _send('result', { data: scrape() }); }, 2000);
+      // Give the site's own JS up to 2.5s to populate processedEpisodeData
+      // if it wasn't there at the wait check.
+      setTimeout(function(){ _send('result', { data: scrape() }); }, 2500);
     } else {
       _send('error', { message: reason });
     }

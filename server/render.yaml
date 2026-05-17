@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: pantoufa-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SKIP_PREWARM
+        value: "1"
+      - key: PORT
+        value: "3001"

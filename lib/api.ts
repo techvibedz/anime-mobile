@@ -1,9 +1,12 @@
 import { Platform } from "react-native";
 import * as Device from "expo-device";
 
-const BASE = Device.isDevice
-  ? "http://192.168.1.6:3001"
-  : Platform.select({ android: "http://10.0.2.2:3001", default: "http://localhost:3001" })!;
+const ENV_BASE = process.env.EXPO_PUBLIC_API_BASE?.replace(/\/$/, "");
+
+const BASE = ENV_BASE
+  ?? (Device.isDevice
+    ? "http://192.168.1.6:3001"
+    : Platform.select({ android: "http://10.0.2.2:3001", default: "http://localhost:3001" })!);
 
 export function getProxyUrl(videoUrl: string) {
   return `${BASE}/api/proxy-video?url=${encodeURIComponent(videoUrl)}`;

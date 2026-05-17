@@ -13,3 +13,28 @@ dist/
 web-build/
 ios/
 android/
+
+# Sensitive / runtime files
+server/cookies-*.json
+server/cookies-3rb.json
+server/cookies-4up.json
+ngrok.log
+ngrok-url.txt
+*.log
+
+# Test files
+server/test-*.js
+
+# Server node_modules
+server/node_modules/
+server/package-lock.json
+
+# Graphify cache (large)
+graphify-out/cache/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store

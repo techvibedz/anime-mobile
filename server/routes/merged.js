@@ -1,7 +1,7 @@
 const express = require('express');
 const cheerio = require('cheerio');
 const { decodeEpisodeData: decodeWitEpisodes } = require('../lib/decoder');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('../lib/puppeteer');
 const chrome = require('../lib/chrome-manager');
 
 const router = express.Router();

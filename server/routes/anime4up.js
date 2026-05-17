@@ -1,5 +1,5 @@
 const express = require('express');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('../lib/puppeteer');
 const cheerio = require('cheerio');
 const chrome = require('../lib/chrome-manager');
 

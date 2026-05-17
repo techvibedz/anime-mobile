@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('../lib/puppeteer');
 
 const router = express.Router();
 

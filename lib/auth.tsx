@@ -41,7 +41,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(sess);
       setUser(sess?.user ?? null);
     });
-    return () => { sub.subscription.unsubscribe(); };
+
+    // Global deep-link handler. On Android the OS often hijacks the OAuth
+    // redirect (anime-mobile://auth-callback#access_token=...) before
+    // openAuthSessionAsync can capture it. Catching it here at app root
+    // means we don't depend on any specific screen being mounted.
+    async function handleDeepLink(url: string | null) {
+      if (!url || !url.includes("auth-callback")) return;
+      const hashPart = url.split("#")[1] ?? "";
+      const queryPart = url.split("?")[1]?.split("#")[0] ?? "";
+      const params = new URLSearchParams(hashPart || queryPart);
+      const access_token = params.get("access_token");
+      const refresh_token = params.get("refresh_token");
+      const code = params.get("code");
+      try {
+        if (access_token && refresh_token) {
+          await supabase.auth.setSession({ access_token, refresh_token });
+        } else if (code) {
+          await supabase.auth.exchangeCodeForSession(code);
+        }
+      } catch (e) {
+        console.warn("[auth] deep-link session set failed", e);
+      }
+    }
+    // Cold start: app launched FROM the deep link.
+    Linking.getInitialURL().then(handleDeepLink);
+    // Warm start: app already running, OS foregrounds via deep link.
+    const urlSub = Linking.addEventListener("url", (e) => { handleDeepLink(e.url); });
+
+    return () => {
+      sub.subscription.unsubscribe();
+      urlSub.remove();
+    };
   }, []);
 
   const signInWithEmail = useCallback(async (email: string, password: string) => {

@@ -491,26 +491,27 @@ _waitFor(
 
 // ──────────────────────────────────────────────────────────────
 // VIDEO URL hook — injected BEFORE the embed page loads.
-// Captures first m3u8/mp4 URL the player tries to load.
+// Captures the first m3u8/mp4 URL the player tries to load via
+// fetch/XHR/<video> — used as a fallback when HTML extraction fails.
 // ──────────────────────────────────────────────────────────────
 export const HOOK_VIDEO_BEFORE = `
 (function () {
   if (window.__videoHookInstalled) return true;
   window.__videoHookInstalled = true;
-  var seenUrls = [];
+  window.__hookedUrls = [];
 
-  function send(type, payload) {
-    try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({type:type}, payload))); } catch (e) {}
-  }
   function isVideoUrl(u) {
     if (typeof u !== 'string') return false;
     return /\\.(m3u8|mp4)(\\?|$)/i.test(u);
   }
+  function isDecoy(u) {
+    var lu = (u || '').toLowerCase();
+    return /test-videos\\.co\\.uk|bigbuckbunny|sample[-_.]|placeholder|tos\\.mp4|googleapis\\.com\\/.*oggtheora|\\/lol\\/file\\.mp4/.test(lu);
+  }
   function maybeReport(u) {
-    if (!isVideoUrl(u)) return;
-    if (seenUrls.indexOf(u) !== -1) return;
-    seenUrls.push(u);
-    if (seenUrls.length === 1) send('result', { data: { url: u } });
+    if (!isVideoUrl(u) || isDecoy(u)) return;
+    if (window.__hookedUrls.indexOf(u) !== -1) return;
+    window.__hookedUrls.push(u);
   }
   var origFetch = window.fetch;
   if (origFetch) {
@@ -538,22 +539,191 @@ export const HOOK_VIDEO_BEFORE = `
 true;
 `;
 
+// ──────────────────────────────────────────────────────────────
+// VIDEO URL extraction — injected AFTER the embed page loads.
+// Strategy (highest reliability first):
+//   1) Provider-specific (dailymotion metadata API)
+//   2) Packed-JS unpacker (mp4upload, streamwish, hgcloud, …)
+//   3) JWPlayer / source-tag / generic m3u8/mp4 regex on HTML
+//   4) Wait for fetch/XHR hook from HOOK_VIDEO_BEFORE (auto-clicks play)
+//
+// The URLs from packed JS have all tokens baked in → playable in native
+// player without cookies (just Referer/Origin headers which the player
+// already sets).
+// ──────────────────────────────────────────────────────────────
 export const COLLECT_VIDEO_AFTER = `
 (function () {
-  var start = Date.now();
-  var iv = setInterval(function () {
-    var playBtns = document.querySelectorAll('button, .play, .vjs-big-play-button, [class*="play"]');
-    if (playBtns.length && Date.now() - start < 5000) {
-      try { playBtns[0].click(); } catch (e) {}
+  function send(type, payload) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({type:type}, payload))); } catch (e) {}
+  }
+  function isDecoy(u) {
+    var lu = (u || '').toLowerCase();
+    if (!lu || lu.indexOf('http') !== 0) return true;
+    return /test-videos\\.co\\.uk|bigbuckbunny|sample[-_.]|placeholder|tos\\.mp4|googleapis\\.com\\/.*oggtheora|\\/lol\\/file\\.mp4/.test(lu);
+  }
+  function isEmbedPage(u) {
+    var lu = (u || '').toLowerCase();
+    return /\\/embed|mp4upload\\.com\\/e|hgcloud\\.to\\/e\\/|yonaplay\\.net\\/embed/.test(lu);
+  }
+  function isTracker(u) {
+    var lu = (u || '').toLowerCase();
+    return /google|facebook|cloudflare|analytics|tracker/.test(lu);
+  }
+
+  // ── packed-JS unpacker ──
+  function unpack(p, a, c, k) {
+    var chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    function baseN(n, r) {
+      var s = '';
+      while (n > 0) { s = chars[n % r] + s; n = Math.floor(n / r); }
+      return s || '0';
     }
-    document.querySelectorAll('video').forEach(function (v) {
-      try { v.play().catch(function(){}); } catch (e) {}
-    });
-    if (Date.now() - start > 30000) {
-      clearInterval(iv);
-      try { window.ReactNativeWebView.postMessage(JSON.stringify({type:'error', message:'no-video-url-after-30s'})); } catch (e) {}
+    while (c--) {
+      if (k[c]) p = p.replace(new RegExp('\\\\b' + baseN(c, a) + '\\\\b', 'g'), k[c]);
     }
-  }, 1000);
+    return p;
+  }
+  function extractPackedJS(html) {
+    var re = /eval\\s*\\(\\s*function\\s*\\(\\s*p\\s*,\\s*a\\s*,\\s*c\\s*,\\s*k\\s*,\\s*e\\s*,\\s*d\\s*\\)\\s*\\{[^}]+?\\}\\s*\\(\\s*'((?:[^'\\\\]|\\\\.)*)'\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*'(.*?)'\\s*\\.\\s*split\\s*\\(\\s*'\\|'\\s*\\)/;
+    var m = html.match(re);
+    if (!m) return null;
+    try {
+      var unpacked = unpack(m[1].replace(/\\\\(.)/g, '$1'), +m[2], +m[3], m[4].split('|'));
+      return extractJWPlayer(unpacked) || extractGeneric(unpacked);
+    } catch (e) { return null; }
+  }
+  function extractJWPlayer(html) {
+    var res = [
+      /file\\s*:\\s*["']([^"']+\\.m3u8[^"']*)["']/i,
+      /file\\s*:\\s*["']([^"']+\\.mp4[^"']*)["']/i,
+      /sources\\s*:\\s*\\[\\s*\\{\\s*(?:type\\s*:\\s*["'][^"']*["']\\s*,\\s*)?file\\s*:\\s*["']([^"']+)["']/i,
+      /src\\s*:\\s*["']([^"']+\\.m3u8[^"']*)["']/i,
+      /src\\s*:\\s*["']([^"']+\\.mp4[^"']*)["']/i,
+      /player\\.src\\(\\{[^}]*?src\\s*:\\s*["']([^"']+)["']/i,
+      /source\\s*:\\s*["']([^"']+\\.m3u8[^"']*)["']/i,
+      /source\\s*:\\s*["']([^"']+\\.mp4[^"']*)["']/i,
+    ];
+    for (var i = 0; i < res.length; i++) {
+      var m = html.match(res[i]);
+      if (m && !isEmbedPage(m[1])) return m[1];
+    }
+    return null;
+  }
+  function extractSourceTag(html) {
+    var m = html.match(/<source[^>]*?src\\s*=\\s*["']([^"']+\\.(?:mp4|m3u8|webm)[^"']*)["']/i)
+         || html.match(/<video[^>]*?src\\s*=\\s*["']([^"']+\\.(?:mp4|m3u8|webm)[^"']*)["']/i);
+    return m ? m[1] : null;
+  }
+  function extractGeneric(text) {
+    var patterns = [/https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*/gi, /https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*/gi];
+    for (var i = 0; i < patterns.length; i++) {
+      var ms = text.match(patterns[i]);
+      if (ms) {
+        for (var j = 0; j < ms.length; j++) {
+          if (!isEmbedPage(ms[j]) && !isTracker(ms[j]) && !isDecoy(ms[j])) return ms[j];
+        }
+      }
+    }
+    return null;
+  }
+  function pickHooked() {
+    if (!window.__hookedUrls || !window.__hookedUrls.length) return null;
+    var us = window.__hookedUrls.filter(function (u) { return !isDecoy(u); });
+    if (!us.length) return null;
+    var master = us.find(function (u) { return /master\\.m3u8|playlist\\.m3u8|index\\.m3u8/i.test(u); });
+    var m3u8 = us.find(function (u) { return /\\.m3u8/i.test(u); });
+    var mp4 = us.find(function (u) { return /\\.mp4/i.test(u); });
+    return master || m3u8 || mp4 || us[0];
+  }
+
+  // ── Provider routing ──
+  function extractFromHtml(html) {
+    return extractPackedJS(html) || extractJWPlayer(html) || extractSourceTag(html) || extractGeneric(html);
+  }
+  async function tryDailymotion() {
+    try {
+      var m = location.href.match(/(?:dailymotion\\.com\\/(?:embed\\/)?video\\/|dai\\.ly\\/)([a-zA-Z0-9]+)/);
+      if (!m) return null;
+      var resp = await fetch('https://www.dailymotion.com/player/metadata/video/' + m[1], { credentials: 'omit' });
+      var data = await resp.json();
+      if (!data || !data.qualities) return null;
+      var order = ['1080','720','480','380','240'];
+      for (var i = 0; i < order.length; i++) {
+        var arr = data.qualities[order[i]];
+        if (arr && arr.length) {
+          var mp4 = arr.find(function (v) { return v.type === 'video/mp4'; });
+          if (mp4 && mp4.url) return mp4.url;
+        }
+      }
+      if (data.qualities.auto && data.qualities.auto.length) {
+        var hls = data.qualities.auto.find(function (q) { return q.type === 'application/x-mpegURL'; });
+        if (hls && hls.url) return hls.url;
+        if (data.qualities.auto[0].url) return data.qualities.auto[0].url;
+      }
+      var s = JSON.stringify(data);
+      var m2 = s.match(/https?:\\/\\/[^"'\\\\]+\\.m3u8[^"'\\\\]*/);
+      return m2 ? m2[0] : null;
+    } catch (e) { return null; }
+  }
+  function triggerPlay() {
+    try {
+      var sels = ['.jw-icon-display', '.vjs-big-play-button', '.plyr__control--overlaid', '[class*="play"][class*="btn"]', 'button[aria-label*="lay" i]', '.play', 'button'];
+      for (var i = 0; i < sels.length; i++) {
+        var el = document.querySelector(sels[i]);
+        if (el) { try { el.click(); return; } catch (e) {} }
+      }
+    } catch (e) {}
+    try {
+      document.querySelectorAll('video').forEach(function (v) {
+        try { v.muted = true; v.play().catch(function(){}); } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
+  // ── Main loop ──
+  var sent = false;
+  function done(url) {
+    if (sent) return;
+    sent = true;
+    send('result', { data: { url: url } });
+  }
+  function fail(reason) {
+    if (sent) return;
+    sent = true;
+    send('error', { message: reason });
+  }
+
+  (async function run() {
+    var start = Date.now();
+
+    // 1) Dailymotion metadata API (fast path)
+    var dm = await tryDailymotion();
+    if (dm) return done(dm);
+
+    // 2) Try HTML extractors immediately, then every 1s for 6s
+    for (var i = 0; i < 7; i++) {
+      var html = document.documentElement.outerHTML || '';
+      var found = extractFromHtml(html);
+      if (found && !isDecoy(found)) return done(found);
+      // Also check hook captures
+      var hooked = pickHooked();
+      if (hooked) return done(hooked);
+      if (i === 1) triggerPlay();
+      await new Promise(function (r) { setTimeout(r, 1000); });
+    }
+
+    // 3) Click play and keep watching for hooked URLs up to 30s total
+    triggerPlay();
+    var elapsed = Date.now() - start;
+    while (elapsed < 30000) {
+      var h = pickHooked();
+      if (h) return done(h);
+      await new Promise(function (r) { setTimeout(r, 700); });
+      elapsed = Date.now() - start;
+    }
+
+    fail('no-video-url-after-30s');
+  })();
   return true;
 })();
 true;

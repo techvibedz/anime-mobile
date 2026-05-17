@@ -210,7 +210,8 @@ export default function WatchScreen() {
         ));
       }
     });
-    // Failsafe: if the player hasn't started after 8s and duration is still 0, fall back.
+    // Failsafe: if the player hasn't started after 15s and duration is still
+    // 0, fall back. Bumped from 8s to give HLS streams enough time to buffer.
     const failTimer = setTimeout(() => {
       try {
         if (player.duration === 0 && player.currentTime === 0) {
@@ -219,7 +220,7 @@ export default function WatchScreen() {
           ));
         }
       } catch {}
-    }, 8000);
+    }, 15000);
     return () => {
       try { sub?.remove?.(); } catch {}
       clearTimeout(failTimer);

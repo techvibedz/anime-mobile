@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Pantoufa",
-    "slug": "anime-mobile",
+    "slug": "injaz",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -35,7 +35,11 @@
     },
     "runtimeVersion": "1.0.0",
     "extra": {
-      "versionJsonUrl": "https://raw.githubusercontent.com/techvibedz/anime-mobile/main/version.json"
+      "versionJsonUrl": "https://raw.githubusercontent.com/techvibedz/anime-mobile/main/version.json",
+      "router": {},
+      "eas": {
+        "projectId": "54f0baee-f81b-4de2-89f1-825251f0547d"
+      }
     },
     "plugins": [
       "expo-router",
@@ -51,6 +55,7 @@
       "expo-font",
       "expo-web-browser",
       "expo-secure-store"
-    ]
+    ],
+    "owner": "houdeifa515"
   }
 }

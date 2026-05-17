@@ -24,7 +24,8 @@ function AuthGate() {
     if (!isConfigured) return;
     const inAuth = segments[0] === "(auth)";
     const inDebug = segments[0] === "scraper-debug";
-    if (!user && !inAuth && !inDebug) {
+    const inCallback = segments[0] === "auth-callback";
+    if (!user && !inAuth && !inDebug && !inCallback) {
       router.replace("/(auth)/welcome");
     } else if (user && inAuth) {
       router.replace("/(tabs)");
@@ -85,6 +86,7 @@ function AuthGate() {
       <Stack.Screen name="watch/[episode]" />
       <Stack.Screen name="see-all/[section]" />
       <Stack.Screen name="scraper-debug" />
+      <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
     </Stack>
   );
 }

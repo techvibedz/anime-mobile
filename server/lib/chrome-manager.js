@@ -105,7 +105,7 @@ async function start() {
       } else {
         console.log('[Chrome] Ready, pre-warming sites...');
         try {
-          const puppeteer = require('puppeteer-core');
+          const puppeteer = require('./puppeteer');
           const browser = await puppeteer.connect({
             browserURL: `http://localhost:${DEBUG_PORT}`,
             defaultViewport: null,

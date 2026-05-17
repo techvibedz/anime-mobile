@@ -17,9 +17,10 @@
 
 ### Server (Express + Puppeteer)
 - ✅ Cross-platform `chrome-manager.js` (Linux + Windows; respects `CHROME_BIN`, `SKIP_PREWARM`)
-- ✅ `Dockerfile` + `.dockerignore` ready (Node 20 + Chromium + Arabic/CJK fonts)
-- ✅ `render.yaml` blueprint for one-click deploy
-- ✅ `DEPLOY.md` — Render free tier deploy guide
+- ✅ `server/Dockerfile` + `.dockerignore` ready (Node 20 + Chromium + Arabic/CJK fonts)
+- ✅ `hf-space/Dockerfile` + `hf-space/README.md` — for Hugging Face Docker Space deploy
+- ✅ `server/DEPLOY.md` — Hugging Face Spaces deploy guide
+- ⚠️ Render free tier was tried first — OOMs on 512MB. HF Spaces (16GB free) is the target.
 - ❌ **Not yet deployed** — user needs to run through `server/DEPLOY.md`
 
 ## Pending work

@@ -86,13 +86,6 @@ async function start() {
     args.push('--disable-setuid-sandbox');
     args.push('--disable-dev-shm-usage');
     args.push('--disable-gpu');
-    // Memory diet for 512MB hosts
-    args.push('--disable-software-rasterizer');
-    args.push('--disable-background-timer-throttling');
-    args.push('--disable-renderer-backgrounding');
-    args.push('--disable-features=TranslateUI,BlinkGenPropertyTrees');
-    args.push('--single-process');
-    args.push('--no-zygote');
   }
   args.push(START_URL);
 

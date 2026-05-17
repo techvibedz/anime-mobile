@@ -1,0 +1,60 @@
+[
+  {
+    "name": "cf_clearance",
+    "value": "PXB3Dn.Zcj5AGEOlxS1G2Zw4aOEw1gt.leDink2.JZs-1778897631-1.2.1.1-yy4xZsTCdgCN5Lh94jnUCZ.pNturNso4M9.5UBJhgbIDsDiLQB93uQ57DOry4XJPMvDX4h6wqCqQMGONm1MQ3YYPpatt3HBorUttB32SHukCnRl74zwbCAPhs1NZGSYGp6nrx8h43AsN9pqd0bxX1V6ksxVKerz6gYnoMeQaQktw59Y_e9rkbhbqLtJ_0ceM3OObw4DG21.nb1pa.UAwzBj432y0RwLmF9soO0RN3APZcCJtWCllLBcbUjdA275MOMaKbfSfgEpBe6cFaulE2EwAnhnBMG7aHNjDTqXSHbVrOnXkW.hno8hXtJPtvVwy9wvxD_KvfYPh0zbHYEb021mRVOEBgfH.hSWqs8xcIFPTxj1tXuSSnEZ1Lg3iIOG2HRacYlDggfLZftNo93Z8D31UdC06BZzldRyo_zDCDWk",
+    "domain": ".anime4up.rest",
+    "path": "/",
+    "expires": 1810433631.774541,
+    "size": 502,
+    "httpOnly": true,
+    "secure": true,
+    "session": false,
+    "sameSite": "None",
+    "priority": "Medium",
+    "sourceScheme": "Secure",
+    "partitionKey": "https://anime4up.rest",
+    "sameParty": false
+  },
+  {
+    "name": "_ga",
+    "value": "GA1.1.285740873.1778897631",
+    "domain": ".anime4up.rest",
+    "path": "/",
+    "expires": 1813457631.360831,
+    "size": 29,
+    "httpOnly": false,
+    "secure": false,
+    "session": false,
+    "priority": "Medium",
+    "sourceScheme": "Secure",
+    "sameParty": false
+  },
+  {
+    "name": "_ga_T9CZDRRQDP",
+    "value": "GS2.1.s1778897631$o1$g0$t1778897631$j60$l0$h0",
+    "domain": ".anime4up.rest",
+    "path": "/",
+    "expires": 1813457631.307882,
+    "size": 59,
+    "httpOnly": false,
+    "secure": false,
+    "session": false,
+    "priority": "Medium",
+    "sourceScheme": "Secure",
+    "sameParty": false
+  },
+  {
+    "name": "_ga_E22GEMVXL6",
+    "value": "GS2.1.s1778897631$o1$g0$t1778897631$j60$l0$h0",
+    "domain": ".anime4up.rest",
+    "path": "/",
+    "expires": 1813457631.360589,
+    "size": 59,
+    "httpOnly": false,
+    "secure": false,
+    "session": false,
+    "priority": "Medium",
+    "sourceScheme": "Secure",
+    "sameParty": false
+  }
+]

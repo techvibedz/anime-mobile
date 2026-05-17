@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "Pantoufa",
+    "slug": "anime-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "anime-mobile",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#06071A"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anime.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#06071A"
+      },
+      "package": "com.anime.mobile",
+      "usesCleartextTraffic": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "updates": {
+      "enabled": true,
+      "checkAutomatically": "ON_ERROR_RECOVERY",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/54f0baee-f81b-4de2-89f1-825251f0547d"
+    },
+    "runtimeVersion": "1.0.0",
+    "extra": {
+      "versionJsonUrl": "https://raw.githubusercontent.com/techvibedz/anime-mobile/main/version.json"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-updates",
+      [
+        "expo-screen-orientation",
+        {
+          "initialOrientation": "DEFAULT"
+        }
+      ],
+      "expo-asset",
+      "expo-video",
+      "expo-font",
+      "expo-web-browser",
+      "expo-secure-store"
+    ]
+  }
+}

@@ -1,0 +1,116 @@
+import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import type { ReactNode } from "react";
+import type { Session, User } from "@supabase/supabase-js";
+import * as WebBrowser from "expo-web-browser";
+import * as Linking from "expo-linking";
+import { supabase, isSupabaseConfigured } from "./supabase";
+
+WebBrowser.maybeCompleteAuthSession();
+
+interface AuthState {
+  user: User | null;
+  session: Session | null;
+  loading: boolean;
+  ready: boolean;
+  isConfigured: boolean;
+  signInWithEmail: (email: string, password: string) => Promise<{ error?: string }>;
+  signUpWithEmail: (email: string, password: string) => Promise<{ error?: string; needsConfirmation?: boolean }>;
+  signInWithGoogle: () => Promise<{ error?: string }>;
+  signOut: () => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<{ error?: string }>;
+}
+
+const AuthContext = createContext<AuthState | undefined>(undefined);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setReady(true);
+      return;
+    }
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setUser(data.session?.user ?? null);
+      setReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess);
+      setUser(sess?.user ?? null);
+    });
+    return () => { sub.subscription.unsubscribe(); };
+  }, []);
+
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    return { error: error?.message };
+  }, []);
+
+  const signUpWithEmail = useCallback(async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+    if (error) return { error: error.message };
+    // Supabase requires email confirmation if enabled — no session returned until confirmed
+    return { needsConfirmation: !data.session };
+  }, []);
+
+  const signInWithGoogle = useCallback(async () => {
+    const redirectTo = Linking.createURL("/auth-callback");
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo, skipBrowserRedirect: true },
+    });
+    if (error || !data?.url) return { error: error?.message ?? "Google sign-in failed" };
+    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+    if (result.type !== "success" || !result.url) {
+      return { error: result.type === "cancel" ? undefined : "Sign-in cancelled" };
+    }
+    // Parse access token from callback URL fragment (#access_token=...&refresh_token=...)
+    const fragment = result.url.split("#")[1] || result.url.split("?")[1] || "";
+    const params = new URLSearchParams(fragment);
+    const access_token = params.get("access_token");
+    const refresh_token = params.get("refresh_token");
+    if (!access_token || !refresh_token) {
+      return { error: "Could not parse auth tokens from response" };
+    }
+    const { error: setErr } = await supabase.auth.setSession({ access_token, refresh_token });
+    return { error: setErr?.message };
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
+  }, []);
+
+  const sendPasswordReset = useCallback(async (email: string) => {
+    const redirectTo = Linking.createURL("/auth-callback");
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+    return { error: error?.message };
+  }, []);
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        session,
+        loading: !ready,
+        ready,
+        isConfigured: isSupabaseConfigured,
+        signInWithEmail,
+        signUpWithEmail,
+        signInWithGoogle,
+        signOut,
+        sendPasswordReset,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth(): AuthState {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  return ctx;
+}

@@ -1,0 +1,227 @@
+{
+  "C:\\anime-mobile\\app.json": {
+    "mtime": 1778898760.8990996,
+    "ast_hash": "9acdd9414950e290ad693c1c0d0f95ff",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\babel.config.js": {
+    "mtime": 1778776993.5869591,
+    "ast_hash": "e853dab60c4bc2ae8e75ef928cbec28d",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\metro.config.js": {
+    "mtime": 1778765059.788567,
+    "ast_hash": "887df1d17a96b9d0aa6144879f079d33",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\nativewind-env.d.ts": {
+    "mtime": 1778765059.756543,
+    "ast_hash": "b02bcf4fde15f746f6e5248537d0b156",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\package.json": {
+    "mtime": 1778903200.6117136,
+    "ast_hash": "846f4c86e1410cbd2d845f52055e62f6",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\tailwind.config.ts": {
+    "mtime": 1778765059.7244494,
+    "ast_hash": "491bc79804ee21654a19c3bce229ab8f",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\tsconfig.json": {
+    "mtime": 1778765847.7045383,
+    "ast_hash": "1539c6773662370102d8c6a6201f08f1",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\.expo\\devices.json": {
+    "mtime": 1778769855.283123,
+    "ast_hash": "e5f6eb13c875f326cfd5915d3364614f",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\.expo\\settings.json": {
+    "mtime": 1778786149.3844113,
+    "ast_hash": "2fa19140644902fc4b1c2787a80f68e2",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\_layout.tsx": {
+    "mtime": 1778898768.561883,
+    "ast_hash": "c460b2c9d1b988667e3173b7a75eb2d7",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\(tabs)\\index.tsx": {
+    "mtime": 1778939046.613911,
+    "ast_hash": "c0035622770c16f72af6b2491001f5d4",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\(tabs)\\mylist.tsx": {
+    "mtime": 1778903275.4590085,
+    "ast_hash": "49d4e526253ba5a7734858161529932a",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\(tabs)\\search.tsx": {
+    "mtime": 1778951404.645337,
+    "ast_hash": "dc60a20567855e90a5e3e7567303c21a",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\(tabs)\\_layout.tsx": {
+    "mtime": 1778898801.7118735,
+    "ast_hash": "438e9f6e1a8dfe7e28d50ba71078b2ab",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\anime\\[id].tsx": {
+    "mtime": 1778938988.363711,
+    "ast_hash": "4c7f05155652600b9a11de51945a4690",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\see-all\\[section].tsx": {
+    "mtime": 1778937961.681514,
+    "ast_hash": "f6e156fde392f1bf6873a6f07ff12f25",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\app\\watch\\[episode].tsx": {
+    "mtime": 1778956965.2437901,
+    "ast_hash": "f00e8e8da8442614c709639eb94b3f63",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\components\\Shimmer.tsx": {
+    "mtime": 1778772509.1143782,
+    "ast_hash": "39ec4ca4b47eba705931c66ba33ce17b",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\lib\\api.ts": {
+    "mtime": 1778953318.522176,
+    "ast_hash": "58977df1f987f1a8c8d9f26c6a485205",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\lib\\favorites.ts": {
+    "mtime": 1778773865.2876997,
+    "ast_hash": "5cff708297264c6319f2fe3884a0a580",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\lib\\history.ts": {
+    "mtime": 1778904796.128952,
+    "ast_hash": "a2b464f64b0815087601d998b6c8b7b3",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\lib\\theme.ts": {
+    "mtime": 1778898737.4515405,
+    "ast_hash": "02e85d920be25b05af8da8bad3faa9ed",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\cookies-3rb.json": {
+    "mtime": 1778896470.8822122,
+    "ast_hash": "51bb4f008fb5712a9ed39c990a9329cd",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\cookies-4up.json": {
+    "mtime": 1778897636.117237,
+    "ast_hash": "77e59431945e960e896fe27d1f1d15d9",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\index.js": {
+    "mtime": 1778899051.608647,
+    "ast_hash": "bf14f09ff33f1fdc35478f288b06d4da",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\package.json": {
+    "mtime": 1778808974.7939932,
+    "ast_hash": "e0748cce44adb70eea459eb9081af765",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\test-3rb.js": {
+    "mtime": 1778896640.7449656,
+    "ast_hash": "1c126cf5b7b7c10a3cd50de57df9a029",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\test-4up.js": {
+    "mtime": 1778897819.212834,
+    "ast_hash": "03e2fc8e92d1dd20e032f7706623bdef",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\test-ep.js": {
+    "mtime": 1778897968.8661573,
+    "ast_hash": "ba59b769b6c5295c702cf062cad13747",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\test-puppeteer.js": {
+    "mtime": 1778791515.4426687,
+    "ast_hash": "4283a9de6e6c644052da0f8695db9777",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\lib\\chrome-manager.js": {
+    "mtime": 1778901195.5959406,
+    "ast_hash": "8c0808de46580ae3d039a0fc00ef03d4",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\lib\\cookie-manager.js": {
+    "mtime": 1778809346.3938682,
+    "ast_hash": "2d72ab98b0c0599df0c7550b34d79aa1",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\lib\\decoder.js": {
+    "mtime": 1778763401.0033574,
+    "ast_hash": "8d9165159a3f7a2e2e1b90eca3ab709b",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\lib\\scraper-3rb.js": {
+    "mtime": 1778896538.7401571,
+    "ast_hash": "6a25c962157686604748af30fb582105",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\lib\\scraper.js": {
+    "mtime": 1778899213.3672204,
+    "ast_hash": "fdb8d49e32a85693f74f6f45cffd1336",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\anime3rb.js": {
+    "mtime": 1778896518.6759968,
+    "ast_hash": "38ae65466c307ae3af598445897e7f83",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\anime4up.js": {
+    "mtime": 1778898305.2360919,
+    "ast_hash": "cf2217568e8b06229c9bc235b49f337d",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\episodes.js": {
+    "mtime": 1778775724.2391202,
+    "ast_hash": "9266c1fc538a3fa0650fc438d64fc6ab",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\extract.js": {
+    "mtime": 1778802104.4321463,
+    "ast_hash": "a82e3dc941b6b9e488b90452f9a04487",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\home.js": {
+    "mtime": 1778775724.1805317,
+    "ast_hash": "0f6f42c5f53ae61c0817858e54493ef5",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\merged.js": {
+    "mtime": 1778957073.9551792,
+    "ast_hash": "90c44ffc24c5abdf853d91ba26d721bc",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\resolve.js": {
+    "mtime": 1778956922.724421,
+    "ast_hash": "347a051d8cde29c9716058c3f542e8b7",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\server\\routes\\search.js": {
+    "mtime": 1778763454.0459082,
+    "ast_hash": "ddd89a587fec3ad7aeb245ec4919040e",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\DESIGN.md": {
+    "mtime": 1778784634.5328374,
+    "ast_hash": "6a2d30f5a780a7ba0761fcd0b42e8348",
+    "semantic_hash": ""
+  },
+  "C:\\anime-mobile\\.expo\\README.md": {
+    "mtime": 1778769855.282054,
+    "ast_hash": "2d3a37a405a8f9ffb72ff12bdd3b0adf",
+    "semantic_hash": ""
+  }
+}

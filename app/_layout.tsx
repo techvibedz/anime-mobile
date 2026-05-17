@@ -10,6 +10,7 @@ import { AuthProvider, useAuth } from "../lib/auth";
 import { pullFavoritesFromCloud } from "../lib/favorites";
 import { pullHistoryFromCloud } from "../lib/history";
 import { checkForApkUpdate, checkForOtaUpdate, showUpdatePrompt } from "../lib/updater";
+import { ScraperHost } from "../lib/scraper";
 import "../global.css";
 
 function AuthGate() {
@@ -22,7 +23,8 @@ function AuthGate() {
     // If auth backend isn't configured, treat the app as anonymous-OK (legacy mode).
     if (!isConfigured) return;
     const inAuth = segments[0] === "(auth)";
-    if (!user && !inAuth) {
+    const inDebug = segments[0] === "scraper-debug";
+    if (!user && !inAuth && !inDebug) {
       router.replace("/(auth)/welcome");
     } else if (user && inAuth) {
       router.replace("/(tabs)");
@@ -82,6 +84,7 @@ function AuthGate() {
       <Stack.Screen name="anime/[id]" />
       <Stack.Screen name="watch/[episode]" />
       <Stack.Screen name="see-all/[section]" />
+      <Stack.Screen name="scraper-debug" />
     </Stack>
   );
 }
@@ -113,6 +116,7 @@ export default function RootLayout() {
       <AuthProvider>
         <AuthGate />
       </AuthProvider>
+      <ScraperHost />
     </SafeAreaProvider>
   );
 }

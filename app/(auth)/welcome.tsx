@@ -67,6 +67,15 @@ export default function Welcome() {
           >
             <Text style={ss.btnGhostText}>I already have an account</Text>
           </Pressable>
+          {/* TEMP: PoC entry — remove after validation */}
+          <Pressable
+            style={({ pressed }) => [{ paddingVertical: 8, alignItems: "center" }, pressed && { opacity: 0.6 }]}
+            onPress={() => router.push("/scraper-debug")}
+          >
+            <Text style={{ color: C.textMuted, fontSize: 11, fontFamily: "DMSans_500Medium" }}>
+              · Scraper PoC ·
+            </Text>
+          </Pressable>
         </View>
       </View>
     </View>

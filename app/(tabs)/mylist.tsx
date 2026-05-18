@@ -15,6 +15,7 @@ import { getFavorites, removeFavorite } from "../../lib/favorites";
 import type { FavoriteAnime, FavoriteList } from "../../lib/favorites";
 import { useAuth } from "../../lib/auth";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { t } from "../../lib/i18n";
 
 type ListFilter = "all" | FavoriteList;
 
@@ -40,9 +41,9 @@ export default function MyListScreen() {
   const visible = filter === "all" ? favorites : favorites.filter((f) => f.list === filter);
 
   const filters: { key: ListFilter; label: string; count: number }[] = [
-    { key: "all", label: "All", count: favorites.length },
-    { key: "watching", label: "Watching", count: watchingCount },
-    { key: "planned", label: "Plan to Watch", count: plannedCount },
+    { key: "all", label: "الكل", count: favorites.length },
+    { key: "watching", label: t.currentlyWatching, count: watchingCount },
+    { key: "planned", label: t.planToWatch, count: plannedCount },
   ];
 
   return (
@@ -50,11 +51,11 @@ export default function MyListScreen() {
       {/* Header */}
       <View style={ss.header}>
         <View>
-          <Text style={ss.heading}>My List</Text>
+          <Text style={ss.heading}>{t.myListTitle}</Text>
           {user?.email && <Text style={ss.userEmail} numberOfLines={1}>{user.email}</Text>}
         </View>
         <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-          <Text style={ss.countLabel}>{favorites.length} titles</Text>
+          <Text style={ss.countLabel}>{favorites.length}</Text>
           {isConfigured && user && (
             <Pressable onPress={signOut} hitSlop={8} style={ss.signOutBtn}>
               <Ionicons name="log-out-outline" size={18} color={C.textMuted} />
@@ -84,14 +85,8 @@ export default function MyListScreen() {
           <View style={ss.emptyCircle}>
             <Ionicons name="heart-outline" size={28} color={C.textMuted} />
           </View>
-          <Text style={ss.emptyTitle}>
-            {favorites.length === 0 ? "Nothing here yet" : "Empty list"}
-          </Text>
-          <Text style={ss.emptyDesc}>
-            {favorites.length === 0
-              ? "Save anime from the detail page to build your list"
-              : "Try a different filter or add more anime"}
-          </Text>
+          <Text style={ss.emptyTitle}>{t.emptyList}</Text>
+          <Text style={ss.emptyDesc}>{t.emptyListSub}</Text>
         </View>
       ) : (
         <FlatList
@@ -126,7 +121,7 @@ export default function MyListScreen() {
                     color={item.list === "watching" ? C.green : C.accent}
                   />
                   <Text style={[ss.rowMetaText, { color: item.list === "watching" ? C.green : C.accent }]}>
-                    {item.list === "watching" ? "Watching" : "Plan to Watch"}
+                    {item.list === "watching" ? t.currentlyWatching : t.planToWatch}
                   </Text>
                 </View>
               </View>

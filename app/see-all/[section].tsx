@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Dimensions,
   Modal,
+  I18nManager,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router } from "expo-router";
@@ -17,6 +18,28 @@ import { fetchHome, fetchRecent } from "../../lib/api";
 import type { AnimeItem, EpisodeItem, HomeSection } from "../../lib/api";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { LinearGradient } from "expo-linear-gradient";
+import { t } from "../../lib/i18n";
+
+/**
+ * Parses an episode number out of a title like "Anime - الحلقة 12" or
+ * pulls it from the trailing digits of an episode URL.
+ */
+function episodeNumberFrom(item: EpisodeItem): number | null {
+  // 1) explicit "الحلقة N" or "Episode N" in title
+  const titleMatch = String(item.title || "").match(/الحلقة[\s-]*(\d+)|episode\s*(\d+)/i);
+  if (titleMatch) return parseInt(titleMatch[1] || titleMatch[2], 10);
+  // 2) try the URL
+  if (item.href) {
+    try {
+      const decoded = decodeURIComponent(item.href);
+      const arMatch = decoded.match(/الحلقة[\s-]*(\d+)/);
+      if (arMatch) return parseInt(arMatch[1], 10);
+      const tail = decoded.replace(/\/$/, "").match(/-(\d+)(?:[-/].*)?$/);
+      if (tail) return parseInt(tail[1], 10);
+    } catch {}
+  }
+  return null;
+}
 
 const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
@@ -77,12 +100,12 @@ export default function SeeAllScreen() {
     <View style={[s.root, { paddingTop: insets.top }]}>
       <View style={s.header}>
         <Pressable onPress={() => router.back()} style={s.backBtn}>
-          <Ionicons name="chevron-back" size={22} color={C.white} />
+          <Ionicons name={I18nManager.isRTL ? "chevron-forward" : "chevron-back"} size={22} color={C.white} />
         </Pressable>
         <Text style={s.heading}>
-          {title ? decodeURIComponent(title) : "All"}
+          {title ? decodeURIComponent(title) : t.seeAllShort}
         </Text>
-        <Text style={s.count}>{items.length} titles</Text>
+        <Text style={s.count}>{items.length}</Text>
       </View>
 
       <FlatList
@@ -96,40 +119,51 @@ export default function SeeAllScreen() {
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
         ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
-        renderItem={({ item }) => (
-          <Pressable
-            onPress={() => {
-              if (isEpisodeType) {
-                setEpisodePopup(item as EpisodeItem);
-              } else {
-                router.push(`/anime/${encodeURIComponent(item.href)}`);
-              }
-            }}
-            style={{ width: CARD_W }}
-          >
-            {item.image ? (
-              <Image
-                source={{ uri: item.image }}
-                style={s.image}
-                contentFit="cover"
-                recyclingKey={item.href}
-                transition={200}
-              />
-            ) : (
-              <View style={[s.image, { alignItems: "center", justifyContent: "center" }]}>
-                <Ionicons name="image-outline" size={24} color={C.textMuted} />
+        renderItem={({ item }) => {
+          const epNum = isEpisodeType ? episodeNumberFrom(item as EpisodeItem) : null;
+          return (
+            <Pressable
+              onPress={() => {
+                if (isEpisodeType) {
+                  setEpisodePopup(item as EpisodeItem);
+                } else {
+                  router.push(`/anime/${encodeURIComponent(item.href)}`);
+                }
+              }}
+              style={{ width: CARD_W }}
+            >
+              <View style={s.imageWrap}>
+                {item.image ? (
+                  <Image
+                    source={{ uri: item.image }}
+                    style={s.image}
+                    contentFit="cover"
+                    recyclingKey={item.href}
+                    transition={200}
+                  />
+                ) : (
+                  <View style={[s.image, { alignItems: "center", justifyContent: "center" }]}>
+                    <Ionicons name="image-outline" size={24} color={C.textMuted} />
+                  </View>
+                )}
+                {isEpisodeType && epNum != null && (
+                  <View style={s.epBadgeWrap} pointerEvents="none">
+                    <LinearGradient
+                      colors={["transparent", "rgba(0,0,0,0.85)"]}
+                      style={s.epBadgeGradient}
+                    />
+                    <View style={s.epBadge}>
+                      <Text style={s.epBadgeText}>{t.episode} {epNum}</Text>
+                    </View>
+                  </View>
+                )}
               </View>
-            )}
-            <Text style={s.title} numberOfLines={2}>
-              {item.title}
-            </Text>
-            {type === "episode" && (
-              <Text style={s.sub} numberOfLines={1}>
-                {(item as EpisodeItem).animeTitle}
+              <Text style={s.title} numberOfLines={2}>
+                {isEpisodeType ? (item as EpisodeItem).animeTitle || item.title : item.title}
               </Text>
-            )}
-          </Pressable>
-        )}
+            </Pressable>
+          );
+        }}
       />
 
       {/* Episode tap popup */}
@@ -155,7 +189,7 @@ export default function SeeAllScreen() {
                 }}
               >
                 <Ionicons name="play" size={16} color={C.textOnAccent} />
-                <Text style={s.modalBtnPrimaryText}>Watch this episode</Text>
+                <Text style={s.modalBtnPrimaryText}>{t.watchEpisode}</Text>
               </Pressable>
               <Pressable
                 style={s.modalBtnSecondary}
@@ -167,10 +201,10 @@ export default function SeeAllScreen() {
                 }}
               >
                 <Ionicons name="information-circle-outline" size={16} color={C.white} />
-                <Text style={s.modalBtnSecondaryText}>Open anime page</Text>
+                <Text style={s.modalBtnSecondaryText}>{t.openAnimePage}</Text>
               </Pressable>
               <Pressable style={s.modalCancel} onPress={() => setEpisodePopup(null)}>
-                <Text style={s.modalCancelText}>Cancel</Text>
+                <Text style={s.modalCancelText}>{t.cancel}</Text>
               </Pressable>
             </Pressable>
           </Pressable>
@@ -208,12 +242,32 @@ const s = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
+  imageWrap: {
+    width: CARD_W,
+    aspectRatio: 2 / 3,
+    borderRadius: R.lg,
+    overflow: "hidden",
+    backgroundColor: C.surface,
+    ...ELEVATION_CARD,
+  },
   image: {
     width: CARD_W,
     aspectRatio: 2 / 3,
     borderRadius: R.lg,
     backgroundColor: C.surface,
-    ...ELEVATION_CARD,
+  },
+  epBadgeWrap: {
+    position: "absolute", left: 0, right: 0, bottom: 0,
+    height: 56, justifyContent: "flex-end", padding: 6,
+  },
+  epBadgeGradient: { ...StyleSheet.absoluteFillObject },
+  epBadge: {
+    backgroundColor: C.accent, alignSelf: "flex-start",
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: R.pill,
+  },
+  epBadgeText: {
+    color: "#fff", fontSize: 10, fontWeight: "800",
+    fontFamily: "Outfit_700Bold",
   },
   title: {
     color: C.white,

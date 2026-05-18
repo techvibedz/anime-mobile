@@ -11,6 +11,7 @@ import {
   scrapeGenre,
   scrapeAllAnime,
   scrapeVideoServers,
+  findCrossSourceUrl,
   extractVideoUrl as scrapeExtractVideoUrl,
 } from "./scraper";
 
@@ -247,11 +248,54 @@ export async function fetchHome(): Promise<HomePayload> {
 
 /* ── /episodes ──────────────────────────────── */
 
+// Cache cross-source URL lookups for 24h — anime URLs are stable.
+const xsourceCache: Map<string, { url: string | null; ts: number }> = new Map();
+const XSOURCE_TTL = 24 * 60 * 60 * 1000;
+
+async function getCrossSourceUrl(
+  title: string,
+  primary: "witanime" | "anime4up",
+): Promise<string | null> {
+  const key = `${primary}:${title.toLowerCase().trim()}`;
+  const hit = xsourceCache.get(key);
+  if (hit && Date.now() - hit.ts < XSOURCE_TTL) return hit.url;
+  const url = await findCrossSourceUrl(title, primary).catch(() => null);
+  xsourceCache.set(key, { url, ts: Date.now() });
+  return url;
+}
+
+function titleFromSlug(url: string): string {
+  try {
+    const slug = decodeURIComponent(new URL(url).pathname.replace(/\/$/, "").split("/").pop() || "");
+    return slug.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+  } catch {
+    return "";
+  }
+}
+
 export async function fetchEpisodes(animeUrl: string): Promise<{
   success: boolean;
   data: AnimeDetail & { episodes4up?: Episode[]; merged?: { anime4up: string } | null };
 }> {
-  const d = await scrapeEpisodesPage(animeUrl);
+  const isAnime4up = /anime4up/i.test(animeUrl);
+  const primarySource = isAnime4up ? "anime4up" : "witanime";
+  const guessTitle = titleFromSlug(animeUrl);
+
+  // Run primary scrape + cross-source title-match search in parallel.
+  // Two WebView slots mean both happen at once.
+  const [d, initialCrossUrl] = await Promise.all([
+    scrapeEpisodesPage(animeUrl),
+    guessTitle ? getCrossSourceUrl(guessTitle, primarySource) : Promise.resolve(null),
+  ]);
+
+  // If the URL-slug guess didn't match, retry once with the real title.
+  let crossUrl = initialCrossUrl;
+  if (!crossUrl && d.title && d.title !== guessTitle) {
+    crossUrl = await getCrossSourceUrl(d.title, primarySource);
+  }
+
+  const url4up = isAnime4up ? animeUrl : crossUrl;
+
   return {
     success: true,
     data: {
@@ -267,7 +311,7 @@ export async function fetchEpisodes(animeUrl: string): Promise<{
       totalEpisodes: d.episodes.length,
       episodes: d.episodes,
       episodes4up: [],
-      merged: null,
+      merged: url4up ? { anime4up: url4up } : null,
     },
   };
 }
@@ -292,7 +336,7 @@ export async function fetchRecent(page = 1): Promise<{
 
 /* ── /extract-video ─────────────────────────── */
 
-export async function fetchVideoServers(episodeUrl: string, _url4up?: string): Promise<{
+export async function fetchVideoServers(episodeUrl: string, url4up?: string): Promise<{
   success: boolean;
   data: {
     episodeTitle: string;
@@ -303,15 +347,65 @@ export async function fetchVideoServers(episodeUrl: string, _url4up?: string): P
     navigation: { prev: string | null; next: string | null };
   };
 }> {
-  const r = await scrapeVideoServers(episodeUrl);
+  const primaryIsUp4 = /anime4up/i.test(episodeUrl);
+  // If we have a url4up AND the primary isn't already anime4up, scrape both
+  // sources' servers in parallel (uses 2 WebView slots simultaneously).
+  const tasks: Promise<{ source: string; servers: any[]; episodeTitle: string; animeTitle: string } | null>[] = [];
+
+  tasks.push(
+    scrapeVideoServers(episodeUrl)
+      .then((r) => ({
+        source: primaryIsUp4 ? "anime4up" : "witanime",
+        servers: r.servers,
+        episodeTitle: r.episodeTitle,
+        animeTitle: r.animeTitle,
+      }))
+      .catch(() => null),
+  );
+  if (url4up && !primaryIsUp4) {
+    tasks.push(
+      scrapeVideoServers(url4up)
+        .then((r) => ({ source: "anime4up", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle }))
+        .catch(() => null),
+    );
+  }
+
+  const results = (await Promise.all(tasks)).filter((x): x is NonNullable<typeof x> => !!x);
+  const primary = results[0];
+  const secondary = results[1];
+
+  const seen = new Set<string>();
+  const merged: (VideoServer & { source?: string })[] = [];
+  function add(arr: any[] | undefined, source: string) {
+    if (!arr) return;
+    for (const s of arr) {
+      if (!s.iframeUrl || seen.has(s.iframeUrl)) continue;
+      seen.add(s.iframeUrl);
+      merged.push({
+        id: String(merged.length),
+        name: s.name,
+        iframeUrl: s.iframeUrl,
+        provider: s.provider,
+        source,
+      });
+    }
+  }
+  // Witanime is primary, anime4up extras appended.
+  if (primary && primary.source === "witanime") {
+    add(primary.servers, "witanime");
+    if (secondary) add(secondary.servers, "anime4up");
+  } else if (primary && primary.source === "anime4up") {
+    add(primary.servers, "anime4up");
+  }
+
   return {
     success: true,
     data: {
-      episodeTitle: r.episodeTitle,
-      animeTitle: r.animeTitle,
+      episodeTitle: primary?.episodeTitle || "",
+      animeTitle: primary?.animeTitle || "",
       animeHref: "",
-      serverCount: r.servers.length,
-      servers: r.servers.map((s) => ({ ...s, source: /anime4up/i.test(episodeUrl) ? "anime4up" : "witanime" })),
+      serverCount: merged.length,
+      servers: merged,
       navigation: { prev: null, next: null },
     },
   };

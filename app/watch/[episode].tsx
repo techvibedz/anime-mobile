@@ -18,6 +18,7 @@ import { fetchVideoServers, resolveVideo, getProxyUrl } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
 import { C } from "../../lib/theme";
+import { t } from "../../lib/i18n";
 
 type ServerStatus = "idle" | "resolving" | "playing" | "webview" | "failed";
 
@@ -336,7 +337,7 @@ export default function WatchScreen() {
       }
 
       if (!res?.success || !res.data.servers.length) {
-        setError("No video sources found. Tap Retry.");
+        setError(t.noServersFound);
         return;
       }
 
@@ -564,7 +565,7 @@ export default function WatchScreen() {
         <StatusBar hidden />
         <View style={ss.centered}>
           <ActivityIndicator size="large" color={C.green} />
-          <Text style={ss.statusText}>Loading servers...</Text>
+          <Text style={ss.statusText}>{t.loadingServers}</Text>
         </View>
       </View>
     );
@@ -576,14 +577,14 @@ export default function WatchScreen() {
         <StatusBar hidden />
         <View style={ss.centered}>
           <Ionicons name="alert-circle" size={44} color={C.textMuted} />
-          <Text style={ss.errorTitle}>{error ?? "No sources available"}</Text>
+          <Text style={ss.errorTitle}>{error ?? t.noServersFound}</Text>
           <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
             <Pressable onPress={loadServers} style={ss.actionBtn}>
               <Ionicons name="refresh" size={16} color={C.white} />
-              <Text style={ss.actionBtnText}>Retry</Text>
+              <Text style={ss.actionBtnText}>{t.retry}</Text>
             </Pressable>
             <Pressable onPress={() => router.back()} style={[ss.actionBtn, { backgroundColor: "rgba(255,255,255,0.12)" }]}>
-              <Text style={ss.actionBtnText}>Go back</Text>
+              <Text style={ss.actionBtnText}>{t.goBack}</Text>
             </Pressable>
           </View>
         </View>
@@ -626,7 +627,7 @@ export default function WatchScreen() {
           renderLoading={() => (
             <View style={[ss.player, ss.centered]}>
               <ActivityIndicator size="large" color={C.green} />
-              <Text style={ss.statusSub}>Loading player...</Text>
+              <Text style={ss.statusSub}>{t.loadingPlayer}</Text>
             </View>
           )}
           onShouldStartLoadWithRequest={(req) => {

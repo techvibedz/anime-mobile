@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase, isSupabaseConfigured } from "./supabase";
 
 const KEY = "watch_history";
-const MAX_ITEMS = 50;
+const MAX_ITEMS = 200;
 
 export interface WatchEntry {
   episodeHref: string;
@@ -14,6 +14,12 @@ export interface WatchEntry {
   durationMs: number;
   updatedAt: number;
   url4up?: string;
+  completed?: boolean;
+}
+
+/** Treat playback as "watched" once past 85% of duration. */
+function autoCompleted(e: WatchEntry): boolean {
+  return e.durationMs > 0 && e.positionMs / e.durationMs >= 0.85;
 }
 
 /** Push a single history entry to Supabase (fire-and-forget; logs on failure). */
@@ -32,6 +38,7 @@ async function pushToCloud(entry: WatchEntry) {
     duration_ms: entry.durationMs,
     updated_at: new Date(entry.updatedAt).toISOString(),
     url4up: entry.url4up ?? null,
+    completed: entry.completed ?? autoCompleted(entry),
   }, { onConflict: "user_id,episode_href" });
   if (error) console.warn("[history] cloud sync failed:", error.message);
 }
@@ -67,6 +74,7 @@ export async function pullHistoryFromCloud() {
     durationMs: row.duration_ms,
     updatedAt: new Date(row.updated_at).getTime(),
     url4up: row.url4up || undefined,
+    completed: !!row.completed,
   }));
   await AsyncStorage.setItem(KEY, JSON.stringify(local));
 }
@@ -79,16 +87,22 @@ export async function getHistory(): Promise<WatchEntry[]> {
 export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
   const list = await getHistory();
   const idx = list.findIndex((e) => e.episodeHref === entry.episodeHref);
-  const updated: WatchEntry = { ...entry, updatedAt: Date.now() };
+  const merged: WatchEntry = {
+    ...entry,
+    updatedAt: Date.now(),
+    // Auto-mark completed when crossing 85% — preserve a manual unmark.
+    completed: entry.completed ?? (idx >= 0 ? list[idx].completed : false),
+  };
+  if (merged.completed !== true && autoCompleted(merged)) merged.completed = true;
   if (idx >= 0) {
-    list[idx] = updated;
+    list[idx] = merged;
   } else {
-    list.unshift(updated);
+    list.unshift(merged);
     if (list.length > MAX_ITEMS) list.length = MAX_ITEMS;
   }
   list.sort((a, b) => b.updatedAt - a.updatedAt);
   await AsyncStorage.setItem(KEY, JSON.stringify(list));
-  pushToCloud(updated).catch(() => {});
+  pushToCloud(merged).catch(() => {});
 }
 
 export async function getProgress(episodeHref: string): Promise<WatchEntry | null> {
@@ -109,4 +123,63 @@ export function formatProgress(entry: WatchEntry): string {
 
 export function progressPercent(entry: WatchEntry): number {
   return entry.durationMs > 0 ? Math.min(entry.positionMs / entry.durationMs, 1) : 0;
+}
+
+/* ── Watched-episode flag (per user) ─────────────────── */
+
+export function isCompleted(entry: WatchEntry | null | undefined): boolean {
+  if (!entry) return false;
+  if (entry.completed === true) return true;
+  return autoCompleted(entry);
+}
+
+/**
+ * Returns a Set of episode hrefs the user has watched within the given anime.
+ * Used by the episode grid on the anime detail page to render "seen" badges.
+ */
+export async function getWatchedHrefsForAnime(animeHref: string): Promise<Set<string>> {
+  const list = await getHistory();
+  const set = new Set<string>();
+  for (const e of list) {
+    if (e.animeHref === animeHref && isCompleted(e)) set.add(e.episodeHref);
+  }
+  return set;
+}
+
+/**
+ * Toggle the watched flag on a specific episode. Adds a stub history entry
+ * if there isn't one yet (so the marker survives across launches).
+ */
+export async function toggleWatched(
+  episodeHref: string,
+  meta: { episodeTitle: string; animeTitle: string; animeHref: string; image?: string; url4up?: string },
+): Promise<boolean> {
+  const list = await getHistory();
+  const idx = list.findIndex((e) => e.episodeHref === episodeHref);
+  if (idx >= 0) {
+    const cur = list[idx];
+    const next: WatchEntry = { ...cur, completed: !isCompleted(cur), updatedAt: Date.now() };
+    list[idx] = next;
+    await AsyncStorage.setItem(KEY, JSON.stringify(list));
+    pushToCloud(next).catch(() => {});
+    return next.completed === true;
+  }
+  // No existing entry — create one marked as watched.
+  const newEntry: WatchEntry = {
+    episodeHref,
+    episodeTitle: meta.episodeTitle,
+    animeTitle: meta.animeTitle,
+    animeHref: meta.animeHref,
+    image: meta.image || "",
+    positionMs: 0,
+    durationMs: 0,
+    url4up: meta.url4up,
+    completed: true,
+    updatedAt: Date.now(),
+  };
+  list.unshift(newEntry);
+  if (list.length > MAX_ITEMS) list.length = MAX_ITEMS;
+  await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  pushToCloud(newEntry).catch(() => {});
+  return true;
 }

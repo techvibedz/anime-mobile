@@ -1,6 +1,8 @@
 // Singleton job bus for in-app scraping.
-// React component <ScraperHost> subscribes to `_pending` and processes jobs
-// serially in a hidden WebView. Callers use `enqueue()` and await the result.
+//
+// React component <ScraperHost> mounts N hidden WebView slots and pulls jobs
+// from this bus. Multiple jobs run concurrently (one per slot). Callers use
+// `enqueue()` and await the result.
 
 export type ScrapeJob = {
   id: string;
@@ -21,6 +23,7 @@ type Pending = {
 
 let _seq = 0;
 const _queue: Pending[] = [];
+const _inFlight = new Map<string, Pending>(); // job id → pending
 let _onChange: (() => void) | null = null;
 
 export function _subscribe(cb: () => void) {
@@ -28,23 +31,31 @@ export function _subscribe(cb: () => void) {
   return () => { _onChange = null; };
 }
 
-export function _peek(): Pending | null {
-  return _queue[0] ?? null;
+/** Pull the next pending job and mark it as in-flight. */
+export function _claimNext(): Pending | null {
+  const next = _queue.shift();
+  if (!next) return null;
+  _inFlight.set(next.job.id, next);
+  return next;
 }
 
-export function _resolveCurrent(id: string, value: any) {
-  const head = _queue[0];
-  if (!head || head.job.id !== id) return;
-  _queue.shift();
-  head.resolve(value);
+export function _hasPending(): boolean {
+  return _queue.length > 0;
+}
+
+export function _resolve(id: string, value: any) {
+  const p = _inFlight.get(id);
+  if (!p) return;
+  _inFlight.delete(id);
+  p.resolve(value);
   _onChange?.();
 }
 
-export function _rejectCurrent(id: string, message: string) {
-  const head = _queue[0];
-  if (!head || head.job.id !== id) return;
-  _queue.shift();
-  head.reject(new Error(message));
+export function _reject(id: string, message: string) {
+  const p = _inFlight.get(id);
+  if (!p) return;
+  _inFlight.delete(id);
+  p.reject(new Error(message));
   _onChange?.();
 }
 

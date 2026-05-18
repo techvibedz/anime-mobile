@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { searchAnime, fetchAllAnime, fetchGenre } from "../../lib/api";
 import type { SearchResult } from "../../lib/api";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { t } from "../../lib/i18n";
 
 const { width: SW } = Dimensions.get("window");
 const PAD = S.paddingContent;
@@ -25,11 +26,26 @@ const GAP = 10;
 const NUM_COLS = 3;
 const CARD_W = (SW - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
-const GENRES = [
-  "All", "Action", "Adventure", "Comedy", "Drama", "Fantasy",
-  "Horror", "Mystery", "Romance", "Sci-Fi", "Slice of Life",
-  "Sports", "Supernatural", "Thriller", "Mecha", "Shounen", "Seinen",
-];
+const GENRE_LABELS: Record<string, string> = {
+  All: "الكل",
+  Action: "أكشن",
+  Adventure: "مغامرة",
+  Comedy: "كوميدي",
+  Drama: "دراما",
+  Fantasy: "خيال",
+  Horror: "رعب",
+  Mystery: "غموض",
+  Romance: "رومانسي",
+  "Sci-Fi": "خيال علمي",
+  "Slice of Life": "حياة يومية",
+  Sports: "رياضي",
+  Supernatural: "خارق",
+  Thriller: "إثارة",
+  Mecha: "ميكا",
+  Shounen: "شونين",
+  Seinen: "سينين",
+};
+const GENRES = Object.keys(GENRE_LABELS);
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
@@ -176,7 +192,7 @@ export default function SearchScreen() {
     <View style={[ss.root, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={ss.header}>
-        <Text style={ss.heading}>Discover</Text>
+        <Text style={ss.heading}>اكتشف</Text>
       </View>
 
       {/* Glass search bar */}
@@ -189,7 +205,7 @@ export default function SearchScreen() {
           <TextInput
             ref={inputRef}
             style={ss.input}
-            placeholder="Search anime..."
+            placeholder={t.searchPlaceholder}
             placeholderTextColor={C.textMuted}
             value={query}
             onChangeText={onChangeText}
@@ -197,6 +213,7 @@ export default function SearchScreen() {
             returnKeyType="search"
             autoCapitalize="none"
             autoCorrect={false}
+            textAlign="right"
           />
           {query.length > 0 && (
             <Pressable onPress={handleClear} hitSlop={8}>
@@ -218,7 +235,7 @@ export default function SearchScreen() {
           {GENRES.map((g) => (
             <Pressable key={g} onPress={() => handleGenre(g)}>
               <View style={[ss.chip, activeGenre === g && ss.chipActive]}>
-                <Text style={[ss.chipText, activeGenre === g && ss.chipTextActive]}>{g}</Text>
+                <Text style={[ss.chipText, activeGenre === g && ss.chipTextActive]}>{GENRE_LABELS[g] || g}</Text>
               </View>
             </Pressable>
           ))}
@@ -269,8 +286,8 @@ export default function SearchScreen() {
           <View style={ss.emptyCircle}>
             <Ionicons name="search-outline" size={28} color={C.textMuted} />
           </View>
-          <Text style={ss.emptyTitle}>No results</Text>
-          <Text style={ss.emptyDesc}>Try a different search term or genre</Text>
+          <Text style={ss.emptyTitle}>{t.noResults}</Text>
+          <Text style={ss.emptyDesc}>{t.searchSub}</Text>
         </View>
       )}
     </View>

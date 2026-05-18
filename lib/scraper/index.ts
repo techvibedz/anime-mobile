@@ -8,6 +8,7 @@ import {
   EXTRACT_RECENT,
   EXTRACT_LISTING,
   EXTRACT_VIDEO_SERVERS,
+  EXTRACT_TITLE_MATCH,
   HOOK_VIDEO_BEFORE,
   COLLECT_VIDEO_AFTER,
 } from "./scripts";
@@ -111,6 +112,32 @@ export async function scrapeAllAnime(page = 1) {
     injectAfter: EXTRACT_LISTING,
     timeoutMs: 30000,
   }) as Promise<{ items: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: null }[] }>;
+}
+
+/* ── CROSS-SOURCE TITLE MATCH ─────────────────── */
+
+// Searches a different source by title and returns the best-matching anime
+// URL. Used to discover an anime's anime4up URL from its witanime title (or
+// vice versa) so video-server extraction can pull from BOTH sources.
+export async function findCrossSourceUrl(
+  title: string,
+  primarySource: "witanime" | "anime4up",
+): Promise<string | null> {
+  if (!title) return null;
+  const wantTarget = primarySource === "witanime" ? "anime4up" : "witanime";
+  const base = wantTarget === "anime4up" ? UP4_BASE : WIT_BASE;
+  // anime4up search is at root path, not /home8/
+  const searchUrl = `${base}/?search_param=animes&s=${encodeURIComponent(title)}`;
+  try {
+    const r = await enqueue({
+      url: searchUrl,
+      injectAfter: EXTRACT_TITLE_MATCH(title),
+      timeoutMs: 25000,
+    }) as { url: string | null; score: number };
+    return r.url;
+  } catch {
+    return null;
+  }
 }
 
 /* ── VIDEO SERVERS (find iframes on episode page) ── */

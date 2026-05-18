@@ -7,9 +7,10 @@ import {
   Dimensions,
   StyleSheet,
   Modal,
+  I18nManager,
 } from "react-native";
 import { Image } from "expo-image";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -18,8 +19,10 @@ import { fetchEpisodes } from "../../lib/api";
 import type { AnimeDetail, RelatedAnime, Episode } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
+import { getWatchedHrefsForAnime, toggleWatched } from "../../lib/history";
 import { Shimmer } from "../../components/Shimmer";
 import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
+import { t } from "../../lib/i18n";
 
 const { width: SW } = Dimensions.get("window");
 const BANNER_H = 360;
@@ -39,7 +42,9 @@ export default function AnimeDetailScreen() {
   const [bookmarkList, setBookmarkList] = useState<FavoriteList | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("episodes");
+  const [watchedHrefs, setWatchedHrefs] = useState<Set<string>>(new Set());
   const bookmarked = bookmarkList !== null;
+  const animeHref = id ? decodeURIComponent(id) : "";
 
   useEffect(() => {
     if (!id) return;
@@ -53,14 +58,35 @@ export default function AnimeDetailScreen() {
           setEpisodes4up(res.data.episodes4up || []);
           setMerged(res.data.merged || null);
         }
-        else setError("Failed to load anime");
+        else setError(t.failedToLoad);
       } catch (e: any) {
-        setError(e.message ?? "Something went wrong");
+        setError(e.message ?? t.failedToLoad);
       } finally {
         setLoading(false);
       }
     })();
   }, [id]);
+
+  // Refresh watched flags when the screen regains focus (e.g. after watching).
+  useFocusEffect(useCallback(() => {
+    if (!animeHref) return;
+    getWatchedHrefsForAnime(animeHref).then(setWatchedHrefs);
+  }, [animeHref]));
+
+  const handleToggleWatched = useCallback(async (ep: Episode) => {
+    if (!data || !ep.href) return;
+    const next = await toggleWatched(ep.href, {
+      episodeTitle: ep.title || `${t.episode} ${ep.number}`,
+      animeTitle: data.title,
+      animeHref,
+      image: data.poster,
+    });
+    setWatchedHrefs((prev) => {
+      const copy = new Set(prev);
+      if (next) copy.add(ep.href!); else copy.delete(ep.href!);
+      return copy;
+    });
+  }, [data, animeHref]);
 
   // Tapping the heart: if not saved, open the picker so the user chooses Watching vs Planned.
   // If already saved, remove from list.
@@ -91,9 +117,9 @@ export default function AnimeDetailScreen() {
         <View style={ss.errorCircle}>
           <Ionicons name="alert" size={28} color={C.accent} />
         </View>
-        <Text style={ss.errorMsg}>{error ?? "Not found"}</Text>
+        <Text style={ss.errorMsg}>{error ?? t.notFound}</Text>
         <Pressable onPress={() => router.back()} style={ss.btnPrimary}>
-          <Text style={ss.btnPrimaryText}>Go back</Text>
+          <Text style={ss.btnPrimaryText}>{t.goBack}</Text>
         </Pressable>
       </View>
     );
@@ -101,9 +127,9 @@ export default function AnimeDetailScreen() {
 
   const firstPlayable = data.episodes.find((e) => e.href);
   const tabs: { key: TabKey; label: string; count?: number }[] = [
-    { key: "episodes", label: "Episodes", count: data.totalEpisodes },
-    ...(data.relatedAnime.length > 0 ? [{ key: "related" as TabKey, label: "Related" }] : []),
-    { key: "info", label: "Info" },
+    { key: "episodes", label: t.tabEpisodes, count: data.totalEpisodes },
+    ...(data.relatedAnime.length > 0 ? [{ key: "related" as TabKey, label: t.tabRelated }] : []),
+    { key: "info", label: t.tabInfo },
   ];
 
   return (
@@ -165,7 +191,7 @@ export default function AnimeDetailScreen() {
               onPress={() => firstPlayable?.href && router.push(`/watch/${encodeURIComponent(firstPlayable.href)}`)}
             >
               <Ionicons name="play" size={16} color={C.textOnAccent} />
-              <Text style={ss.btnPrimaryText}>Watch Now</Text>
+              <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
             </Pressable>
             <Pressable style={ss.btnGlass} onPress={toggleBookmark}>
               <Ionicons
@@ -182,7 +208,7 @@ export default function AnimeDetailScreen() {
               <Text style={ss.synopsis} numberOfLines={synopsisOpen ? undefined : 3}>
                 {data.synopsis}
               </Text>
-              <Text style={ss.readMore}>{synopsisOpen ? "Show less" : "Read more"}</Text>
+              <Text style={ss.readMore}>{synopsisOpen ? t.showLess : t.readMore}</Text>
             </Pressable>
           ) : null}
 
@@ -228,6 +254,8 @@ export default function AnimeDetailScreen() {
               episodes4up={episodes4up}
               merged={merged}
               poster={data.poster}
+              watchedHrefs={watchedHrefs}
+              onToggleWatched={handleToggleWatched}
             />
           )}
           {activeTab === "related" && <RelatedTab items={data.relatedAnime} />}
@@ -252,18 +280,18 @@ export default function AnimeDetailScreen() {
       <Modal transparent animationType="fade" visible={pickerOpen} onRequestClose={() => setPickerOpen(false)}>
         <Pressable style={ss.pickerBackdrop} onPress={() => setPickerOpen(false)}>
           <Pressable style={ss.pickerSheet} onPress={() => {}}>
-            <Text style={ss.pickerTitle}>Add to My List</Text>
-            <Text style={ss.pickerSub}>Where do you want to save {data.title}?</Text>
+            <Text style={ss.pickerTitle}>{t.addToList}</Text>
+            <Text style={ss.pickerSub}>{t.saveWhere(data.title)}</Text>
 
             <Pressable style={ss.pickerOption} onPress={() => saveToList("watching")}>
               <View style={[ss.pickerIcon, { backgroundColor: C.green + "22" }]}>
                 <Ionicons name="play-circle" size={22} color={C.green} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={ss.pickerOptTitle}>Currently Watching</Text>
-                <Text style={ss.pickerOptSub}>You're actively watching this</Text>
+                <Text style={ss.pickerOptTitle}>{t.currentlyWatching}</Text>
+                <Text style={ss.pickerOptSub}>{t.watchingDesc}</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
+              <Ionicons name={I18nManager.isRTL ? "chevron-back" : "chevron-forward"} size={18} color={C.textMuted} />
             </Pressable>
 
             <Pressable style={ss.pickerOption} onPress={() => saveToList("planned")}>
@@ -271,14 +299,14 @@ export default function AnimeDetailScreen() {
                 <Ionicons name="bookmark" size={20} color={C.accent} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={ss.pickerOptTitle}>Plan to Watch</Text>
-                <Text style={ss.pickerOptSub}>Save for later</Text>
+                <Text style={ss.pickerOptTitle}>{t.planToWatch}</Text>
+                <Text style={ss.pickerOptSub}>{t.plannedDesc}</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
+              <Ionicons name={I18nManager.isRTL ? "chevron-back" : "chevron-forward"} size={18} color={C.textMuted} />
             </Pressable>
 
             <Pressable style={ss.pickerCancel} onPress={() => setPickerOpen(false)}>
-              <Text style={ss.pickerCancelText}>Cancel</Text>
+              <Text style={ss.pickerCancelText}>{t.cancel}</Text>
             </Pressable>
           </Pressable>
         </Pressable>
@@ -307,27 +335,24 @@ function EpisodesTab({
   episodes4up,
   merged,
   poster,
+  watchedHrefs,
+  onToggleWatched,
 }: {
   episodes: AnimeDetail["episodes"];
   episodes4up: Episode[];
   merged: { anime4up: string } | null;
   poster: string;
+  watchedHrefs: Set<string>;
+  onToggleWatched: (ep: Episode) => void;
 }) {
   const [sortDesc, setSortDesc] = useState(true); // true = newest first
-  const [search, setSearch] = useState("");
 
   const mergedEps = episodes.map((ep) => {
     const match = episodes4up.find((e) => e.number === ep.number);
     return { ...ep, href4up: match?.href || null };
   });
 
-  const filtered = mergedEps.filter((ep) => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (ep.title || '').toLowerCase().includes(q) || String(ep.number).includes(q);
-  });
-
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = [...mergedEps].sort((a, b) => {
     const an = a.number ?? 0;
     const bn = b.number ?? 0;
     return sortDesc ? bn - an : an - bn;
@@ -337,7 +362,7 @@ function EpisodesTab({
     return (
       <View style={ss.emptyTab}>
         <Ionicons name="film-outline" size={40} color={C.textMuted} />
-        <Text style={ss.emptyTabText}>No episodes available</Text>
+        <Text style={ss.emptyTabText}>{t.noEpisodes}</Text>
       </View>
     );
   }
@@ -352,69 +377,83 @@ function EpisodesTab({
             style={[ss.sortChip, sortDesc && ss.sortChipActive]}
           >
             <Ionicons name="arrow-down" size={12} color={sortDesc ? C.textOnAccent : C.textSecondary} />
-            <Text style={[ss.sortChipText, sortDesc && ss.sortChipTextActive]}>Newest</Text>
+            <Text style={[ss.sortChipText, sortDesc && ss.sortChipTextActive]}>{t.sortNewest}</Text>
           </Pressable>
           <Pressable
             onPress={() => setSortDesc(false)}
             style={[ss.sortChip, !sortDesc && ss.sortChipActive]}
           >
             <Ionicons name="arrow-up" size={12} color={!sortDesc ? C.textOnAccent : C.textSecondary} />
-            <Text style={[ss.sortChipText, !sortDesc && ss.sortChipTextActive]}>Oldest</Text>
+            <Text style={[ss.sortChipText, !sortDesc && ss.sortChipTextActive]}>{t.sortOldest}</Text>
           </Pressable>
         </View>
-        <Text style={ss.epCount}>{filtered.length} ep{filtered.length !== 1 ? 's' : ''}</Text>
+        <Text style={ss.epCount}>{t.episodeCount(mergedEps.length)}</Text>
       </View>
 
-      {merged && episodes4up.length > 0 && (
+      {merged && (
         <View style={ss.sourceBadge}>
           <Ionicons name="checkmark-circle" size={12} color={C.green} />
-          <Text style={ss.sourceBadgeText}>Both sources merged</Text>
+          <Text style={ss.sourceBadgeText}>{t.bothSourcesMerged}</Text>
         </View>
       )}
 
+      <Text style={ss.hint}>{t.tapToToggleWatched}</Text>
+
       {/* Episode grid: 2 columns for thumbnail cards */}
       <View style={ss.epGrid}>
-        {sorted.map((ep, i) => (
-          <Pressable
-            key={`${ep.number}-${i}`}
-            disabled={!ep.href && !ep.href4up}
-            onPress={() => {
-              if (ep.href) {
-                router.push({
-                  pathname: `/watch/${encodeURIComponent(ep.href)}`,
-                  params: { url4up: ep.href4up || '', img: poster || '' },
-                });
-              }
-            }}
-            style={({ pressed }) => [ss.epCard, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-          >
-            <View style={ss.epCardThumb}>
-              {ep.screenshot ? (
-                <Image source={{ uri: ep.screenshot }} style={StyleSheet.absoluteFill} contentFit="cover" />
-              ) : poster ? (
-                <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} contentFit="cover" />
-              ) : null}
-              <LinearGradient
-                colors={["transparent", "rgba(0,0,0,0.85)"]}
-                style={ss.epCardGradient}
-              />
-              <View style={ss.epCardPlayBtn}>
-                <Ionicons name="play" size={14} color="#fff" />
-              </View>
-              <View style={ss.epCardNumBadge}>
-                <Text style={ss.epCardNumText}>{String(ep.number ?? '?').padStart(2, '0')}</Text>
-              </View>
-              {ep.href4up && (
-                <View style={ss.epCardSourceBadge}>
-                  <Text style={ss.epCardSourceText}>2X</Text>
+        {sorted.map((ep, i) => {
+          const watched = ep.href ? watchedHrefs.has(ep.href) : false;
+          return (
+            <Pressable
+              key={`${ep.number}-${i}`}
+              disabled={!ep.href && !ep.href4up}
+              onPress={() => {
+                if (ep.href) {
+                  router.push({
+                    pathname: `/watch/${encodeURIComponent(ep.href)}`,
+                    params: { url4up: ep.href4up || '', img: poster || '' },
+                  });
+                }
+              }}
+              onLongPress={() => onToggleWatched(ep as Episode)}
+              delayLongPress={300}
+              style={({ pressed }) => [ss.epCard, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+            >
+              <View style={[ss.epCardThumb, watched && ss.epCardThumbWatched]}>
+                {ep.screenshot ? (
+                  <Image source={{ uri: ep.screenshot }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                ) : poster ? (
+                  <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                ) : null}
+                {watched && <View style={ss.watchedDim} />}
+                <LinearGradient
+                  colors={["transparent", "rgba(0,0,0,0.85)"]}
+                  style={ss.epCardGradient}
+                />
+                <View style={ss.epCardPlayBtn}>
+                  <Ionicons name={watched ? "checkmark" : "play"} size={14} color="#fff" />
                 </View>
-              )}
-            </View>
-            <Text style={ss.epCardTitle} numberOfLines={1}>
-              {ep.type ? `${ep.type} ${ep.number ?? ''}`.trim() : ep.title}
-            </Text>
-          </Pressable>
-        ))}
+                <View style={ss.epCardNumBadge}>
+                  <Text style={ss.epCardNumText}>{String(ep.number ?? '?').padStart(2, '0')}</Text>
+                </View>
+                {watched && (
+                  <View style={ss.watchedBadge}>
+                    <Ionicons name="checkmark-circle" size={11} color="#fff" />
+                    <Text style={ss.watchedBadgeText}>{t.watchedBadge}</Text>
+                  </View>
+                )}
+                {ep.href4up && !watched && (
+                  <View style={ss.epCardSourceBadge}>
+                    <Text style={ss.epCardSourceText}>2X</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={[ss.epCardTitle, watched && { color: C.textMuted }]} numberOfLines={1}>
+                {`${t.episode} ${ep.number ?? ''}`.trim()}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
     </>
   );
@@ -427,7 +466,7 @@ function RelatedTab({ items }: { items: RelatedAnime[] }) {
     return (
       <View style={ss.emptyTab}>
         <Ionicons name="film-outline" size={40} color={C.textMuted} />
-        <Text style={ss.emptyTabText}>No related anime found</Text>
+        <Text style={ss.emptyTabText}>{t.noRelated}</Text>
       </View>
     );
   }
@@ -622,6 +661,25 @@ const ss = StyleSheet.create({
     backgroundColor: C.green,
   },
   epCardSourceText: { color: "#000", fontSize: 9, fontWeight: "800", fontFamily: "Outfit_700Bold" },
+  hint: {
+    color: C.textMuted, fontSize: 11, marginBottom: 10,
+    fontFamily: "DMSans_500Medium", textAlign: "right", writingDirection: "rtl",
+  },
+  epCardThumbWatched: { borderColor: C.green },
+  watchedDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  watchedBadge: {
+    position: "absolute", top: 6, right: 6,
+    flexDirection: "row", alignItems: "center", gap: 3,
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: R.pill,
+    backgroundColor: C.green,
+  },
+  watchedBadgeText: {
+    color: "#fff", fontSize: 9, fontWeight: "800",
+    fontFamily: "Outfit_700Bold",
+  },
   epCardTitle: {
     color: C.textSecondary, fontSize: 11, fontWeight: "600",
     marginTop: 6, fontFamily: "DMSans_600SemiBold",

@@ -5,9 +5,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { C, R, ELEVATION_NAV } from "../../lib/theme";
 
 const TABS = [
-  { name: "index", icon: "home" as const, label: "Home" },
-  { name: "search", icon: "search" as const, label: "Search" },
-  { name: "mylist", icon: "heart" as const, label: "Favorites" },
+  { name: "index", icon: "home" as const, label: "الرئيسية" },
+  { name: "search", icon: "search" as const, label: "اكتشف" },
+  { name: "mylist", icon: "heart" as const, label: "قائمتي" },
 ];
 
 export default function TabLayout() {

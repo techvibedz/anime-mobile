@@ -1,92 +1,128 @@
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
-import { WebView, WebViewMessageEvent } from "react-native-webview";
-import { _peek, _subscribe, _resolveCurrent, _rejectCurrent, ScrapeJob } from "./bus";
+import { _claimNext, _hasPending, _resolve, _reject, _subscribe, ScrapeJob } from "./bus";
 
-// Hidden WebView that processes scrape jobs one at a time.
-// Render this ONCE in the root layout. Off-screen (1×1 px at -1000,-1000).
-export function ScraperHost() {
-  const [current, setCurrent] = useState<ScrapeJob | null>(null);
-  const webRef = useRef<WebView | null>(null);
+// Number of concurrent WebView slots. Each slot can run one scrape job at a
+// time. 2 covers parallel home (wit+up4) and parallel video-server scrapes
+// without piling on memory.
+const SLOT_COUNT = 2;
+
+import { WebView, WebViewMessageEvent } from "react-native-webview";
+
+function ScraperSlot({
+  job,
+  onDone,
+}: {
+  job: ScrapeJob | null;
+  onDone: () => void;
+}) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function tryStartNext() {
-    if (current) return;
-    const next = _peek();
-    if (next) {
-      setCurrent(next.job);
-      timerRef.current && clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        _rejectCurrent(next.job.id, `scrape timeout after ${next.job.timeoutMs}ms`);
-        setCurrent(null);
-      }, next.job.timeoutMs);
-    }
-  }
-
   useEffect(() => {
-    const unsub = _subscribe(() => tryStartNext());
-    tryStartNext();
+    if (!job) return;
+    timerRef.current = setTimeout(() => {
+      _reject(job.id, `scrape timeout after ${job.timeoutMs}ms`);
+      onDone();
+    }, job.timeoutMs);
     return () => {
-      unsub();
-      timerRef.current && clearTimeout(timerRef.current);
+      if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, []);
-
-  // When a job finishes (success or failure), try to start the next one.
-  useEffect(() => {
-    if (!current) tryStartNext();
-  }, [current]);
+  }, [job?.id]);
 
   function handleMessage(e: WebViewMessageEvent) {
-    if (!current) return;
+    if (!job) return;
     try {
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === "result") {
-        timerRef.current && clearTimeout(timerRef.current);
-        _resolveCurrent(current.id, msg.data);
-        setCurrent(null);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        _resolve(job.id, msg.data);
+        onDone();
       } else if (msg.type === "error") {
-        timerRef.current && clearTimeout(timerRef.current);
-        _rejectCurrent(current.id, msg.message || "scrape error");
-        setCurrent(null);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        _reject(job.id, msg.message || "scrape error");
+        onDone();
       }
-      // other types (debug, partial) are ignored
+      // ignore other types
     } catch {
-      // ignore malformed messages
+      // ignore malformed
     }
   }
+
+  if (!job) return null;
+  return (
+    <WebView
+      source={{ uri: job.url }}
+      userAgent="Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+      javaScriptEnabled
+      domStorageEnabled
+      thirdPartyCookiesEnabled
+      sharedCookiesEnabled
+      cacheEnabled
+      incognito={false}
+      injectedJavaScriptBeforeContentLoaded={job.injectBefore}
+      injectedJavaScript={job.injectAfter}
+      onMessage={handleMessage}
+      onError={(e) => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        _reject(job.id, `WebView error: ${e.nativeEvent.description}`);
+        onDone();
+      }}
+      onHttpError={(e) => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        _reject(job.id, `HTTP ${e.nativeEvent.statusCode}`);
+        onDone();
+      }}
+      style={{ width: 1, height: 1 }}
+    />
+  );
+}
+
+// Hidden, off-screen WebView pool that processes scrape jobs in parallel.
+// Render ONCE in the root layout.
+export function ScraperHost() {
+  const [slots, setSlots] = useState<(ScrapeJob | null)[]>(
+    () => Array.from({ length: SLOT_COUNT }, () => null),
+  );
+
+  function fillSlots() {
+    setSlots((prev) => {
+      const next = [...prev];
+      let changed = false;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] === null && _hasPending()) {
+          const claimed = _claimNext();
+          if (claimed) { next[i] = claimed.job; changed = true; }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }
+
+  function clearSlot(idx: number) {
+    setSlots((prev) => {
+      if (prev[idx] === null) return prev;
+      const next = [...prev];
+      next[idx] = null;
+      return next;
+    });
+    // Try to start another job after this one ends
+    setTimeout(fillSlots, 0);
+  }
+
+  useEffect(() => {
+    const unsub = _subscribe(() => fillSlots());
+    fillSlots();
+    return unsub;
+  }, []);
 
   return (
     <View
       pointerEvents="none"
-      style={{ position: "absolute", left: -1000, top: -1000, width: 1, height: 1, opacity: 0 }}
+      style={{ position: "absolute", left: -1000, top: -1000, width: SLOT_COUNT, height: 1, opacity: 0 }}
     >
-      {current ? (
-        <WebView
-          ref={webRef}
-          source={{ uri: current.url }}
-          // Standard desktop UA helps with sites that gate mobile UAs.
-          userAgent="Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-          javaScriptEnabled
-          domStorageEnabled
-          thirdPartyCookiesEnabled
-          sharedCookiesEnabled
-          cacheEnabled
-          incognito={false}
-          injectedJavaScriptBeforeContentLoaded={current.injectBefore}
-          injectedJavaScript={current.injectAfter}
-          onMessage={handleMessage}
-          onError={(e) => {
-            _rejectCurrent(current.id, `WebView error: ${e.nativeEvent.description}`);
-            setCurrent(null);
-          }}
-          onHttpError={(e) => {
-            _rejectCurrent(current.id, `HTTP ${e.nativeEvent.statusCode}`);
-            setCurrent(null);
-          }}
-          style={{ width: 1, height: 1 }}
-        />
-      ) : null}
+      {slots.map((job, i) => (
+        <ScraperSlot key={i} job={job} onDone={() => clearSlot(i)} />
+      ))}
     </View>
   );
 }

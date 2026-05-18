@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { View, Text, Pressable, TextInput, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from "react-native";
+import { View, Text, Pressable, TextInput, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, I18nManager } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
 import { C, R, S, ELEVATION_GLOW } from "../../lib/theme";
+import { t } from "../../lib/i18n";
 
 export default function Register() {
   const insets = useSafeAreaInsets();
@@ -21,9 +22,9 @@ export default function Register() {
 
   async function handleSignUp() {
     setError(null);
-    if (!email.trim() || !password) { setError("Email and password are required"); return; }
-    if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
-    if (password !== confirm) { setError("Passwords don't match"); return; }
+    if (!email.trim() || !password) { setError(t.emailPasswordRequired); return; }
+    if (password.length < 6) { setError(t.passwordTooShort); return; }
+    if (password !== confirm) { setError(t.passwordsDontMatch); return; }
     setLoading(true);
     const res = await signUpWithEmail(email, password);
     setLoading(false);
@@ -42,16 +43,27 @@ export default function Register() {
   if (needsConfirmation) {
     return (
       <View style={[ss.root, { paddingTop: insets.top + 40, paddingHorizontal: S.paddingContent }]}>
-        <View style={ss.confirmCircle}>
-          <Ionicons name="mail-unread-outline" size={36} color={C.accent} />
-        </View>
-        <Text style={ss.confirmTitle}>Check your inbox</Text>
-        <Text style={ss.confirmText}>
-          We sent a verification link to <Text style={{ color: C.text, fontWeight: "700" }}>{email}</Text>.
-          Tap it to activate your account.
-        </Text>
-        <Pressable style={ss.submitBtn} onPress={() => router.replace("/(auth)/login")}>
-          <Text style={ss.submitText}>Go to sign in</Text>
+        <View style={ss.orb1} />
+        <LinearGradient
+          colors={[C.violet, C.accent]}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+          style={ss.confirmCircle}
+        >
+          <Ionicons name="mail-unread" size={40} color="#fff" />
+        </LinearGradient>
+        <Text style={ss.confirmTitle}>{t.checkInbox}</Text>
+        <Text style={ss.confirmText}>{t.confirmEmailSent(email)}</Text>
+        <Pressable
+          style={({ pressed }) => [ss.submitWrap, pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] }]}
+          onPress={() => router.replace("/(auth)/login")}
+        >
+          <LinearGradient
+            colors={[C.accent, "#FF457A", C.violet]}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            style={ss.submitBtn}
+          >
+            <Text style={ss.submitText}>{t.goToSignIn}</Text>
+          </LinearGradient>
         </Pressable>
       </View>
     );
@@ -59,76 +71,90 @@ export default function Register() {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={ss.root}>
-      <LinearGradient colors={[C.violet + "1A", "transparent"]} style={[StyleSheet.absoluteFill, { height: 320 }]} />
+      <LinearGradient
+        colors={[C.violet + "33", "transparent"]}
+        style={[StyleSheet.absoluteFill, { height: 380 }]}
+      />
+      <View style={ss.orb1} />
+      <View style={ss.orb2} />
+
       <ScrollView
         contentContainerStyle={[ss.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}
         keyboardShouldPersistTaps="handled"
       >
         <View style={ss.header}>
           <Pressable onPress={() => router.back()} style={ss.backBtn} hitSlop={8}>
-            <Ionicons name="chevron-back" size={22} color={C.text} />
+            <Ionicons name={I18nManager.isRTL ? "chevron-forward" : "chevron-back"} size={22} color={C.text} />
           </Pressable>
         </View>
 
         <View style={ss.body}>
-          <Text style={ss.heading}>Create account</Text>
-          <Text style={ss.sub}>Save your favorites and pick up where you left off on any device.</Text>
+          <Text style={ss.heading}>{t.createAccount}</Text>
+          <Text style={ss.sub}>{t.signupSub}</Text>
 
           {!isConfigured && (
             <View style={ss.warnBanner}>
               <Ionicons name="warning" size={14} color={C.gold} />
-              <Text style={ss.warnText}>Auth backend not configured — see SETUP.md</Text>
+              <Text style={ss.warnText}>{t.authNotConfigured}</Text>
             </View>
           )}
 
           <Pressable
-            style={({ pressed }) => [ss.googleBtn, pressed && { opacity: 0.85 }]}
+            style={({ pressed }) => [ss.googleWrap, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
             onPress={handleGoogle}
             disabled={googleLoading || !isConfigured}
           >
-            {googleLoading ? <ActivityIndicator color={C.text} /> : (
-              <>
-                <Ionicons name="logo-google" size={18} color={C.text} />
-                <Text style={ss.googleBtnText}>Sign up with Google</Text>
-              </>
-            )}
+            <LinearGradient
+              colors={["#fff", "#f1f1f5"]}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              style={ss.googleBtn}
+            >
+              {googleLoading ? <ActivityIndicator color="#111" /> : (
+                <>
+                  <Ionicons name="logo-google" size={18} color="#111" />
+                  <Text style={ss.googleBtnText}>{t.signUpWithGoogle}</Text>
+                </>
+              )}
+            </LinearGradient>
           </Pressable>
 
           <View style={ss.divider}>
             <View style={ss.dividerLine} />
-            <Text style={ss.dividerText}>or</Text>
+            <Text style={ss.dividerText}>{t.or}</Text>
             <View style={ss.dividerLine} />
           </View>
 
           <View style={ss.inputGroup}>
-            <Text style={ss.label}>Email</Text>
+            <Text style={ss.label}>{t.email}</Text>
             <View style={ss.inputBox}>
               <Ionicons name="mail-outline" size={16} color={C.textMuted} />
               <TextInput
                 style={ss.input}
                 value={email}
                 onChangeText={setEmail}
-                placeholder="you@example.com"
+                placeholder={t.emailPlaceholder}
                 placeholderTextColor={C.textMuted}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 autoComplete="email"
+                textAlign="right"
               />
             </View>
           </View>
 
           <View style={ss.inputGroup}>
-            <Text style={ss.label}>Password</Text>
+            <Text style={ss.label}>{t.password}</Text>
             <View style={ss.inputBox}>
               <Ionicons name="lock-closed-outline" size={16} color={C.textMuted} />
               <TextInput
                 style={ss.input}
                 value={password}
                 onChangeText={setPassword}
-                placeholder="At least 6 characters"
+                placeholder={t.passwordMin6}
                 placeholderTextColor={C.textMuted}
                 secureTextEntry={!showPwd}
                 autoComplete="password-new"
+                textAlign="right"
               />
               <Pressable onPress={() => setShowPwd((v) => !v)} hitSlop={8}>
                 <Ionicons name={showPwd ? "eye-off-outline" : "eye-outline"} size={16} color={C.textMuted} />
@@ -137,17 +163,18 @@ export default function Register() {
           </View>
 
           <View style={ss.inputGroup}>
-            <Text style={ss.label}>Confirm password</Text>
+            <Text style={ss.label}>{t.confirmPassword}</Text>
             <View style={ss.inputBox}>
               <Ionicons name="lock-closed-outline" size={16} color={C.textMuted} />
               <TextInput
                 style={ss.input}
                 value={confirm}
                 onChangeText={setConfirm}
-                placeholder="••••••••"
+                placeholder={t.passwordPlaceholder}
                 placeholderTextColor={C.textMuted}
                 secureTextEntry={!showPwd}
                 autoComplete="password-new"
+                textAlign="right"
               />
             </View>
           </View>
@@ -160,18 +187,33 @@ export default function Register() {
           )}
 
           <Pressable
-            style={({ pressed }) => [ss.submitBtn, pressed && { opacity: 0.88 }, (!email || !password || !confirm) && { opacity: 0.6 }]}
+            style={({ pressed }) => [
+              ss.submitWrap,
+              pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
+              (!email || !password || !confirm) && { opacity: 0.5 },
+            ]}
             onPress={handleSignUp}
             disabled={loading || !email || !password || !confirm}
           >
-            {loading ? <ActivityIndicator color={C.textOnAccent} /> : <Text style={ss.submitText}>Create account</Text>}
+            <LinearGradient
+              colors={[C.accent, "#FF457A", C.violet]}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={ss.submitBtn}
+            >
+              {loading ? <ActivityIndicator color="#fff" /> : (
+                <>
+                  <Ionicons name="sparkles" size={16} color="#fff" />
+                  <Text style={ss.submitText}>{t.createAccount}</Text>
+                </>
+              )}
+            </LinearGradient>
           </Pressable>
 
           <View style={ss.footer}>
-            <Text style={ss.footerText}>Already have an account? </Text>
             <Pressable onPress={() => router.replace("/(auth)/login")}>
-              <Text style={ss.footerLink}>Sign in</Text>
+              <Text style={ss.footerLink}>{t.signIn}</Text>
             </Pressable>
+            <Text style={ss.footerText}> {t.haveAccount} </Text>
           </View>
         </View>
       </ScrollView>
@@ -181,6 +223,8 @@ export default function Register() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+  orb1: { position: "absolute", width: 320, height: 320, borderRadius: 160, backgroundColor: C.violet + "22", top: -80, right: -100 },
+  orb2: { position: "absolute", width: 280, height: 280, borderRadius: 140, backgroundColor: C.accent + "22", top: 240, left: -100 },
   scroll: { flexGrow: 1, paddingHorizontal: S.paddingContent },
   header: { flexDirection: "row", marginBottom: 24 },
   backBtn: {
@@ -189,8 +233,14 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   body: { flex: 1, paddingTop: 8 },
-  heading: { color: C.text, fontSize: 28, fontWeight: "800", letterSpacing: -0.5, fontFamily: "Outfit_800ExtraBold" },
-  sub: { color: C.textSecondary, fontSize: 13, marginTop: 8, marginBottom: 28, fontFamily: "DMSans_500Medium", lineHeight: 18 },
+  heading: {
+    color: C.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5,
+    fontFamily: "Outfit_800ExtraBold", textAlign: "right", writingDirection: "rtl",
+  },
+  sub: {
+    color: C.textSecondary, fontSize: 14, marginTop: 8, marginBottom: 28,
+    fontFamily: "DMSans_500Medium", lineHeight: 20, textAlign: "right", writingDirection: "rtl",
+  },
 
   warnBanner: {
     flexDirection: "row", alignItems: "center", gap: 8,
@@ -199,42 +249,45 @@ const ss = StyleSheet.create({
   },
   warnText: { color: C.gold, fontSize: 12, flex: 1, fontFamily: "DMSans_500Medium" },
 
+  googleWrap: { borderRadius: R.pill, marginBottom: 20, ...ELEVATION_GLOW },
   googleBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    borderRadius: R.pill, paddingVertical: 14, marginBottom: 20,
+    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    alignItems: "center", justifyContent: "center", gap: 10,
+    borderRadius: R.pill, paddingVertical: 15,
   },
-  googleBtnText: { color: C.text, fontSize: 14, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  googleBtnText: { color: "#111", fontSize: 14, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
 
   divider: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 20 },
   dividerLine: { flex: 1, height: 1, backgroundColor: C.border },
   dividerText: { color: C.textMuted, fontSize: 11, fontFamily: "DMSans_500Medium" },
 
   inputGroup: { marginBottom: 16 },
-  label: { color: C.textSecondary, fontSize: 12, fontWeight: "600", marginBottom: 6, fontFamily: "DMSans_600SemiBold" },
+  label: {
+    color: C.textSecondary, fontSize: 12, fontWeight: "600", marginBottom: 6,
+    fontFamily: "DMSans_600SemiBold", textAlign: "right", writingDirection: "rtl",
+  },
   inputBox: {
-    flexDirection: "row", alignItems: "center", gap: 10,
+    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    alignItems: "center", gap: 10,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     borderRadius: R.lg, paddingHorizontal: 14, height: S.inputHeight,
   },
-  input: {
-    flex: 1, color: C.text, fontSize: 14, height: S.inputHeight,
-    fontFamily: "DMSans_500Medium",
-  },
+  input: { flex: 1, color: C.text, fontSize: 14, height: S.inputHeight, fontFamily: "DMSans_500Medium" },
 
   errorBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: C.accentSoft, borderRadius: R.lg, padding: 12, marginTop: 8,
     borderWidth: 1, borderColor: C.borderAccent,
   },
-  errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "DMSans_500Medium" },
+  errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "DMSans_500Medium", textAlign: "right" },
 
+  submitWrap: { borderRadius: R.pill, marginTop: 16, ...ELEVATION_GLOW },
   submitBtn: {
-    backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 16,
-    alignItems: "center", marginTop: 16,
-    ...ELEVATION_GLOW,
+    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    alignItems: "center", justifyContent: "center", gap: 8,
+    borderRadius: R.pill, paddingVertical: 16,
   },
-  submitText: { color: C.textOnAccent, fontSize: 15, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  submitText: { color: "#fff", fontSize: 16, fontWeight: "800", fontFamily: "Outfit_700Bold" },
 
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 24 },
   footerText: { color: C.textSecondary, fontSize: 13, fontFamily: "DMSans_500Medium" },
@@ -242,16 +295,16 @@ const ss = StyleSheet.create({
 
   // Confirmation state
   confirmCircle: {
-    width: 80, height: 80, borderRadius: 40,
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+    width: 96, height: 96, borderRadius: 48,
     alignItems: "center", justifyContent: "center", marginBottom: 24,
+    ...ELEVATION_GLOW,
   },
   confirmTitle: {
-    color: C.text, fontSize: 24, fontWeight: "800", marginBottom: 12,
-    fontFamily: "Outfit_800ExtraBold",
+    color: C.text, fontSize: 28, fontWeight: "800", marginBottom: 12,
+    fontFamily: "Outfit_800ExtraBold", textAlign: "right", writingDirection: "rtl",
   },
   confirmText: {
-    color: C.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 32,
-    fontFamily: "DMSans_500Medium",
+    color: C.textSecondary, fontSize: 14, lineHeight: 22, marginBottom: 32,
+    fontFamily: "DMSans_500Medium", textAlign: "right", writingDirection: "rtl",
   },
 });

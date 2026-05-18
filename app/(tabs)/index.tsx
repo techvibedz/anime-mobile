@@ -24,6 +24,7 @@ import { getHistory, progressPercent, removeFromHistory } from "../../lib/histor
 import type { WatchEntry } from "../../lib/history";
 import { Shimmer } from "../../components/Shimmer";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
+import { t } from "../../lib/i18n";
 
 const { width: SW } = Dimensions.get("window");
 const HERO_H = 440;
@@ -34,15 +35,22 @@ const EP_H = 112;
 const PAD = S.paddingContent;
 
 const CATEGORIES = [
-  { name: "Action", icon: "flash", colors: [C.accent, "#FF6B3D"] as [string, string] },
-  { name: "Romance", icon: "heart", colors: ["#FF6B9D", C.accent] as [string, string] },
-  { name: "Comedy", icon: "happy", colors: ["#FFB800", "#FF8C00"] as [string, string] },
-  { name: "Fantasy", icon: "sparkles", colors: [C.violet, "#9B6BFF"] as [string, string] },
-  { name: "Horror", icon: "skull", colors: ["#6B2D5B", "#FF2D55"] as [string, string] },
-  { name: "Sci-Fi", icon: "planet", colors: ["#00C6FF", C.violet] as [string, string] },
-  { name: "Drama", icon: "sad", colors: ["#667EEA", "#764BA2"] as [string, string] },
-  { name: "Adventure", icon: "compass", colors: ["#11998E", "#38EF7D"] as [string, string] },
+  { name: "Action", label: "أكشن", icon: "flash", colors: [C.accent, "#FF6B3D"] as [string, string] },
+  { name: "Romance", label: "رومانسي", icon: "heart", colors: ["#FF6B9D", C.accent] as [string, string] },
+  { name: "Comedy", label: "كوميدي", icon: "happy", colors: ["#FFB800", "#FF8C00"] as [string, string] },
+  { name: "Fantasy", label: "خيال", icon: "sparkles", colors: [C.violet, "#9B6BFF"] as [string, string] },
+  { name: "Horror", label: "رعب", icon: "skull", colors: ["#6B2D5B", "#FF2D55"] as [string, string] },
+  { name: "Sci-Fi", label: "خيال علمي", icon: "planet", colors: ["#00C6FF", C.violet] as [string, string] },
+  { name: "Drama", label: "دراما", icon: "sad", colors: ["#667EEA", "#764BA2"] as [string, string] },
+  { name: "Adventure", label: "مغامرة", icon: "compass", colors: ["#11998E", "#38EF7D"] as [string, string] },
 ];
+
+const SECTION_LABELS: Record<string, string> = {
+  trending: "الأكثر رواجًا",
+  recently_updated: "حلقات جديدة",
+  tv_series: "مسلسلات",
+  movies: "أفلام",
+};
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -215,7 +223,7 @@ export default function HomeScreen() {
                         }}
                       >
                         <Ionicons name="play" size={16} color={C.textOnAccent} />
-                        <Text style={ss.btnPrimaryText}>Watch Now</Text>
+                        <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
                       </Pressable>
                       <Pressable
                         style={ss.btnGlass}
@@ -225,7 +233,7 @@ export default function HomeScreen() {
                         }}
                       >
                         <Ionicons name="heart-outline" size={18} color={C.text} />
-                        <Text style={ss.btnGlassText}>My List</Text>
+                        <Text style={ss.btnGlassText}>{t.myList}</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -249,7 +257,7 @@ export default function HomeScreen() {
         {history.length > 0 && (
           <View style={ss.section}>
             <View style={ss.sectionHeader}>
-              <Text style={ss.sectionTitle}>Continue Watching</Text>
+              <Text style={ss.sectionTitle}>{t.continueWatching}</Text>
             </View>
             <ScrollView
               horizontal
@@ -277,15 +285,16 @@ export default function HomeScreen() {
           return (
             <View key={section.id} style={ss.section}>
               <View style={ss.sectionHeader}>
-                <Text style={ss.sectionTitle}>{section.title}</Text>
+                <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
                 <Pressable
                   style={ss.seeAllBtn}
-                  onPress={() =>
-                    router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(section.title)}&type=${section.type}`)
-                  }
+                  onPress={() => {
+                    const localized = SECTION_LABELS[section.id] || section.title;
+                    router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(localized)}&type=${section.type}`);
+                  }}
                 >
-                  <Text style={ss.seeAllText}>See all ({section.items.length})</Text>
-                  <Ionicons name="chevron-forward" size={12} color={C.accent} />
+                  <Text style={ss.seeAllText}>{t.seeAll(section.items.length)}</Text>
+                  <Ionicons name="chevron-back" size={12} color={C.accent} />
                 </Pressable>
               </View>
               <ScrollView
@@ -303,14 +312,15 @@ export default function HomeScreen() {
                 {hasMore && (
                   <Pressable
                     style={ss.seeAllCard}
-                    onPress={() =>
-                      router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(section.title)}&type=${section.type}`)
-                    }
+                    onPress={() => {
+                      const localized = SECTION_LABELS[section.id] || section.title;
+                      router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(localized)}&type=${section.type}`);
+                    }}
                   >
                     <View style={ss.seeAllCircle}>
-                      <Ionicons name="arrow-forward" size={20} color={C.accent} />
+                      <Ionicons name="arrow-back" size={20} color={C.accent} />
                     </View>
-                    <Text style={ss.seeAllCardText}>See All</Text>
+                    <Text style={ss.seeAllCardText}>{t.seeAllShort}</Text>
                   </Pressable>
                 )}
               </ScrollView>
@@ -321,7 +331,7 @@ export default function HomeScreen() {
         {/* ── Categories ──────────────────────── */}
         <View style={ss.section}>
           <View style={ss.sectionHeader}>
-            <Text style={ss.sectionTitle}>Categories</Text>
+            <Text style={ss.sectionTitle}>{t.categories}</Text>
           </View>
           <View style={ss.catGrid}>
             {CATEGORIES.map((cat) => (
@@ -337,7 +347,7 @@ export default function HomeScreen() {
                   style={ss.catGrad}
                 >
                   <Ionicons name={cat.icon as any} size={20} color="rgba(255,255,255,0.7)" />
-                  <Text style={ss.catName}>{cat.name}</Text>
+                  <Text style={ss.catName}>{cat.label}</Text>
                 </LinearGradient>
               </Pressable>
             ))}
@@ -384,7 +394,7 @@ function EpisodeActionModal({ episode, onClose }: { episode: EpisodeItem | null;
             }}
           >
             <Ionicons name="play" size={16} color={C.textOnAccent} />
-            <Text style={ss.modalBtnPrimaryText}>Watch this episode</Text>
+            <Text style={ss.modalBtnPrimaryText}>{t.watchEpisode}</Text>
           </Pressable>
 
           <Pressable
@@ -398,11 +408,11 @@ function EpisodeActionModal({ episode, onClose }: { episode: EpisodeItem | null;
             disabled={!episode.animeHref}
           >
             <Ionicons name="information-circle-outline" size={16} color={C.text} />
-            <Text style={ss.modalBtnSecondaryText}>Open anime page</Text>
+            <Text style={ss.modalBtnSecondaryText}>{t.openAnimePage}</Text>
           </Pressable>
 
           <Pressable style={ss.modalCancel} onPress={onClose}>
-            <Text style={ss.modalCancelText}>Cancel</Text>
+            <Text style={ss.modalCancelText}>{t.cancel}</Text>
           </Pressable>
         </Pressable>
       </Pressable>
@@ -428,7 +438,7 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
         )}
         {item.isNew && (
           <View style={ss.newBadge}>
-            <Text style={ss.badgeText}>NEW</Text>
+            <Text style={ss.badgeText}>{t.newBadge}</Text>
           </View>
         )}
         {item.rating && (
@@ -465,7 +475,7 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
         )}
         {item.isNew && (
           <View style={ss.newBadge}>
-            <Text style={ss.badgeText}>NEW</Text>
+            <Text style={ss.badgeText}>{t.newBadge}</Text>
           </View>
         )}
         {/* Play button overlay */}
@@ -523,7 +533,7 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
         </View>
         {/* Time remaining badge */}
         <View style={ss.timeBadge}>
-          <Text style={ss.timeBadgeText}>{remainMin}m left</Text>
+          <Text style={ss.timeBadgeText}>{t.minLeft(remainMin)}</Text>
         </View>
         {/* Delete button */}
         <Pressable

@@ -321,6 +321,51 @@ _waitFor(
 })();true;`;
 
 // ──────────────────────────────────────────────────────────────
+// CROSS-SOURCE TITLE MATCH — used to find an anime's anime4up URL by
+// searching anime4up by witanime title (and vice versa). Returns the
+// best-scoring card URL.
+// ──────────────────────────────────────────────────────────────
+export const EXTRACT_TITLE_MATCH = (want: string) => `(function(){${HELPERS}
+function norm(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[\\u0600-\\u06FF]+/g, ' ')   // strip Arabic
+    .replace(/\\b(season|s|part|cour)\\s*\\d+\\b/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\\s+/g, ' ')
+    .trim();
+}
+function scrape() {
+  var want = norm(${JSON.stringify(want)});
+  var best = { url: null, score: 0 };
+  document.querySelectorAll('.anime-card-container').forEach(function (el) {
+    var titleEl = el.querySelector('.anime-card-title h3 a');
+    var hrefEl = el.querySelector('.anime-card-poster a.overlay');
+    var t = norm(titleEl && titleEl.textContent);
+    var h = hrefEl && hrefEl.getAttribute('href');
+    if (!h || !t) return;
+    var score = 0;
+    if (t === want) score = 100;
+    else if (t.indexOf(want) === 0 || want.indexOf(t) === 0) score = 80;
+    else {
+      var wantWords = want.split(' ').filter(function (w) { return w.length > 2; });
+      var gotWords = t.split(' ').filter(function (w) { return w.length > 2; });
+      var set = {};
+      wantWords.forEach(function (w) { set[w] = true; });
+      gotWords.forEach(function (w) { if (set[w]) score += 10; });
+    }
+    if (score > best.score) { best = { url: h, score: score }; }
+  });
+  return { url: best.score >= 30 ? best.url : null, score: best.score };
+}
+_waitFor(
+  function(){ return !!document.querySelector('.anime-card-container, .no-results, .search-empty'); },
+  function(ok){ _send('result', { data: ok ? scrape() : { url: null, score: 0 } }); },
+  18000
+);
+})();true;`;
+
+// ──────────────────────────────────────────────────────────────
 // SEARCH — anime card grid
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_SEARCH = `(function(){${HELPERS}

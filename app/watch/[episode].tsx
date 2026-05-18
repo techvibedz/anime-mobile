@@ -197,33 +197,40 @@ export default function WatchScreen() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [videoUrl, player]);
 
-  // Auto-fall back to WebView if the native player errors out within 5s of
-  // the source being set (most likely cause: CDN rejected request without
-  // valid cookies even after we passed Referer/Origin headers).
+  // Auto-fall back to WebView ONLY if the native player never starts.
+  // Once playback begins (currentTime advances past 0 OR duration > 0), we
+  // never trigger the fallback again — otherwise transient buffering /
+  // seeking reports a 0 currentTime mid-watch and we'd kick the user out
+  // to the embed page with ads (which is what they wanted to avoid).
   useEffect(() => {
     if (!videoUrl || !player) return;
     const idx = activeIdx;
-    const sub = (player as any).addListener?.("statusChange", (status: any) => {
-      const s = status?.status ?? status?.state ?? status;
-      if (s === "error" || status?.error) {
-        setServers((p) => p.map((srv, i) =>
-          i === idx ? { ...srv, status: "webview" as ServerStatus, videoUrl: null } : srv
-        ));
-      }
-    });
-    // Failsafe: if the player hasn't started after 15s and duration is still
-    // 0, fall back. Bumped from 8s to give HLS streams enough time to buffer.
-    const failTimer = setTimeout(() => {
+    let hasStarted = false;
+    let cancelled = false;
+
+    // Poll for "started playing" every 250ms; once we see motion, lock in.
+    const watchdog = setInterval(() => {
       try {
-        if (player.duration === 0 && player.currentTime === 0) {
+        if (player.duration > 0 || player.currentTime > 0) hasStarted = true;
+      } catch {}
+    }, 250);
+
+    // 20s ceiling: if currentTime is still exactly 0 AND duration is still
+    // 0 AND we never saw any motion, the URL is truly unplayable. Fall back.
+    const failTimer = setTimeout(() => {
+      if (cancelled) return;
+      try {
+        if (!hasStarted && player.duration === 0 && player.currentTime === 0) {
           setServers((p) => p.map((srv, i) =>
             i === idx ? { ...srv, status: "webview" as ServerStatus, videoUrl: null } : srv
           ));
         }
       } catch {}
-    }, 15000);
+    }, 20000);
+
     return () => {
-      try { sub?.remove?.(); } catch {}
+      cancelled = true;
+      clearInterval(watchdog);
       clearTimeout(failTimer);
     };
   }, [videoUrl, player, activeIdx]);

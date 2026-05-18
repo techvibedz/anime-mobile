@@ -296,6 +296,21 @@ export async function fetchEpisodes(animeUrl: string): Promise<{
 
   const url4up = isAnime4up ? animeUrl : crossUrl;
 
+  // If we have a cross-source URL and the primary is witanime, ALSO scrape
+  // the anime4up page so we get per-episode hrefs for the merge. Without
+  // these, the watch screen receives no url4up and can only pull servers
+  // from witanime. Best-effort — empty array if it fails.
+  let episodes4up: Episode[] = [];
+  if (!isAnime4up && crossUrl) {
+    try {
+      const up4 = await scrapeEpisodesPage(crossUrl);
+      episodes4up = up4.episodes;
+    } catch {}
+  } else if (isAnime4up) {
+    // anime4up is primary — d.episodes is the up4 list itself.
+    episodes4up = d.episodes;
+  }
+
   return {
     success: true,
     data: {
@@ -310,7 +325,7 @@ export async function fetchEpisodes(animeUrl: string): Promise<{
       relatedAnime: [],
       totalEpisodes: d.episodes.length,
       episodes: d.episodes,
-      episodes4up: [],
+      episodes4up,
       merged: url4up ? { anime4up: url4up } : null,
     },
   };

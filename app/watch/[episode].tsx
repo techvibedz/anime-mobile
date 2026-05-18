@@ -156,18 +156,40 @@ export default function WatchScreen() {
   const isWebView = active?.status === "webview";
   const iframeUrl = getIframeUrl(active?.server);
 
-  // CDNs (mp4upload, streamwish, voe, …) refuse playback without the
-  // origin's Referer header. Derive it from the embed iframe URL so the
-  // native player passes the same Referer the embed page would.
+  // CDNs refuse playback without the right Referer. Each provider has a
+  // canonical embed origin (mp4upload's CDN wants www.mp4upload.com, not
+  // mp4upload.com or s14.mp4upload.com). Derive the right one from the
+  // video URL's host first; fall back to the iframe origin.
   const videoSource = (() => {
     if (!videoUrl) return "";
     try {
-      const origin = iframeUrl ? new URL(iframeUrl).origin : null;
-      if (!origin) return videoUrl;
+      const videoHost = new URL(videoUrl).hostname.toLowerCase();
+      let referer: string;
+      let origin: string;
+      if (/mp4upload/.test(videoHost)) {
+        referer = "https://www.mp4upload.com/";
+        origin = "https://www.mp4upload.com";
+      } else if (/streamwish|hgcloud|wishfast|wishembed|jwembed|hlswish/.test(videoHost)) {
+        // streamwish family — keep host but strip subdomain to root
+        const root = videoHost.split(".").slice(-2).join(".");
+        referer = `https://${root}/`;
+        origin = `https://${root}`;
+      } else if (/voe\./.test(videoHost)) {
+        referer = "https://voe.sx/";
+        origin = "https://voe.sx";
+      } else if (iframeUrl) {
+        const iframeOrigin = new URL(iframeUrl).origin;
+        referer = iframeOrigin + "/";
+        origin = iframeOrigin;
+      } else {
+        const root = videoHost.split(".").slice(-2).join(".");
+        referer = `https://${root}/`;
+        origin = `https://${root}`;
+      }
       return {
         uri: videoUrl,
         headers: {
-          Referer: origin + "/",
+          Referer: referer,
           Origin: origin,
           "User-Agent":
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",

@@ -737,6 +737,13 @@ export const COLLECT_VIDEO_AFTER = `
     sent = true;
     send('error', { message: reason });
   }
+  // For providers whose CDN ties URLs to per-session tokens (mp4upload,
+  // streamwish, voe, …), the LIVE URL the player actually fetches is
+  // far more reliable than the packed-JS one — by the time the native
+  // player makes its request, the packed URL may have expired tokens or
+  // missing cookies. So we wait for the fetch/XHR hook to fire before
+  // falling back to HTML extractors.
+  var isTokenizedHost = /mp4upload|streamwish|hgcloud|wishfast|wishembed|jwembed|voe\\.sx|voe\\./i.test(location.host);
 
   (async function run() {
     var start = Date.now();
@@ -745,29 +752,45 @@ export const COLLECT_VIDEO_AFTER = `
     var dm = await tryDailymotion();
     if (dm) return done(dm);
 
-    // 2) Try HTML extractors immediately, then every 1s for 6s
-    for (var i = 0; i < 7; i++) {
+    // 2) Trigger play early so the player kicks off its real fetches
+    triggerPlay();
+    await new Promise(function (r) { setTimeout(r, 600); });
+    triggerPlay();
+
+    // 3) For tokenized hosts, prefer the hook output. Poll for ~12s
+    //    before falling back to HTML extraction.
+    if (isTokenizedHost) {
+      for (var i = 0; i < 24; i++) {
+        var h0 = pickHooked();
+        if (h0) return done(h0);
+        if (i === 6) triggerPlay();
+        if (i === 12) triggerPlay();
+        await new Promise(function (r) { setTimeout(r, 500); });
+      }
+    }
+
+    // 4) HTML extractors (packed JS / JWPlayer / source tag / generic).
+    //    Poll briefly in case the player JS hasn't installed yet.
+    for (var j = 0; j < 6; j++) {
       var html = document.documentElement.outerHTML || '';
       var found = extractFromHtml(html);
       if (found && !isDecoy(found)) return done(found);
-      // Also check hook captures
       var hooked = pickHooked();
       if (hooked) return done(hooked);
-      if (i === 1) triggerPlay();
-      await new Promise(function (r) { setTimeout(r, 1000); });
+      await new Promise(function (r) { setTimeout(r, 800); });
     }
 
-    // 3) Click play and keep watching for hooked URLs up to 30s total
+    // 5) Last-resort: keep watching for hook output up to 35s total
     triggerPlay();
     var elapsed = Date.now() - start;
-    while (elapsed < 30000) {
+    while (elapsed < 35000) {
       var h = pickHooked();
       if (h) return done(h);
       await new Promise(function (r) { setTimeout(r, 700); });
       elapsed = Date.now() - start;
     }
 
-    fail('no-video-url-after-30s');
+    fail('no-video-url-after-35s');
   })();
   return true;
 })();

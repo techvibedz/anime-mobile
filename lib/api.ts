@@ -1,6 +1,7 @@
 // All data is scraped in-app via a hidden WebView (lib/scraper).
 // No HTTP backend is required.
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   scrapeWitanimeHome,
   scrapeAnime4upHome,
@@ -12,6 +13,26 @@ import {
   scrapeVideoServers,
   extractVideoUrl as scrapeExtractVideoUrl,
 } from "./scraper";
+
+const HOME_CACHE_KEY = "@home_cache_v1";
+const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
+
+async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Date.now() - parsed.ts > ttlMs) return null;
+    return parsed.data as T;
+  } catch {
+    return null;
+  }
+}
+async function writeCache(key: string, data: unknown) {
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+  } catch {}
+}
 
 const WIT_BASE = "https://witanime.you";
 const UP4_BASE = "https://w1.anime4up.rest";
@@ -146,21 +167,16 @@ export function getProxyUrl(videoUrl: string): string {
 
 /* ── /home ──────────────────────────────────── */
 
-export async function fetchHome(): Promise<{
-  success: boolean;
-  data: { featured: FeaturedItem[]; sections: HomeSection[] };
-}> {
-  const wit = await scrapeWitanimeHome();
-  // anime4up best-effort — if it fails, fall through with witanime only.
-  let up4Animes: { title: string; href: string; image: string | null; type: string | null }[] = [];
-  try {
-    const up4 = await scrapeAnime4upHome();
-    up4Animes = up4.animes;
-  } catch { /* ignore */ }
+type HomePayload = { success: boolean; data: { featured: FeaturedItem[]; sections: HomeSection[] } };
 
-  // Merge witanime + anime4up by fuzzy title match.
+let bgRefreshInFlight = false;
+
+function buildHomePayload(
+  wit: { featured: FeaturedItem[]; animes: any[]; episodes: any[] },
+  up4Animes: { title: string; href: string; image: string | null; type: string | null }[],
+): HomePayload {
   const used4up = new Set<string>();
-  const merged: MergedAnimeItem[] = wit.animes.map((w) => {
+  const merged: MergedAnimeItem[] = wit.animes.map((w: any) => {
     const m = up4Animes.find((u) => !used4up.has(u.href) && fuzzyMatch(w.title, u.title));
     const item: MergedAnimeItem = {
       ...w,
@@ -179,28 +195,17 @@ export async function fetchHome(): Promise<{
   for (const u of up4Animes) {
     if (!used4up.has(u.href) && u.title && u.href) {
       merged.push({
-        title: u.title,
-        href: u.href,
-        image: imgOrEmpty(u.image),
-        type: u.type,
-        status: null,
-        description: null,
-        rating: null,
-        isNew: true,
-        sources: ["anime4up"],
-        sourceHrefs: { anime4up: u.href },
+        title: u.title, href: u.href, image: imgOrEmpty(u.image),
+        type: u.type, status: null, description: null, rating: null, isNew: true,
+        sources: ["anime4up"], sourceHrefs: { anime4up: u.href },
       });
     }
   }
 
   const featured: FeaturedItem[] = wit.featured;
-  const recentEpisodes: EpisodeItem[] = wit.episodes.map((e) => ({
-    title: e.title,
-    href: e.href,
-    image: imgOrEmpty(e.image),
-    animeTitle: e.animeTitle,
-    animeHref: e.animeHref,
-    isNew: e.isNew,
+  const recentEpisodes: EpisodeItem[] = wit.episodes.map((e: any) => ({
+    title: e.title, href: e.href, image: imgOrEmpty(e.image),
+    animeTitle: e.animeTitle, animeHref: e.animeHref, isNew: e.isNew,
   }));
 
   const sections: HomeSection[] = [];
@@ -213,6 +218,31 @@ export async function fetchHome(): Promise<{
   if (movieItems.length >= 2) sections.push({ id: "movies", title: "Movies", type: "anime", items: movieItems });
 
   return { success: true, data: { featured: featured.slice(0, 5), sections } };
+}
+
+async function fetchHomeFresh(): Promise<HomePayload> {
+  const wit = await scrapeWitanimeHome();
+  // Skip anime4up on home — it doubles load time and the merge is only
+  // really needed for cross-source matching on detail pages. Home shows
+  // wit-only content; up4 fills in on demand later.
+  const result = buildHomePayload(wit, []);
+  // Save for next launch.
+  void writeCache(HOME_CACHE_KEY, result);
+  return result;
+}
+
+export async function fetchHome(): Promise<HomePayload> {
+  // Stale-while-revalidate: return cached payload immediately if present,
+  // then kick off a background refresh so the next launch is fresher.
+  const cached = await readCache<HomePayload>(HOME_CACHE_KEY, HOME_CACHE_TTL);
+  if (cached) {
+    if (!bgRefreshInFlight) {
+      bgRefreshInFlight = true;
+      void fetchHomeFresh().finally(() => { bgRefreshInFlight = false; });
+    }
+    return cached;
+  }
+  return fetchHomeFresh();
 }
 
 /* ── /episodes ──────────────────────────────── */

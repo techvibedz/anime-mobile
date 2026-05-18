@@ -123,7 +123,7 @@ function scrape() {
 _waitFor(
   function(){ return !!document.querySelector('.anime-card-container, .lucodeia-slider-slide-item, .episodes-card-container'); },
   function(ok, reason){ if (ok) _send('result', { data: scrape() }); else _send('error', { message: reason }); },
-  25000
+  15000
 );
 })();true;`;
 

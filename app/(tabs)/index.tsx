@@ -735,11 +735,11 @@ const ss = StyleSheet.create({
   cardRank: {
     position: "absolute", bottom: -8, left: -4,
     fontSize: 48, fontWeight: "900", lineHeight: 48, letterSpacing: -1.5,
-    color: "transparent", fontFamily: "Outfit_900Black",
-    textShadowColor: "rgba(255,45,85,0.4)",
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 1,
-    opacity: 0.6,
+    color: "#ffffff", fontFamily: "Outfit_900Black",
+    textShadowColor: "rgba(0,0,0,0.6)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+    opacity: 0.95,
   },
   cardTitle: {
     color: C.text, fontSize: 11, fontWeight: "600", lineHeight: 14,

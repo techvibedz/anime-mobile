@@ -17,6 +17,10 @@ import {
 
 const HOME_CACHE_KEY = "@home_cache_v1";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
+const DETAIL_CACHE_PREFIX = "@detail_v1:";
+const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
+const UP4_CACHE_PREFIX = "@up4_eps_v1:";
+const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
 
 async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
   try {
@@ -273,45 +277,16 @@ function titleFromSlug(url: string): string {
   }
 }
 
-export async function fetchEpisodes(animeUrl: string): Promise<{
+type EpisodesPayload = {
   success: boolean;
   data: AnimeDetail & { episodes4up?: Episode[]; merged?: { anime4up: string } | null };
-}> {
-  const isAnime4up = /anime4up/i.test(animeUrl);
-  const primarySource = isAnime4up ? "anime4up" : "witanime";
-  const guessTitle = titleFromSlug(animeUrl);
+};
 
-  // Run primary scrape + cross-source title-match search in parallel.
-  // Two WebView slots mean both happen at once.
-  const [d, initialCrossUrl] = await Promise.all([
-    scrapeEpisodesPage(animeUrl),
-    guessTitle ? getCrossSourceUrl(guessTitle, primarySource) : Promise.resolve(null),
-  ]);
-
-  // If the URL-slug guess didn't match, retry once with the real title.
-  let crossUrl = initialCrossUrl;
-  if (!crossUrl && d.title && d.title !== guessTitle) {
-    crossUrl = await getCrossSourceUrl(d.title, primarySource);
-  }
-
-  const url4up = isAnime4up ? animeUrl : crossUrl;
-
-  // If we have a cross-source URL and the primary is witanime, ALSO scrape
-  // the anime4up page so we get per-episode hrefs for the merge. Without
-  // these, the watch screen receives no url4up and can only pull servers
-  // from witanime. Best-effort — empty array if it fails.
-  let episodes4up: Episode[] = [];
-  if (!isAnime4up && crossUrl) {
-    try {
-      const up4 = await scrapeEpisodesPage(crossUrl);
-      episodes4up = up4.episodes;
-    } catch {}
-  } else if (isAnime4up) {
-    // anime4up is primary — d.episodes is the up4 list itself.
-    episodes4up = d.episodes;
-  }
-
-  return {
+async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
+  // Fast path: primary source only. Cross-source enrichment is fetched in
+  // the background via fetchEpisodesUp4 — see the detail screen.
+  const d = await scrapeEpisodesPage(animeUrl);
+  const payload: EpisodesPayload = {
     success: true,
     data: {
       title: d.title,
@@ -325,10 +300,67 @@ export async function fetchEpisodes(animeUrl: string): Promise<{
       relatedAnime: [],
       totalEpisodes: d.episodes.length,
       episodes: d.episodes,
-      episodes4up,
-      merged: url4up ? { anime4up: url4up } : null,
+      episodes4up: [],
+      merged: null,
     },
   };
+  void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
+  return payload;
+}
+
+export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> {
+  // Stale-while-revalidate. Cached payload renders instantly; a fresh
+  // scrape kicks off in the background so the next open is even fresher.
+  const cached = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
+  if (cached) {
+    void fetchEpisodesFresh(animeUrl).catch(() => {});
+    return cached;
+  }
+  return fetchEpisodesFresh(animeUrl);
+}
+
+/**
+ * Background enrichment: find the cross-source anime URL and scrape its
+ * episode list so the UI can show "both sources" badges and pass url4up to
+ * the watch screen. Called separately from fetchEpisodes so the primary
+ * scrape never has to wait on this.
+ */
+export async function fetchEpisodesUp4(
+  animeUrl: string,
+  title: string | null,
+): Promise<{ merged: { anime4up: string } | null; episodes4up: Episode[] }> {
+  const isAnime4up = /anime4up/i.test(animeUrl);
+  if (isAnime4up) {
+    // anime4up is the primary; just re-use what fetchEpisodes already had.
+    const d = await scrapeEpisodesPage(animeUrl).catch(() => null);
+    return { merged: { anime4up: animeUrl }, episodes4up: d?.episodes ?? [] };
+  }
+
+  // Check up4-episodes cache first
+  const cacheKey = UP4_CACHE_PREFIX + animeUrl;
+  const cached = await readCache<{ merged: { anime4up: string } | null; episodes4up: Episode[] }>(cacheKey, UP4_CACHE_TTL);
+  if (cached) return cached;
+
+  const guessTitle = titleFromSlug(animeUrl);
+  const lookupTitle = title || guessTitle;
+  if (!lookupTitle) return { merged: null, episodes4up: [] };
+
+  const crossUrl = await getCrossSourceUrl(lookupTitle, "witanime").catch(() => null);
+  if (!crossUrl) {
+    const empty = { merged: null, episodes4up: [] };
+    void writeCache(cacheKey, empty);
+    return empty;
+  }
+
+  let episodes4up: Episode[] = [];
+  try {
+    const up4 = await scrapeEpisodesPage(crossUrl);
+    episodes4up = up4.episodes;
+  } catch {}
+
+  const result = { merged: { anime4up: crossUrl }, episodes4up };
+  void writeCache(cacheKey, result);
+  return result;
 }
 
 /* ── /recent ────────────────────────────────── */

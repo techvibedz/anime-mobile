@@ -15,7 +15,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4 } from "../../lib/api";
 import type { AnimeDetail, RelatedAnime, Episode } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
@@ -49,22 +49,37 @@ export default function AnimeDetailScreen() {
   useEffect(() => {
     if (!id) return;
     const url = decodeURIComponent(id);
+    let cancelled = false;
     favoriteListOf(url).then(setBookmarkList);
     (async () => {
       try {
+        // Primary scrape — return as soon as witanime data is ready so the
+        // UI renders episodes within a few seconds.
         const res = await fetchEpisodes(url);
+        if (cancelled) return;
         if (res.success) {
           setData(res.data);
           setEpisodes4up(res.data.episodes4up || []);
           setMerged(res.data.merged || null);
+        } else {
+          setError(t.failedToLoad);
         }
-        else setError(t.failedToLoad);
       } catch (e: any) {
-        setError(e.message ?? t.failedToLoad);
+        if (!cancelled) setError(e.message ?? t.failedToLoad);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
+      // Background enrichment — find anime4up URL + scrape its episodes so
+      // the "both sources" badge appears and url4up flows to /watch.
+      // This runs after the UI is already showing, so the user doesn't wait.
+      try {
+        const enrich = await fetchEpisodesUp4(url, /* title */ null);
+        if (cancelled) return;
+        if (enrich.merged) setMerged(enrich.merged);
+        if (enrich.episodes4up.length > 0) setEpisodes4up(enrich.episodes4up);
+      } catch {}
     })();
+    return () => { cancelled = true; };
   }, [id]);
 
   // Refresh watched flags when the screen regains focus (e.g. after watching).

@@ -711,12 +711,13 @@ export default function WatchScreen() {
         />
       )}
 
-      {/* Tap zone at the top edge of the video during native playback — brings the top bar
-          back when it has auto-hidden. Only ~64px tall so middle/bottom taps still reach
+      {/* Full-screen tap zone during native playback — when our chrome is
+          hidden, tapping ANYWHERE shows it (like YouTube / Netflix). Once
+          the chrome is visible we remove this overlay so taps reach
           expo-video's native controls. */}
       {isPlaying && !pickerOpen && !controlsVisible && (
         <Pressable
-          style={[ss.nativeTopTapZone, { height: (insets.top || 8) + 64 }]}
+          style={[StyleSheet.absoluteFill, { zIndex: 2 }]}
           onPress={showControls}
         />
       )}

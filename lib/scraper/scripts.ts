@@ -398,6 +398,23 @@ _waitFor(
 // RECENT — paginated episode archive (.anime-card-container with episode hrefs)
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_RECENT = `(function(){${HELPERS}
+function toAnimeUrl(href) {
+  if (!href) return null;
+  if (href.indexOf('/anime/') >= 0) return href;
+  if (href.indexOf('/episode/') < 0) return null;
+  try {
+    var d = decodeURIComponent(href);
+    var stripped = d.replace(/-?الحلقة[-\\s]*\\d+[^/]*/, '');
+    var converted = stripped.replace('/episode/', '/anime/');
+    if (converted !== d && converted.indexOf('/anime/') >= 0) {
+      var u = new URL(converted);
+      return u.origin + u.pathname.split('/').map(function (seg, i) {
+        return i === 0 ? seg : encodeURIComponent(decodeURIComponent(seg));
+      }).join('/');
+    }
+  } catch (e) {}
+  return null;
+}
 function scrape() {
   var seen = {};
   var episodes = [];
@@ -409,12 +426,16 @@ function scrape() {
     var titleEl = el.querySelector('.anime-card-title h3 a, .anime-card-title a');
     var animeTitle = (titleEl && titleEl.textContent.trim()) || '';
     var badge = (el.querySelector('.anime-card-status, [class*="episode"]') && el.querySelector('.anime-card-status, [class*="episode"]').textContent.trim()) || '';
+    // Prefer an explicit anime-page link in the card; fall back to the
+    // slug-derived URL so this still works on episode-only listings.
+    var animePageEl = el.querySelector('.anime-card-title a[href*="/anime/"], .ep-card-anime-title a[href*="/anime/"], a[href*="/anime/"]');
+    var animeHref = (animePageEl && animePageEl.getAttribute('href')) || toAnimeUrl(href) || href;
     episodes.push({
       title: badge ? (animeTitle + ' - ' + badge) : animeTitle,
       href: href,
       image: _bestImg(el),
       animeTitle: animeTitle,
-      animeHref: href,
+      animeHref: animeHref,
       isNew: true,
     });
   });

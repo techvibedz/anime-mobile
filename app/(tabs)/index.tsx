@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchHome } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
-import { addFavorite, isFavorite } from "../../lib/favorites";
+import { addFavorite, isFavorite, toAnimeUrl } from "../../lib/favorites";
 import { getHistory, progressPercent, removeFromHistory } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
 import { Shimmer } from "../../components/Shimmer";
@@ -401,11 +401,13 @@ function EpisodeActionModal({ episode, onClose }: { episode: EpisodeItem | null;
             style={ss.modalBtnSecondary}
             onPress={() => {
               onClose();
-              if (episode.animeHref) {
-                router.push(`/anime/${encodeURIComponent(episode.animeHref)}`);
-              }
+              // Cached payloads sometimes have an episode URL in animeHref.
+              // Normalize so we always navigate to the real anime page.
+              const raw = episode.animeHref || episode.href;
+              const animeUrl = raw && raw.includes('/anime/') ? raw : (toAnimeUrl(raw) ?? raw);
+              if (animeUrl) router.push(`/anime/${encodeURIComponent(animeUrl)}`);
             }}
-            disabled={!episode.animeHref}
+            disabled={!episode.animeHref && !episode.href}
           >
             <Ionicons name="information-circle-outline" size={16} color={C.text} />
             <Text style={ss.modalBtnSecondaryText}>{t.openAnimePage}</Text>

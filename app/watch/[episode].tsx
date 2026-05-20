@@ -574,6 +574,18 @@ export default function WatchScreen() {
     }
   }, [isPlaying, isWebView, player]);
 
+  const skipForward90 = useCallback(() => {
+    if (isPlaying && player) {
+      try { player.currentTime = Math.min(player.currentTime + 90, player.duration || Infinity); } catch {}
+    } else if (isWebView) {
+      webViewRef.current?.injectJavaScript(`
+        try{var v=document.querySelector('video');if(v)v.currentTime=Math.min(v.duration,v.currentTime+90);
+        else if(typeof jwplayer==='function'){var p=jwplayer();if(p)p.seek(Math.min(p.getDuration(),p.getPosition()+90));}
+        }catch(e){}
+      `);
+    }
+  }, [isPlaying, isWebView, player]);
+
   // Next episode
   const goNextEpisode = useCallback(() => {
     if (nextEpisodeHref) {
@@ -868,6 +880,10 @@ export default function WatchScreen() {
                 <Pressable onPress={skipForward} style={ss.ctrlBtn}>
                   <Ionicons name="play-forward" size={20} color={C.white} />
                   <Text style={ss.ctrlBtnLabel}>10</Text>
+                </Pressable>
+                <Pressable onPress={skipForward90} style={ss.ctrlBtn}>
+                  <Ionicons name="play-forward-circle" size={20} color={C.white} />
+                  <Text style={ss.ctrlBtnLabel}>90</Text>
                 </Pressable>
               </View>
 

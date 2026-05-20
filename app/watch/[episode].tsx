@@ -591,6 +591,67 @@ export default function WatchScreen() {
   // Resize mode toggle
   const [videoFit, setVideoFit] = useState<"contain" | "cover">("contain");
 
+  // Custom player state
+  const [isPlayerPaused, setIsPlayerPaused] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [seekValue, setSeekValue] = useState(0);
+  const [isSeeking, setIsSeeking] = useState(false);
+
+  // Poll player state every 500ms
+  useEffect(() => {
+    if (!isPlaying || !player) return;
+    const iv = setInterval(() => {
+      try {
+        const ct = player.currentTime;
+        const d = player.duration;
+        if (d > 0) {
+          setCurrentTime(ct);
+          setDuration(d);
+          setSeekValue(isSeeking ? seekValue : ct / d);
+        }
+      } catch {}
+    }, 500);
+    return () => clearInterval(iv);
+  }, [isPlaying, player, isSeeking, seekValue]);
+
+  const togglePlayPause = useCallback(() => {
+    if (!player) return;
+    try {
+      if (isPlayerPaused) {
+        player.play();
+        setIsPlayerPaused(false);
+      } else {
+        player.pause();
+        setIsPlayerPaused(true);
+      }
+    } catch {}
+  }, [player, isPlayerPaused]);
+
+  const seekBarRef = useRef<View>(null);
+
+  const onSeekPress = useCallback((e: any) => {
+    if (!player || duration <= 0) return;
+    try {
+      const loc = e.nativeEvent.locationX;
+      seekBarRef.current?.measure((_x, _y, w) => {
+        const ratio = Math.max(0, Math.min(1, loc / w));
+        player.currentTime = ratio * duration;
+        setSeekValue(ratio);
+        setCurrentTime(ratio * duration);
+        if (!isPlayerPaused) player.play();
+      });
+    } catch {}
+  }, [player, duration, isPlayerPaused]);
+
+  // Format time helper
+  const fmtTime = (s: number) => {
+    if (s <= 0 || !isFinite(s)) return "0:00";
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, "0")}`;
+  };
+
   // WebView ref for seeking
   const webViewRef = useRef<any>(null);
 
@@ -649,15 +710,16 @@ export default function WatchScreen() {
     <View style={ss.root}>
       <StatusBar hidden />
 
-      {/* NATIVE PLAYER — no wrapping Pressable so taps reach native controls */}
+      {/* Custom Player */}
       {isPlaying ? (
-        <VideoView
-          player={player}
-          style={ss.player}
-          nativeControls
-          contentFit={videoFit}
-          allowsPictureInPicture
-        />
+        <Pressable onPress={showControls} style={ss.playerWrap}>
+          <VideoView
+            player={player}
+            style={ss.player}
+            contentFit={videoFit}
+            allowsPictureInPicture
+          />
+        </Pressable>
       ) : isWebView ? (
         /* WEBVIEW FALLBACK */
         <WebView
@@ -744,51 +806,95 @@ export default function WatchScreen() {
         />
       )}
 
-      {/* Native-playback top bar — back/title + skip/next/server controls.
-          Auto-hides after 4s of inactivity; tap the top edge to show it again. */}
+      {/* Custom Controls Overlay */}
       {isPlaying && !pickerOpen && controlsVisible && (
-        <View
-          style={[ss.nativeTopBar, { paddingTop: (insets.top || 8) + 4 }]}
-          pointerEvents="box-none"
-        >
-          <Pressable onPress={() => router.back()} style={ss.circleBtnSm} hitSlop={10}>
-            <Ionicons name="chevron-back" size={20} color={C.white} />
-          </Pressable>
-          <View style={ss.nativeTitleArea} pointerEvents="none">
-            <Text style={ss.nativeTitleText} numberOfLines={1}>{title}</Text>
-            {active && (
-              <Text style={ss.nativeSubText} numberOfLines={1}>
-                {getDisplayName(active.server)} • Direct
-              </Text>
-            )}
+        <View style={ss.controlsOverlay} pointerEvents="box-none">
+          {/* Top: back + title */}
+          <View style={[ss.ctrlTopBar, { paddingTop: (insets.top || 8) + 4 }]}>
+            <Pressable onPress={() => router.back()} style={ss.circleBtn}>
+              <Ionicons name="chevron-back" size={22} color={C.white} />
+            </Pressable>
+            <View style={ss.titleArea}>
+              <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
+              {active && (
+                <Text style={ss.serverLabelText} numberOfLines={1}>
+                  {getDisplayName(active.server)} • Direct
+                </Text>
+              )}
+            </View>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <Pressable onPress={() => setVideoFit((f) => f === "contain" ? "cover" : "contain")} style={ss.circleBtn}>
+                <Ionicons name={videoFit === "contain" ? "scan-outline" : "contract-outline"} size={18} color={C.white} />
+              </Pressable>
+              <Pressable onPress={() => setPickerOpen(true)} style={ss.circleBtn}>
+                <Ionicons name="layers-outline" size={18} color={C.white} />
+              </Pressable>
+            </View>
           </View>
-          <Pressable onPress={() => { skipBack(); showControls(); }} style={ss.circleBtnSm} hitSlop={10}>
-            <Ionicons name="play-back" size={16} color={C.white} />
+
+          {/* Center: play/pause overlay */}
+          <Pressable onPress={togglePlayPause} style={[ss.ctrlCenter, { pointerEvents: "auto" }]}>
+            <Ionicons
+              name={isPlayerPaused ? "play-circle" : "pause-circle"}
+              size={56}
+              color="rgba(255,255,255,0.8)"
+            />
           </Pressable>
-          <Pressable onPress={() => { skipForward(); showControls(); }} style={ss.circleBtnSm} hitSlop={10}>
-            <Ionicons name="play-forward" size={16} color={C.white} />
-          </Pressable>
-          {prevEpisodeHref && (
-            <Pressable onPress={goPrevEpisode} style={ss.circleBtnSm} hitSlop={10}>
-              <Ionicons name="play-skip-back" size={16} color={C.white} />
-            </Pressable>
-          )}
-          {nextEpisodeHref && (
-            <Pressable onPress={goNextEpisode} style={[ss.circleBtnSm, { backgroundColor: C.green + "66" }]} hitSlop={10}>
-              <Ionicons name="play-skip-forward" size={16} color={C.green} />
-            </Pressable>
-          )}
-          <Pressable onPress={() => setVideoFit((f) => f === "contain" ? "cover" : "contain")} style={ss.circleBtnSm} hitSlop={10}>
-            <Ionicons name={videoFit === "contain" ? "scan-outline" : "contract-outline"} size={16} color={C.white} />
-          </Pressable>
-          <Pressable onPress={() => setPickerOpen(true)} style={ss.circleBtnSm} hitSlop={10}>
-            <Ionicons name="layers-outline" size={18} color={C.white} />
-          </Pressable>
-          {/* Dismiss button */}
-          <Pressable onPress={() => setControlsVisible(false)} style={ss.circleBtnSm} hitSlop={10}>
-            <Ionicons name="chevron-up" size={18} color={C.white} />
-          </Pressable>
+
+          {/* Bottom: seek bar + controls */}
+          <View style={[ss.ctrlBottom, { paddingBottom: (insets.bottom || 8) + 4 }]}>
+            {/* Seek bar */}
+            <View style={ss.seekRow}>
+              <Text style={ss.timeText}>{fmtTime(currentTime)}</Text>
+              <View ref={seekBarRef} style={ss.seekBarWrap} collapsable={false}>
+                <View style={ss.seekTrack}>
+                  <View style={[ss.seekFill, { width: `${Math.min(seekValue * 100, 100)}%` }]} />
+                </View>
+                <Pressable style={ss.seekTouchArea} onPress={onSeekPress} />
+              </View>
+              <Text style={ss.timeText}>{fmtTime(duration)}</Text>
+            </View>
+
+            {/* Control buttons row */}
+            <View style={ss.ctrlRow}>
+              <View style={{ flexDirection: "row", gap: 6 }}>
+                <Pressable onPress={skipBack} style={ss.ctrlBtn}>
+                  <Ionicons name="play-back" size={20} color={C.white} />
+                  <Text style={ss.ctrlBtnLabel}>10</Text>
+                </Pressable>
+                <Pressable onPress={togglePlayPause} style={ss.ctrlBtn}>
+                  <Ionicons name={isPlayerPaused ? "play" : "pause"} size={22} color={C.white} />
+                </Pressable>
+                <Pressable onPress={skipForward} style={ss.ctrlBtn}>
+                  <Ionicons name="play-forward" size={20} color={C.white} />
+                  <Text style={ss.ctrlBtnLabel}>10</Text>
+                </Pressable>
+              </View>
+
+              <View style={{ flexDirection: "row", gap: 6 }}>
+                {prevEpisodeHref && (
+                  <Pressable onPress={goPrevEpisode} style={ss.ctrlBtn}>
+                    <Ionicons name="play-skip-back" size={18} color={C.white} />
+                    <Text style={ss.ctrlBtnLabel}>Prev</Text>
+                  </Pressable>
+                )}
+                {nextEpisodeHref && (
+                  <Pressable onPress={goNextEpisode} style={[ss.ctrlBtn, { borderColor: C.green }]}>
+                    <Ionicons name="play-skip-forward" size={18} color={C.green} />
+                    <Text style={[ss.ctrlBtnLabel, { color: C.green }]}>Next</Text>
+                  </Pressable>
+                )}
+              </View>
+            </View>
+          </View>
         </View>
+      )}
+
+      {/* Dismiss hint when controls hidden */}
+      {isPlaying && !pickerOpen && !controlsVisible && (
+        <Pressable onPress={showControls} style={ss.hiddenHint}>
+          <Ionicons name="chevron-expand" size={16} color="rgba(255,255,255,0.25)" />
+        </Pressable>
       )}
 
       {/* TOP BAR for non-native states (WebView, loading) */}
@@ -935,4 +1041,56 @@ const ss = StyleSheet.create({
   serverMeta: { color: "#888", fontSize: 11, marginTop: 2 },
   activeBadge: { backgroundColor: C.green, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },
   activeBadgeText: { color: "#fff", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
+
+  // Custom player controls
+  playerWrap: { flex: 1 },
+  controlsOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between" },
+  ctrlTopBar: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 16, paddingBottom: 10,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  ctrlCenter: {
+    flex: 1, alignItems: "center", justifyContent: "center",
+  },
+  ctrlBottom: {
+    paddingHorizontal: 20, paddingTop: 10, gap: 8,
+    backgroundColor: "rgba(0,0,0,0.65)",
+  },
+  seekRow: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+  },
+  timeText: {
+    color: "rgba(255,255,255,0.8)", fontSize: 11, fontWeight: "600",
+    minWidth: 38, textAlign: "center",
+  },
+  seekBarWrap: {
+    flex: 1, height: 28, justifyContent: "center",
+  },
+  seekTrack: {
+    height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  seekFill: {
+    height: 4, borderRadius: 2, backgroundColor: C.green,
+  },
+  seekTouchArea: {
+    ...StyleSheet.absoluteFillObject, height: 30, top: -13,
+  },
+  ctrlRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingBottom: 4,
+  },
+  ctrlBtn: {
+    alignItems: "center", justifyContent: "center",
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  ctrlBtnLabel: {
+    color: "rgba(255,255,255,0.6)", fontSize: 9, fontWeight: "700",
+    marginTop: -4,
+  },
+  hiddenHint: {
+    position: "absolute", bottom: 12, alignSelf: "center",
+    padding: 6, borderRadius: 12, backgroundColor: "rgba(0,0,0,0.35)",
+  },
 });

@@ -132,7 +132,9 @@ true;
 `;
 
 export default function WatchScreen() {
-  const { episode, url4up, img: imgParam } = useLocalSearchParams<{ episode: string; url4up?: string; img?: string }>();
+  const { episode, url4up, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam } = useLocalSearchParams<{
+    episode: string; url4up?: string; img?: string; nextEp?: string; prevEp?: string;
+  }>();
   const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
@@ -387,8 +389,8 @@ export default function WatchScreen() {
       setTitle(res.data.episodeTitle || "");
       setAnimeTitle(res.data.animeTitle || "");
       setAnimeHref(res.data.animeHref || "");
-      setNextEpisodeHref(res.data.navigation?.next || null);
-      setPrevEpisodeHref(res.data.navigation?.prev || null);
+      setNextEpisodeHref(nextEpParam ? decodeURIComponent(nextEpParam) : (res.data.navigation?.next || null));
+      setPrevEpisodeHref(prevEpParam ? decodeURIComponent(prevEpParam) : (res.data.navigation?.prev || null));
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
@@ -547,16 +549,26 @@ export default function WatchScreen() {
     setPickerOpen(false);
   }, []);
 
-  // Skip forward 90s
+  // Skip +/- 10s
+  const skipBack = useCallback(() => {
+    if (isPlaying && player) {
+      try { player.currentTime = Math.max(0, player.currentTime - 10); } catch {}
+    } else if (isWebView) {
+      webViewRef.current?.injectJavaScript(`
+        try{var v=document.querySelector('video');if(v)v.currentTime=Math.max(0,v.currentTime-10);
+        else if(typeof jwplayer==='function'){var p=jwplayer();if(p)p.seek(Math.max(0,p.getPosition()-10));}
+        }catch(e){}
+      `);
+    }
+  }, [isPlaying, isWebView, player]);
+
   const skipForward = useCallback(() => {
     if (isPlaying && player) {
-      try { player.currentTime = Math.min(player.currentTime + 90, player.duration || Infinity); } catch {}
+      try { player.currentTime = Math.min(player.currentTime + 10, player.duration || Infinity); } catch {}
     } else if (isWebView) {
-      // Use ref to access WebView
       webViewRef.current?.injectJavaScript(`
-        try{var v=document.querySelector('video');if(v)v.currentTime+=90;
-        else if(typeof jwplayer==='function'){var p=jwplayer();if(p)p.seek(p.getPosition()+90);}
-        else if(typeof videojs==='function'){var vj=videojs(document.querySelector('.video-js'));if(vj)vj.currentTime(vj.currentTime()+90);}
+        try{var v=document.querySelector('video');if(v)v.currentTime=Math.min(v.duration,v.currentTime+10);
+        else if(typeof jwplayer==='function'){var p=jwplayer();if(p)p.seek(Math.min(p.getDuration(),p.getPosition()+10));}
         }catch(e){}
       `);
     }
@@ -568,6 +580,16 @@ export default function WatchScreen() {
       router.replace(`/watch/${encodeURIComponent(nextEpisodeHref)}`);
     }
   }, [nextEpisodeHref]);
+
+  // Previous episode
+  const goPrevEpisode = useCallback(() => {
+    if (prevEpisodeHref) {
+      router.replace(`/watch/${encodeURIComponent(prevEpisodeHref)}`);
+    }
+  }, [prevEpisodeHref]);
+
+  // Resize mode toggle
+  const [videoFit, setVideoFit] = useState<"contain" | "cover">("contain");
 
   // WebView ref for seeking
   const webViewRef = useRef<any>(null);
@@ -633,7 +655,7 @@ export default function WatchScreen() {
           player={player}
           style={ss.player}
           nativeControls
-          fullscreenOptions={{ enable: false }}
+          contentFit={videoFit}
           allowsPictureInPicture
         />
       ) : isWebView ? (
@@ -740,14 +762,25 @@ export default function WatchScreen() {
               </Text>
             )}
           </View>
+          <Pressable onPress={() => { skipBack(); showControls(); }} style={ss.circleBtnSm} hitSlop={10}>
+            <Ionicons name="play-back" size={16} color={C.white} />
+          </Pressable>
           <Pressable onPress={() => { skipForward(); showControls(); }} style={ss.circleBtnSm} hitSlop={10}>
             <Ionicons name="play-forward" size={16} color={C.white} />
           </Pressable>
+          {prevEpisodeHref && (
+            <Pressable onPress={goPrevEpisode} style={ss.circleBtnSm} hitSlop={10}>
+              <Ionicons name="play-skip-back" size={16} color={C.white} />
+            </Pressable>
+          )}
           {nextEpisodeHref && (
             <Pressable onPress={goNextEpisode} style={[ss.circleBtnSm, { backgroundColor: C.green + "66" }]} hitSlop={10}>
               <Ionicons name="play-skip-forward" size={16} color={C.green} />
             </Pressable>
           )}
+          <Pressable onPress={() => setVideoFit((f) => f === "contain" ? "cover" : "contain")} style={ss.circleBtnSm} hitSlop={10}>
+            <Ionicons name={videoFit === "contain" ? "scan-outline" : "contract-outline"} size={16} color={C.white} />
+          </Pressable>
           <Pressable onPress={() => setPickerOpen(true)} style={ss.circleBtnSm} hitSlop={10}>
             <Ionicons name="layers-outline" size={18} color={C.white} />
           </Pressable>

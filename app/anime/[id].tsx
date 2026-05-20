@@ -424,9 +424,11 @@ function EpisodesTab({
               disabled={!ep.href && !ep.href4up}
               onPress={() => {
                 if (ep.href) {
+                  const nextE = sorted[i + 1]?.href || '';
+                  const prevE = sorted[i - 1]?.href || '';
                   router.push({
                     pathname: `/watch/${encodeURIComponent(ep.href)}`,
-                    params: { url4up: ep.href4up || '', img: poster || '' },
+                    params: { url4up: ep.href4up || '', img: poster || '', nextEp: nextE, prevEp: prevE },
                   });
                 }
               }}

@@ -389,8 +389,8 @@ export default function WatchScreen() {
       setTitle(res.data.episodeTitle || "");
       setAnimeTitle(res.data.animeTitle || "");
       setAnimeHref(res.data.animeHref || "");
-      setNextEpisodeHref(nextEpParam ? decodeURIComponent(nextEpParam) : (res.data.navigation?.next || null));
-      setPrevEpisodeHref(prevEpParam ? decodeURIComponent(prevEpParam) : (res.data.navigation?.prev || null));
+      setNextEpisodeHref(nextEpParam || res.data.navigation?.next || null);
+      setPrevEpisodeHref(prevEpParam || res.data.navigation?.prev || null);
     } catch (e: any) {
       setError(e.message || "Failed to load");
     } finally {
@@ -728,6 +728,7 @@ export default function WatchScreen() {
           <VideoView
             player={player}
             style={ss.player}
+            nativeControls={false}
             contentFit={videoFit}
             allowsPictureInPicture
           />

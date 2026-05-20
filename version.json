@@ -1,0 +1,6 @@
+{
+    "force_update":  false,
+    "version":  "1.0.0",
+    "release_notes":  "Initial release: merged anime sources, native video player, proxy-video, OTA updates",
+    "apk_url":  "https://expo.dev/artifacts/eas/gvJAfFHHHNQgeHQTcFVq16.apk"
+}

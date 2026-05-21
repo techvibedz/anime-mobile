@@ -9,7 +9,9 @@ import { C } from "../lib/theme";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { pullFavoritesFromCloud } from "../lib/favorites";
 import { pullHistoryFromCloud } from "../lib/history";
-import { checkForApkUpdate, checkForOtaUpdate, showUpdatePrompt } from "../lib/updater";
+import { checkForApkUpdate, checkForOtaUpdate } from "../lib/updater";
+import type { UpdateInfo } from "../lib/updater";
+import { UpdateModal } from "../components/UpdateModal";
 import { ScraperHost } from "../lib/scraper";
 import "../global.css";
 
@@ -42,6 +44,8 @@ function AuthGate() {
 
   // Update checks (APK first, then OTA)
   const [updateChecked, setUpdateChecked] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+
   useEffect(() => {
     if (!ready || updateChecked) return;
     setUpdateChecked(true);
@@ -49,17 +53,12 @@ function AuthGate() {
     (async () => {
       const apk = await checkForApkUpdate();
       if (apk) {
-        showUpdatePrompt(apk, () => {}, () => {
-          // After APK prompt dismissed, check OTA
-          checkForOtaUpdate().then((ota) => {
-            if (ota) showUpdatePrompt(ota, () => {}, () => {});
-          });
-        });
+        setUpdateInfo(apk);
         return;
       }
       const ota = await checkForOtaUpdate();
       if (ota) {
-        showUpdatePrompt(ota, () => {}, () => {});
+        setUpdateInfo(ota);
       }
     })();
   }, [ready, updateChecked]);
@@ -73,21 +72,35 @@ function AuthGate() {
   }
 
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        contentStyle: { backgroundColor: C.bg },
-        animation: "fade",
-      }}
-    >
-      <Stack.Screen name="(auth)" />
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="anime/[id]" />
-      <Stack.Screen name="watch/[episode]" />
-      <Stack.Screen name="see-all/[section]" />
-      <Stack.Screen name="scraper-debug" />
-      <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
-    </Stack>
+    <>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: C.bg },
+          animation: "fade",
+        }}
+      >
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="anime/[id]" />
+        <Stack.Screen name="watch/[episode]" />
+        <Stack.Screen name="see-all/[section]" />
+        <Stack.Screen name="scraper-debug" />
+        <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
+      </Stack>
+      <UpdateModal 
+        info={updateInfo} 
+        onClose={() => {
+          const wasApk = updateInfo?.type === "apk";
+          setUpdateInfo(null);
+          if (wasApk) {
+            checkForOtaUpdate().then((ota) => {
+              if (ota) setUpdateInfo(ota);
+            });
+          }
+        }} 
+      />
+    </>
   );
 }
 

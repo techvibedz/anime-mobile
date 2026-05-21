@@ -282,7 +282,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Sections ─────────────────────── */}
-        {sections.map((section, si) => {
+        {sections.filter(s => s.id !== "tv_series").map((section, si) => {
           const MAX_PREVIEW = 15;
           const previewItems = section.items.slice(0, MAX_PREVIEW);
           const hasMore = section.items.length > MAX_PREVIEW;
@@ -811,12 +811,14 @@ const ss = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
   },
   epNumBadge: {
-    position: "absolute", top: 6, left: 6, zIndex: 2,
-    backgroundColor: "rgba(0,0,0,0.65)", borderRadius: 4,
-    paddingHorizontal: 6, paddingVertical: 2,
+    position: "absolute", top: 8, left: 8, zIndex: 2,
+    backgroundColor: C.accent, borderRadius: R.sm,
+    paddingHorizontal: 8, paddingVertical: 4,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
   },
   epNumBadgeText: {
-    color: C.white, fontSize: 10, fontWeight: "700", fontFamily: "Outfit_700Bold",
+    color: "#ffffff", fontSize: 10, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.5,
   },
   ratingBadge: {
     position: "absolute", top: 8, right: 8, zIndex: 2,

@@ -977,13 +977,6 @@ export default function WatchScreen() {
         </View>
       )}
 
-      {/* Dismiss hint when controls hidden */}
-      {isPlaying && !pickerOpen && !controlsVisible && (
-        <Pressable onPress={showControls} style={ss.hiddenHint}>
-          <Ionicons name="chevron-expand" size={16} color="rgba(255,255,255,0.25)" />
-        </Pressable>
-      )}
-
       {/* TOP BAR for non-native states (WebView, loading) */}
       {controlsVisible && !pickerOpen && !isPlaying && (
         <View style={ss.overlay} pointerEvents="box-none">
@@ -1175,9 +1168,5 @@ const ss = StyleSheet.create({
   ctrlBtnLabel: {
     color: "rgba(255,255,255,0.6)", fontSize: 9, fontWeight: "700",
     marginTop: -4,
-  },
-  hiddenHint: {
-    position: "absolute", bottom: 12, alignSelf: "center",
-    padding: 6, borderRadius: 12, backgroundColor: "rgba(0,0,0,0.35)",
   },
 });

@@ -510,10 +510,29 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
 
 /* ── Continue Watching Card ─────────────────────── */
 
+function extractEpisodeNumber(title: string): number | null {
+  if (!title) return null;
+  // Arabic numerals
+  const arMatch = title.match(/الحلقة[\s\-_]*([\u0660-\u0669]+)/);
+  if (arMatch) {
+    const ar = arMatch[1];
+    let num = "";
+    for (const ch of ar) {
+      num += String(ch.codePointAt(0)! - 0x0660);
+    }
+    return parseInt(num, 10) || null;
+  }
+  // Western numerals
+  const enMatch = title.match(/(?:Episode|E(?:p(?:isode)?)?[.\s]*)\s*(\d+)/i) || title.match(/(?:حلقة|الحلقة)\s*(\d+)/);
+  if (enMatch) return parseInt(enMatch[1], 10) || null;
+  return null;
+}
+
 const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: WatchEntry; onRemove: (href: string) => void }) {
   const pct = progressPercent(entry);
   const remainMs = entry.durationMs - entry.positionMs;
   const remainMin = Math.max(1, Math.round(remainMs / 60000));
+  const epNum = extractEpisodeNumber(entry.episodeTitle);
   return (
     <Pressable
       onPress={() => {
@@ -539,7 +558,12 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
         {entry.image ? (
           <Image source={{ uri: entry.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
         ) : (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface }]} />
+          <LinearGradient
+            colors={[C.surface, C.surfaceLight]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
         )}
         <View style={ss.epPlayOverlay}>
           <LinearGradient
@@ -551,6 +575,12 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
             <Ionicons name="play" size={14} color="#fff" />
           </LinearGradient>
         </View>
+        {/* Episode number badge */}
+        {epNum !== null && (
+          <View style={ss.epNumBadge}>
+            <Text style={ss.epNumBadgeText}>{epNum}</Text>
+          </View>
+        )}
         {/* Time remaining badge */}
         <View style={ss.timeBadge}>
           <Text style={ss.timeBadgeText}>{t.minLeft(remainMin)}</Text>
@@ -779,6 +809,14 @@ const ss = StyleSheet.create({
   badgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "700", letterSpacing: 0.8,
     fontFamily: "Outfit_700Bold",
+  },
+  epNumBadge: {
+    position: "absolute", top: 6, left: 6, zIndex: 2,
+    backgroundColor: "rgba(0,0,0,0.65)", borderRadius: 4,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
+  epNumBadgeText: {
+    color: C.white, fontSize: 10, fontWeight: "700", fontFamily: "Outfit_700Bold",
   },
   ratingBadge: {
     position: "absolute", top: 8, right: 8, zIndex: 2,

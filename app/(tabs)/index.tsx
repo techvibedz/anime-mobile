@@ -216,7 +216,11 @@ export default function HomeScreen() {
                         onPress={() => {
                           if (!item.href) return;
                           if (item.href.includes("/episode/")) {
-                            router.push(`/watch/${encodeURIComponent(item.href)}`);
+                            const animeUrl = toAnimeUrl(item.href);
+                            router.push({
+                              pathname: `/watch/${encodeURIComponent(item.href)}`,
+                              params: animeUrl ? { anime: animeUrl } : {},
+                            });
                           } else {
                             router.push(`/anime/${encodeURIComponent(item.href)}`);
                           }
@@ -387,6 +391,12 @@ function EpisodeActionModal({ episode, onClose }: { episode: EpisodeItem | null;
               onClose();
               const params: Record<string, string> = {};
               if (episode.image) params.img = encodeURIComponent(episode.image);
+              // Pass animeHref so the watch screen can compute prev/next.
+              const rawAnime = episode.animeHref || episode.href;
+              const animeUrl = rawAnime && rawAnime.includes('/anime/')
+                ? rawAnime
+                : (toAnimeUrl(rawAnime) ?? '');
+              if (animeUrl) params.anime = animeUrl;
               router.push({
                 pathname: `/watch/${encodeURIComponent(episode.href)}`,
                 params,
@@ -510,6 +520,14 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
         const params: Record<string, string> = {};
         if (entry.url4up) params.url4up = encodeURIComponent(entry.url4up);
         if (entry.image) params.img = encodeURIComponent(entry.image);
+        // Pass anime URL so prev/next + back-to-anime work. Falls back
+        // to slug-deriving from the episode URL if animeHref is missing
+        // or points to an episode page (old cached entries).
+        const rawAnime = entry.animeHref || entry.episodeHref;
+        const animeUrl = rawAnime && rawAnime.includes('/anime/')
+          ? rawAnime
+          : (toAnimeUrl(rawAnime) ?? '');
+        if (animeUrl) params.anime = animeUrl;
         router.push({
           pathname: `/watch/${encodeURIComponent(entry.episodeHref)}`,
           params,

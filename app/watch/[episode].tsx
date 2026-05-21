@@ -132,8 +132,8 @@ true;
 `;
 
 export default function WatchScreen() {
-  const { episode, url4up, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam } = useLocalSearchParams<{
-    episode: string; url4up?: string; img?: string; nextEp?: string; prevEp?: string;
+  const { episode, url4up, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam } = useLocalSearchParams<{
+    episode: string; url4up?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string;
   }>();
   const insets = useSafeAreaInsets();
 
@@ -400,6 +400,66 @@ export default function WatchScreen() {
 
   useEffect(() => { loadServers(); }, [loadServers]);
 
+  // Derive prev/next from the parent anime when not passed in URL params.
+  // Triggers when:
+  //   - user came from "حلقات جديدة" modal (anime URL is passed)
+  //   - user came from continue-watching history (anime URL might not be set)
+  //   - user opened an episode link directly
+  // For the no-anime-param case we fall back to deriving the anime URL
+  // from the episode slug (strip الحلقة-N tail + swap /episode/→/anime/).
+  useEffect(() => {
+    if (nextEpisodeHref && prevEpisodeHref) return;
+    if (!episode) return;
+    const currentHref = decodeURIComponent(episode);
+
+    // Resolve anime URL: prefer the param, else derive from the slug.
+    let resolvedAnime: string | null = animeParam || null;
+    if (!resolvedAnime) {
+      try {
+        const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
+        resolvedAnime = toAnimeUrl(currentHref);
+      } catch {}
+    }
+    if (!resolvedAnime) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { fetchEpisodes } = await import("../../lib/api");
+        const res = await fetchEpisodes(resolvedAnime!);
+        if (cancelled || !res?.success) return;
+        const byNum = [...(res.data.episodes || [])].sort(
+          (a, b) => (a.number ?? 0) - (b.number ?? 0),
+        );
+        // Normalize hrefs on both sides so URL-encoding mismatches
+        // (Arabic %xx vs raw) don't prevent the lookup.
+        const norm = (u: string) => {
+          if (!u) return "";
+          try { return decodeURIComponent(u).replace(/\/+$/, ""); }
+          catch { return u.replace(/\/+$/, ""); }
+        };
+        const needle = norm(currentHref);
+        let myIdx = byNum.findIndex((e) => norm(e.href || "") === needle);
+        // Fallback: match by episode number if href shapes differ.
+        if (myIdx === -1) {
+          const numMatch = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+          if (numMatch) {
+            const num = parseInt(numMatch[1], 10);
+            myIdx = byNum.findIndex((e) => e.number === num);
+          }
+        }
+        if (myIdx === -1) return;
+        const nextE = byNum[myIdx + 1]?.href || null;
+        const prevE = byNum[myIdx - 1]?.href || null;
+        if (!nextEpisodeHref && nextE) setNextEpisodeHref(nextE);
+        if (!prevEpisodeHref && prevE) setPrevEpisodeHref(prevE);
+        // Also remember the anime href so the "go to anime page" link works.
+        if (resolvedAnime && !animeHref) setAnimeHref(resolvedAnime);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [animeParam, episode, nextEpisodeHref, prevEpisodeHref, animeHref]);
+
   // ── PRE-RESOLVE ALL servers ──
   // Resolves fast providers (mp4upload) in parallel, streamwish serially (Chrome bottleneck)
   useEffect(() => {
@@ -601,7 +661,10 @@ export default function WatchScreen() {
   }, [prevEpisodeHref]);
 
   // Resize mode toggle
-  const [videoFit, setVideoFit] = useState<"contain" | "cover">("contain");
+  // contain: fits whole video (may have black bars on non-16:9 sources)
+  // fill:    stretches to use every pixel of the screen (slight distortion
+  //          but NO content is cut off — what most users want for "fullscreen")
+  const [videoFit, setVideoFit] = useState<"contain" | "fill">("contain");
 
   // Custom player state
   const [isPlayerPaused, setIsPlayerPaused] = useState(false);
@@ -836,8 +899,15 @@ export default function WatchScreen() {
               )}
             </View>
             <View style={{ flexDirection: "row", gap: 8 }}>
-              <Pressable onPress={() => setVideoFit((f) => f === "contain" ? "cover" : "contain")} style={ss.circleBtn}>
-                <Ionicons name={videoFit === "contain" ? "scan-outline" : "contract-outline"} size={18} color={C.white} />
+              <Pressable
+                onPress={() => setVideoFit((f) => (f === "contain" ? "fill" : "contain"))}
+                style={ss.circleBtn}
+              >
+                <Ionicons
+                  name={videoFit === "contain" ? "expand-outline" : "contract-outline"}
+                  size={18}
+                  color={C.white}
+                />
               </Pressable>
               <Pressable onPress={() => setPickerOpen(true)} style={ss.circleBtn}>
                 <Ionicons name="layers-outline" size={18} color={C.white} />

@@ -271,6 +271,7 @@ export default function AnimeDetailScreen() {
               poster={data.poster}
               watchedHrefs={watchedHrefs}
               onToggleWatched={handleToggleWatched}
+              animeHref={animeHref}
             />
           )}
           {activeTab === "related" && <RelatedTab items={data.relatedAnime} />}
@@ -352,6 +353,7 @@ function EpisodesTab({
   poster,
   watchedHrefs,
   onToggleWatched,
+  animeHref,
 }: {
   episodes: AnimeDetail["episodes"];
   episodes4up: Episode[];
@@ -359,19 +361,31 @@ function EpisodesTab({
   poster: string;
   watchedHrefs: Set<string>;
   onToggleWatched: (ep: Episode) => void;
+  animeHref: string;
 }) {
   const [sortDesc, setSortDesc] = useState(true); // true = newest first
+  // Render in chunks so anime with 500+ episodes don't freeze the JS thread.
+  // Initial 80 covers most users; "show more" appends another 80 each tap.
+  const PAGE = 80;
+  const [visibleCount, setVisibleCount] = useState(PAGE);
 
-  const mergedEps = episodes.map((ep) => {
+  const mergedEps = useMemo(() => episodes.map((ep) => {
     const match = episodes4up.find((e) => e.number === ep.number);
     return { ...ep, href4up: match?.href || null };
-  });
+  }), [episodes, episodes4up]);
 
-  const sorted = [...mergedEps].sort((a, b) => {
+  const sorted = useMemo(() => [...mergedEps].sort((a, b) => {
     const an = a.number ?? 0;
     const bn = b.number ?? 0;
     return sortDesc ? bn - an : an - bn;
-  });
+  }), [mergedEps, sortDesc]);
+
+  // Reset window when sort flips so user always sees the FIRST page of the
+  // new order (not a weird middle chunk).
+  useEffect(() => { setVisibleCount(PAGE); }, [sortDesc, mergedEps.length]);
+
+  const visible = sorted.slice(0, visibleCount);
+  const hasMore = visibleCount < sorted.length;
 
   if (mergedEps.length === 0) {
     return (
@@ -416,7 +430,7 @@ function EpisodesTab({
 
       {/* Episode grid: 2 columns for thumbnail cards */}
       <View style={ss.epGrid}>
-        {sorted.map((ep, i) => {
+        {visible.map((ep, i) => {
           const watched = ep.href ? watchedHrefs.has(ep.href) : false;
           return (
             <Pressable
@@ -424,11 +438,22 @@ function EpisodesTab({
               disabled={!ep.href && !ep.href4up}
               onPress={() => {
                 if (ep.href) {
-                  const nextE = sorted[i + 1]?.href || '';
-                  const prevE = sorted[i - 1]?.href || '';
+                  // Derive next/prev by EPISODE NUMBER, not array index.
+                  // When the user sorts descending, sorted[i+1] is the
+                  // PREVIOUS episode — that's why the buttons looked broken.
+                  const byNum = [...mergedEps].sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
+                  const myIdx = byNum.findIndex((e) => e.href === ep.href);
+                  const nextE = myIdx >= 0 ? (byNum[myIdx + 1]?.href || '') : '';
+                  const prevE = myIdx >= 0 ? (byNum[myIdx - 1]?.href || '') : '';
                   router.push({
                     pathname: `/watch/${encodeURIComponent(ep.href)}`,
-                    params: { url4up: ep.href4up || '', img: poster || '', nextEp: nextE, prevEp: prevE },
+                    params: {
+                      url4up: ep.href4up || '',
+                      img: poster || '',
+                      nextEp: nextE,
+                      prevEp: prevE,
+                      anime: animeHref,
+                    },
                   });
                 }
               }}
@@ -472,6 +497,26 @@ function EpisodesTab({
           );
         })}
       </View>
+      {hasMore && (
+        <Pressable
+          onPress={() => setVisibleCount((n) => n + PAGE)}
+          style={{
+            marginTop: 12,
+            paddingVertical: 14,
+            borderRadius: R.lg,
+            backgroundColor: C.surfaceLight,
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 6,
+          }}
+        >
+          <Ionicons name="chevron-down" size={16} color={C.text} />
+          <Text style={{ color: C.text, fontWeight: "600", fontSize: 13 }}>
+            {`عرض المزيد (${sorted.length - visibleCount})`}
+          </Text>
+        </Pressable>
+      )}
     </>
   );
 }

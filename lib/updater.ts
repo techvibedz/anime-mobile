@@ -19,7 +19,7 @@ export async function checkForApkUpdate(): Promise<UpdateInfo | null> {
   try {
     const url =
       Constants.expoConfig?.extra?.versionJsonUrl ??
-      "https://raw.githubusercontent.com/techvibedz/anime-mobile/main/version.json";
+      "https://raw.githubusercontent.com/techvibedz/anime-mobile/master/version.json";
 
     const resp = await fetch(url, { cache: "no-cache" });
     if (!resp.ok) return null;

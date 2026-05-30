@@ -14,12 +14,13 @@ import {
   findCrossSourceUrl,
   extractVideoUrl as scrapeExtractVideoUrl,
 } from "./scraper";
+import { VIDEO_PROXY_BASE, needsProxy } from "./config";
 
 const HOME_CACHE_KEY = "@home_cache_v1";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const DETAIL_CACHE_PREFIX = "@detail_v1:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const UP4_CACHE_PREFIX = "@up4_eps_v1:";
+const UP4_CACHE_PREFIX = "@up4_eps_v2:";
 const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
 
 async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
@@ -165,9 +166,12 @@ function imgOrEmpty(s: string | null | undefined): string {
   return s ?? "";
 }
 
-/* ── proxy URL — no longer needed but kept as identity for compat ── */
+/* ── proxy URL — route Referer-gated CDNs (mp4upload, streamwish family,
+ * voe, anime4up, …) and all HLS playlists through the remote proxy so the
+ * native player gets the right Referer / Range / rewritten segments. ── */
 export function getProxyUrl(videoUrl: string): string {
-  return videoUrl;
+  if (!videoUrl || !needsProxy(videoUrl)) return videoUrl;
+  return `${VIDEO_PROXY_BASE}?url=${encodeURIComponent(videoUrl)}`;
 }
 
 /* ── /home ──────────────────────────────────── */
@@ -256,6 +260,20 @@ export async function fetchHome(): Promise<HomePayload> {
 const xsourceCache: Map<string, { url: string | null; ts: number }> = new Map();
 const XSOURCE_TTL = 24 * 60 * 60 * 1000;
 
+// Progressively shorter title variants. The full title is most precise but
+// anime4up's search is fussy — dropping trailing season/format words and
+// parentheticals often turns a 0-result search into a hit.
+function searchVariants(title: string): string[] {
+  const cleaned = title.replace(/[([][^)\]]*[)\]]/g, "").replace(/\s+/g, " ").trim();
+  const words = cleaned.split(/\s+/);
+  const variants = new Set<string>();
+  if (cleaned) variants.add(cleaned);
+  if (words.length > 3) variants.add(words.slice(0, 3).join(" "));
+  if (words.length > 2) variants.add(words.slice(0, 2).join(" "));
+  if (words.length > 1) variants.add(words[0]);
+  return Array.from(variants);
+}
+
 async function getCrossSourceUrl(
   title: string,
   primary: "witanime" | "anime4up",
@@ -263,8 +281,21 @@ async function getCrossSourceUrl(
   const key = `${primary}:${title.toLowerCase().trim()}`;
   const hit = xsourceCache.get(key);
   if (hit && Date.now() - hit.ts < XSOURCE_TTL) return hit.url;
-  const url = await findCrossSourceUrl(title, primary).catch(() => null);
-  xsourceCache.set(key, { url, ts: Date.now() });
+
+  let url: string | null = null;
+  // Try each title variant; for each, retry a couple of times since
+  // anime4up is intermittently unreachable and a single timeout shouldn't
+  // kill the lookup. Stop at the first hit.
+  for (const v of searchVariants(title)) {
+    for (let attempt = 0; attempt < 3 && !url; attempt++) {
+      url = await findCrossSourceUrl(v, primary).catch(() => null);
+      if (!url && attempt < 2) await new Promise((r) => setTimeout(r, 4000));
+    }
+    if (url) break;
+  }
+  // Only cache positive hits — a null is likely a transient search/CF miss,
+  // so let the next call retry instead of remembering the failure.
+  if (url) xsourceCache.set(key, { url, ts: Date.now() });
   return url;
 }
 
@@ -347,9 +378,10 @@ export async function fetchEpisodesUp4(
 
   const crossUrl = await getCrossSourceUrl(lookupTitle, "witanime").catch(() => null);
   if (!crossUrl) {
-    const empty = { merged: null, episodes4up: [] };
-    void writeCache(cacheKey, empty);
-    return empty;
+    // Don't persist the miss — a later attempt (better network, or a title
+    // that now resolves) should be free to retry instead of being stuck on a
+    // cached empty for 24h.
+    return { merged: null, episodes4up: [] };
   }
 
   let episodes4up: Episode[] = [];
@@ -359,7 +391,9 @@ export async function fetchEpisodesUp4(
   } catch {}
 
   const result = { merged: { anime4up: crossUrl }, episodes4up };
-  void writeCache(cacheKey, result);
+  // Only cache a positive hit; an empty episode list is likely a transient
+  // scrape failure and shouldn't be frozen for the full TTL.
+  if (episodes4up.length > 0) void writeCache(cacheKey, result);
   return result;
 }
 
@@ -392,12 +426,13 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string): Pr
     serverCount: number;
     servers: (VideoServer & { source?: string })[];
     navigation: { prev: string | null; next: string | null };
+    up4EpisodeUrl?: string;
   };
 }> {
   const primaryIsUp4 = /anime4up/i.test(episodeUrl);
   // If we have a url4up AND the primary isn't already anime4up, scrape both
   // sources' servers in parallel (uses 2 WebView slots simultaneously).
-  const tasks: Promise<{ source: string; servers: any[]; episodeTitle: string; animeTitle: string } | null>[] = [];
+  const tasks: Promise<{ source: string; servers: any[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null } | null>[] = [];
 
   tasks.push(
     scrapeVideoServers(episodeUrl)
@@ -406,6 +441,7 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string): Pr
         servers: r.servers,
         episodeTitle: r.episodeTitle,
         animeTitle: r.animeTitle,
+        up4EpisodeUrl: r.up4EpisodeUrl ?? null,
       }))
       .catch(() => null),
   );
@@ -421,12 +457,22 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string): Pr
   const primary = results[0];
   const secondary = results[1];
 
+  // If the witanime page embedded a direct anime4up episode link, surface it
+  // so the caller can enrich anime4up servers in the BACKGROUND. We don't
+  // scrape it inline — that would delay showing the primary servers.
+  const harvestedUp4 = primary && primary.source === "witanime" ? primary.up4EpisodeUrl : null;
+
   const seen = new Set<string>();
   const merged: (VideoServer & { source?: string })[] = [];
   function add(arr: any[] | undefined, source: string) {
     if (!arr) return;
     for (const s of arr) {
       if (!s.iframeUrl || seen.has(s.iframeUrl)) continue;
+      // Drop unclassifiable "generic" servers from witanime — they're junk
+      // (the site's own placeholder player) and only fall back to the embed.
+      // Keep anime4up's generic-classified servers: their embed hosts often
+      // aren't in the provider list but are real, playable servers.
+      if (s.provider === "generic" && source !== "anime4up") continue;
       seen.add(s.iframeUrl);
       merged.push({
         id: String(merged.length),
@@ -454,6 +500,7 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string): Pr
       serverCount: merged.length,
       servers: merged,
       navigation: { prev: null, next: null },
+      up4EpisodeUrl: harvestedUp4 || undefined,
     },
   };
 }
@@ -512,13 +559,13 @@ export async function fetchAllAnime(page = 1): Promise<{
 
 /* ── /resolve-video ─────────────────────────── */
 
-export async function resolveVideo(iframeUrl: string, _provider: string): Promise<{
+export async function resolveVideo(iframeUrl: string, _provider: string, priority = false): Promise<{
   success: boolean;
   data?: { videoUrl: string; type: string };
   error?: string;
 }> {
   try {
-    const r = await scrapeExtractVideoUrl(iframeUrl);
+    const r = await scrapeExtractVideoUrl(iframeUrl, priority);
     return {
       success: true,
       data: { videoUrl: r.url, type: /\.m3u8/i.test(r.url) ? "hls" : "mp4" },

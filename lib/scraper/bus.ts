@@ -13,6 +13,8 @@ export type ScrapeJob = {
   injectAfter: string;
   // Hard timeout in ms.
   timeoutMs: number;
+  // User-facing video extraction jumps ahead of background scrape jobs.
+  priority?: boolean;
 };
 
 type Pending = {
@@ -31,9 +33,12 @@ export function _subscribe(cb: () => void) {
   return () => { _onChange = null; };
 }
 
-/** Pull the next pending job and mark it as in-flight. */
+/** Pull the next pending job and mark it as in-flight. Priority (video)
+ *  jobs are pulled ahead of background scrape jobs. */
 export function _claimNext(): Pending | null {
-  const next = _queue.shift();
+  let idx = _queue.findIndex((p) => p.job.priority);
+  if (idx === -1) idx = 0;
+  const next = _queue.splice(idx, 1)[0];
   if (!next) return null;
   _inFlight.set(next.job.id, next);
   return next;
@@ -62,7 +67,15 @@ export function _reject(id: string, message: string) {
 export function enqueue(job: Omit<ScrapeJob, "id">): Promise<any> {
   const id = `s${++_seq}`;
   return new Promise((resolve, reject) => {
-    _queue.push({ job: { ...job, id }, resolve, reject });
+    const entry = { job: { ...job, id }, resolve, reject };
+    if (job.priority) {
+      // Place ahead of any non-priority jobs already queued.
+      const at = _queue.findIndex((p) => !p.job.priority);
+      if (at === -1) _queue.push(entry);
+      else _queue.splice(at, 0, entry);
+    } else {
+      _queue.push(entry);
+    }
     _onChange?.();
   });
 }

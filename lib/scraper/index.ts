@@ -149,16 +149,17 @@ export async function scrapeVideoServers(episodeUrl: string) {
     url: episodeUrl,
     injectAfter: EXTRACT_VIDEO_SERVERS,
     timeoutMs: 60000,
-  }) as Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string }>;
+  }) as Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null; up4AnimeUrl?: string | null }>;
 }
 
 /* ── VIDEO URL (m3u8/mp4 from embed) ──────────── */
 
-export async function extractVideoUrl(embedUrl: string) {
+export async function extractVideoUrl(embedUrl: string, priority = false) {
   return enqueue({
     url: embedUrl,
     injectBefore: HOOK_VIDEO_BEFORE,
     injectAfter: COLLECT_VIDEO_AFTER,
-    timeoutMs: 40000,
+    timeoutMs: 30000,
+    priority,
   }) as Promise<{ url: string }>;
 }

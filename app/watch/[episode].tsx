@@ -37,6 +37,7 @@ const PROVIDER_RANK: Record<string, number> = {
   videa: 3,         // MP4 via Chrome interception — reliable
   voe: 4,           // sometimes resolves; falls back to WebView
   share4max: 5,     // mostly WebView
+  streamruby: 6,    // mostly WebView
   doodstream: 6,    // mostly WebView
   uqload: 7,        // mostly WebView
   okru: 8,
@@ -105,6 +106,14 @@ const ADBLOCK_JS = `(function(){
     }catch(e){}
   }
   nuke();setInterval(nuke,2000);
+  // Block popunders triggered by cross-origin target="_blank" anchor clicks.
+  document.addEventListener('click',function(e){
+    try{
+      var a=e.target&&e.target.closest&&e.target.closest('a[target="_blank"]');
+      if(!a||!a.href)return;
+      if(new URL(a.href).hostname!==location.hostname){e.preventDefault();e.stopPropagation();}
+    }catch(e2){}
+  },true);
 })();true;`;
 
 const PROGRESS_JS = `
@@ -144,6 +153,14 @@ export default function WatchScreen() {
   const [animeHref, setAnimeHref] = useState("");
   const [nextEpisodeHref, setNextEpisodeHref] = useState<string | null>(null);
   const [prevEpisodeHref, setPrevEpisodeHref] = useState<string | null>(null);
+  // anime4up sibling URLs for the next/prev episodes, so url4up keeps
+  // flowing when the user switches episodes from the player controls.
+  const [nextUp4Href, setNextUp4Href] = useState<string | null>(null);
+  const [prevUp4Href, setPrevUp4Href] = useState<string | null>(null);
+  // anime4up URL for the CURRENT episode, resolved when it wasn't passed as a
+  // nav param (e.g. opened from home / history / hero). Used to append the
+  // anime4up servers after the witanime ones are already showing.
+  const [currentUp4Href, setCurrentUp4Href] = useState<string | null>(null);
   const [servers, setServers] = useState<ServerState[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -168,9 +185,15 @@ export default function WatchScreen() {
       const videoHost = new URL(videoUrl).hostname.toLowerCase();
       let referer: string;
       let origin: string;
+      // Direct-MP4 CDNs (mp4upload) serve a progressive file and reject GETs
+      // that carry an Origin header — they treat it as a blocked cross-origin
+      // fetch. So for those we send ONLY Referer + User-Agent. HLS CDNs
+      // (streamwish family, voe) generally want the Origin, so keep it there.
+      let sendOrigin = true;
       if (/mp4upload/.test(videoHost)) {
         referer = "https://www.mp4upload.com/";
         origin = "https://www.mp4upload.com";
+        sendOrigin = false;
       } else if (/streamwish|hgcloud|wishfast|wishembed|jwembed|hlswish/.test(videoHost)) {
         // streamwish family — keep host but strip subdomain to root
         const root = videoHost.split(".").slice(-2).join(".");
@@ -188,15 +211,13 @@ export default function WatchScreen() {
         referer = `https://${root}/`;
         origin = `https://${root}`;
       }
-      return {
-        uri: videoUrl,
-        headers: {
-          Referer: referer,
-          Origin: origin,
-          "User-Agent":
-            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-        },
+      const headers: Record<string, string> = {
+        Referer: referer,
+        "User-Agent":
+          "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
       };
+      if (sendOrigin) headers.Origin = origin;
+      return { uri: videoUrl, headers };
     } catch {
       return videoUrl;
     }
@@ -239,8 +260,9 @@ export default function WatchScreen() {
       } catch {}
     }, 250);
 
-    // 20s ceiling: if currentTime is still exactly 0 AND duration is still
-    // 0 AND we never saw any motion, the URL is truly unplayable. Fall back.
+    // 14s ceiling: if currentTime is still exactly 0 AND duration is still
+    // 0 AND we never saw any motion, the URL is truly unplayable. Fall back
+    // to the embed quickly so the user isn't staring at a dead direct player.
     const failTimer = setTimeout(() => {
       if (cancelled) return;
       try {
@@ -250,7 +272,7 @@ export default function WatchScreen() {
           ));
         }
       } catch {}
-    }, 20000);
+    }, 14000);
 
     return () => {
       cancelled = true;
@@ -347,6 +369,51 @@ export default function WatchScreen() {
     if (isPlaying || isWebView) scheduleHide();
   }, [isPlaying, isWebView, scheduleHide]);
 
+  // Resolve the current episode's anime4up sibling URL by episode-number
+  // match. Used so loadServers can fetch BOTH sources' servers together
+  // instead of letting anime4up pop in late.
+  const resolveCurrentUp4Url = useCallback(async (currentHref: string): Promise<string | null> => {
+    let resolvedAnime: string | null = animeParam || null;
+    if (!resolvedAnime) {
+      try {
+        const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
+        resolvedAnime = toAnimeUrl(currentHref);
+      } catch {}
+    }
+    if (!resolvedAnime) return null;
+    try {
+      const { fetchEpisodes, fetchEpisodesUp4 } = await import("../../lib/api");
+
+      // Episode number is almost always in the witanime URL (...الحلقة-N).
+      // Grab it from there so we can SKIP the extra fetchEpisodes page-scrape
+      // entirely — that scrape was the main thing slowing server loading.
+      let curNum: number | null = null;
+      const m = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+      if (m) curNum = parseInt(m[1], 10);
+
+      // fetchEpisodesUp4 derives the title from the anime slug when passed
+      // null, and is cached 24h — so this is usually a fast AsyncStorage hit.
+      const up4 = await fetchEpisodesUp4(resolvedAnime, null).catch(() => null);
+      if (!up4 || !up4.episodes4up.length) return null;
+
+      // Only fall back to the slower fetchEpisodes scrape if the number
+      // wasn't in the URL (rare).
+      if (curNum == null) {
+        const det = await fetchEpisodes(resolvedAnime).catch(() => null);
+        if (det?.data?.episodes) {
+          const norm = (u: string) => { try { return decodeURIComponent(u).replace(/\/+$/, ""); } catch { return u.replace(/\/+$/, ""); } };
+          curNum = det.data.episodes.find((e) => norm(e.href || "") === norm(currentHref))?.number ?? null;
+        }
+      }
+      if (curNum == null) return null;
+      const found = up4.episodes4up.find((e) => e.number === curNum)?.href ?? null;
+      if (found) setCurrentUp4Href(found);
+      return found;
+    } catch {
+      return null;
+    }
+  }, [animeParam]);
+
   // ── LOAD SERVERS ──
   const loadServers = useCallback(async () => {
     if (!episode) return;
@@ -355,16 +422,42 @@ export default function WatchScreen() {
     setServers([]);
     try {
       const url = decodeURIComponent(episode);
-      const u4 = url4up ? decodeURIComponent(url4up) : undefined;
+      const u4Param = url4up ? decodeURIComponent(url4up) : undefined;
+      const isUp4 = /anime4up/i.test(url);
 
-      // Try up to 2 times
       let res: any = null;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          res = await fetchVideoServers(url, u4);
-          if (res.success && res.data.servers.length > 0) break;
-        } catch {}
-        if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+      if (u4Param || isUp4) {
+        // url4up already known (or the episode is itself an anime4up one):
+        // one combined fetch scrapes both sources in parallel internally.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            res = await fetchVideoServers(url, u4Param);
+            if (res.success && res.data.servers.length > 0) break;
+          } catch {}
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 1200));
+        }
+      } else {
+        // No url4up param. Show the witanime servers as fast as possible and
+        // enrich anime4up in the BACKGROUND (the append effect handles that
+        // via currentUp4Href) — never block the list on the slow cross-source
+        // lookup, which is what made loading feel sluggish.
+        let witRes = await fetchVideoServers(url, undefined).catch(() => null);
+        if (!witRes?.success || !witRes.data.servers.length) {
+          await new Promise((r) => setTimeout(r, 1200));
+          witRes = await fetchVideoServers(url, undefined).catch(() => null);
+        }
+        res = witRes;
+
+        // Kick off anime4up enrichment without awaiting it.
+        const harvested = witRes?.data?.up4EpisodeUrl;
+        if (harvested) {
+          // Direct link from the witanime page — fast, no title search needed.
+          setCurrentUp4Href(harvested);
+        } else {
+          // Fall back to the title/episode-number lookup, but fire-and-forget
+          // so it can't delay showing the witanime servers.
+          void resolveCurrentUp4Url(url).catch(() => null);
+        }
       }
 
       if (!res?.success || !res.data.servers.length) {
@@ -396,7 +489,7 @@ export default function WatchScreen() {
     } finally {
       setLoading(false);
     }
-  }, [episode, url4up]);
+  }, [episode, url4up, resolveCurrentUp4Url]);
 
   useEffect(() => { loadServers(); }, [loadServers]);
 
@@ -460,13 +553,91 @@ export default function WatchScreen() {
     return () => { cancelled = true; };
   }, [animeParam, episode, nextEpisodeHref, prevEpisodeHref, animeHref]);
 
-  // ── PRE-RESOLVE ALL servers ──
-  // Resolves fast providers (mp4upload) in parallel, streamwish serially (Chrome bottleneck)
+  // Resolve the anime4up sibling URLs for prev/next so switching episodes
+  // from the player keeps the cross-source servers. Matches by episode
+  // number against the anime4up episode list (fetchEpisodesUp4).
+  useEffect(() => {
+    if (!episode) return;
+    setCurrentUp4Href(null);
+    const currentHref = decodeURIComponent(episode);
+    if (/anime4up/i.test(currentHref)) return; // primary is already anime4up
+    let resolvedAnime: string | null = animeParam || null;
+    if (!resolvedAnime) {
+      try {
+        const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
+        resolvedAnime = toAnimeUrl(currentHref);
+      } catch {}
+    }
+    if (!resolvedAnime) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { fetchEpisodes, fetchEpisodesUp4 } = await import("../../lib/api");
+        const det = await fetchEpisodes(resolvedAnime!).catch(() => null);
+        const up4 = await fetchEpisodesUp4(resolvedAnime!, det?.data?.title ?? null).catch(() => null);
+        if (cancelled || !up4 || !up4.episodes4up.length) return;
+        // Determine current episode number.
+        let curNum: number | null = null;
+        const m = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+        if (m) curNum = parseInt(m[1], 10);
+        if (curNum == null && det?.data?.episodes) {
+          const norm = (u: string) => { try { return decodeURIComponent(u).replace(/\/+$/, ""); } catch { return u.replace(/\/+$/, ""); } };
+          curNum = det.data.episodes.find((e) => norm(e.href || "") === norm(currentHref))?.number ?? null;
+        }
+        if (curNum == null) return;
+        const byNum = [...up4.episodes4up].sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
+        setCurrentUp4Href(byNum.find((e) => e.number === curNum)?.href ?? null);
+        setNextUp4Href(byNum.find((e) => e.number === curNum! + 1)?.href ?? null);
+        setPrevUp4Href(byNum.find((e) => e.number === curNum! - 1)?.href ?? null);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [episode, animeParam]);
+
+  // ── APPEND anime4up servers ──
+  // When the episode was opened without a url4up param (home, history, hero,
+  // or before detail-page enrichment finished), the initial server fetch only
+  // had the witanime servers. Once we resolve the current episode's anime4up
+  // URL, scrape its servers and append them — without disturbing the already
+  // playing/selected witanime server.
+  const appendedUp4Ref = useRef<string | null>(null);
+  useEffect(() => {
+    if (!currentUp4Href || url4up) return; // url4up param path already merged them
+    if (servers.length === 0) return; // wait for the primary servers first
+    if (appendedUp4Ref.current === currentUp4Href) return; // already appended
+    if (servers.some((s) => s.server.source === "anime4up")) return;
+    appendedUp4Ref.current = currentUp4Href;
+
+    let cancelled = false;
+    (async () => {
+      const res = await fetchVideoServers(currentUp4Href, undefined).catch(() => null);
+      if (cancelled || !res?.success || !res.data.servers.length) return;
+      setServers((prev) => {
+        const seen = new Set(prev.map((s) => s.server.iframeUrl));
+        const additions: ServerState[] = res.data.servers
+          .filter((s) => s.iframeUrl && !seen.has(s.iframeUrl))
+          .map((s) => ({
+            server: { ...s, source: "anime4up" },
+            status: "idle" as ServerStatus,
+            videoUrl: null,
+          }));
+        return additions.length ? [...prev, ...additions] : prev;
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [currentUp4Href, url4up, servers.length]);
+
+  // ── PRE-RESOLVE servers ──
+  // Resolves fast providers (mp4upload) in parallel, streamwish serially (Chrome bottleneck).
+  // Limited to the top-ranked few so the active server isn't starved of WebView
+  // slots; the rest resolve on demand when selected.
   useEffect(() => {
     if (servers.length === 0) return;
     const idxs = servers
       .map((s, i) => (s.status === "idle" ? i : -1))
-      .filter((i) => i !== -1);
+      .filter((i) => i !== -1)
+      .slice(0, 4);
     if (idxs.length === 0) return;
 
     // Split: streamwish goes through Chrome, others go through HTTP
@@ -538,13 +709,9 @@ export default function WatchScreen() {
 
   // Helper to update a server state
   const updateServer = useCallback((idx: number, r: { success: boolean; data?: { videoUrl: string } }) => {
-    const srv = servers[idx]?.server;
-    if (srv?.provider === "mp4upload" && r.success && r.data?.videoUrl) {
+    if (r.success && r.data?.videoUrl) {
       setServers((p) => p.map((s, i) =>
         i === idx ? { ...s, status: "playing", videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
-    } else if (r.success && r.data?.videoUrl) {
-      setServers((p) => p.map((s, i) =>
-        i === idx ? { ...s, status: "playing", videoUrl: r.data!.videoUrl } : s));
     } else {
       setServers((p) => p.map((s, i) =>
         i === idx ? { ...s, status: "webview" } : s));
@@ -567,15 +734,14 @@ export default function WatchScreen() {
     const idx = activeIdx;
     setServers((p) => p.map((s, i) => i === idx ? { ...s, status: "resolving" } : s));
 
-    // Try server-side HTTP resolution to get direct video URL
-    resolveVideo(url, srv.provider)
+    // Try server-side HTTP resolution to get direct video URL.
+    // priority=true → this user-selected server jumps ahead of any
+    // background pre-resolve jobs still in the scraper queue.
+    resolveVideo(url, srv.provider, true)
       .then((r) => {
-        if (srv.provider === "mp4upload" && r.success && r.data?.videoUrl) {
+        if (r.success && r.data?.videoUrl) {
           setServers((p) => p.map((s, i) =>
             i === idx ? { ...s, status: "playing", videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
-        } else if (r.success && r.data?.videoUrl) {
-          setServers((p) => p.map((s, i) =>
-            i === idx ? { ...s, status: "playing", videoUrl: r.data!.videoUrl } : s));
         } else if (srv.provider === "streamwish") {
           setServers((p) => p.map((s, i) =>
             i === idx ? { ...s, status: "failed" } : s));
@@ -646,19 +812,32 @@ export default function WatchScreen() {
     }
   }, [isPlaying, isWebView, player]);
 
-  // Next episode
+  // Next episode — carry cross-source url4up + anime context so the
+  // anime4up servers keep showing on the next episode.
   const goNextEpisode = useCallback(() => {
-    if (nextEpisodeHref) {
-      router.replace(`/watch/${encodeURIComponent(nextEpisodeHref)}`);
-    }
-  }, [nextEpisodeHref]);
+    if (!nextEpisodeHref) return;
+    router.replace({
+      pathname: `/watch/${encodeURIComponent(nextEpisodeHref)}`,
+      params: {
+        url4up: nextUp4Href || "",
+        anime: animeParam || "",
+        img: imgParam || "",
+      },
+    });
+  }, [nextEpisodeHref, nextUp4Href, animeParam, imgParam]);
 
   // Previous episode
   const goPrevEpisode = useCallback(() => {
-    if (prevEpisodeHref) {
-      router.replace(`/watch/${encodeURIComponent(prevEpisodeHref)}`);
-    }
-  }, [prevEpisodeHref]);
+    if (!prevEpisodeHref) return;
+    router.replace({
+      pathname: `/watch/${encodeURIComponent(prevEpisodeHref)}`,
+      params: {
+        url4up: prevUp4Href || "",
+        anime: animeParam || "",
+        img: imgParam || "",
+      },
+    });
+  }, [prevEpisodeHref, prevUp4Href, animeParam, imgParam]);
 
   // Resize mode toggle
   // contain: fits whole video (may have black bars on non-16:9 sources)
@@ -822,7 +1001,7 @@ export default function WatchScreen() {
           onShouldStartLoadWithRequest={(req) => {
             const u = req.url.toLowerCase();
             if (u.startsWith("intent://") || u.startsWith("market://")) return false;
-            if (u.includes("pyppo") || u.includes("popads") || u.includes("doubleclick") || u.includes("trafficjunky") || u.includes("popcash") || u.includes("propeller")) return false;
+            if (u.includes("pyppo") || u.includes("popads") || u.includes("doubleclick") || u.includes("trafficjunky") || u.includes("popcash") || u.includes("propeller") || u.includes("exoclick") || u.includes("adnxs") || u.includes("taboola") || u.includes("outbrain") || u.includes("adservice") || u.includes("medixiru") || u.includes("playnixes")) return false;
             // Allow sub-resources (scripts, images, etc.) from any domain
             if (!req.isTopFrame) return true;
             // Top-level: only allow embed domain + video files

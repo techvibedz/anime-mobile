@@ -248,12 +248,14 @@ _waitFor(
         || !!document.querySelector('.anime-details-title, .anime-page-link, .anime-thumbnail');
   },
   function(ok, reason){
-    if (ok) {
-      // Give the site's own JS up to 2.5s to populate processedEpisodeData
-      // if it wasn't there at the wait check.
-      setTimeout(function(){ _send('result', { data: scrape() }); }, 2500);
+    if (!ok) { _send('error', { message: reason }); return; }
+    // If the episode payload is already present, scrape and return at once —
+    // no need to burn 2.5s waiting. Only wait when we matched on the detail
+    // DOM and the site's JS may not have populated the data yet.
+    if (findProcessedData()) {
+      _send('result', { data: scrape() });
     } else {
-      _send('error', { message: reason });
+      setTimeout(function(){ _send('result', { data: scrape() }); }, 1500);
     }
   },
   25000
@@ -326,37 +328,82 @@ _waitFor(
 // best-scoring card URL.
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_TITLE_MATCH = (want: string) => `(function(){${HELPERS}
-function norm(s) {
+// Convert spelled-out / arabic-digit season words to a number so we can
+// compare seasons across the two sites (which name them differently).
+function seasonNum(s) {
+  var t = String(s || '').toLowerCase();
+  // arabic-indic digits → latin
+  t = t.replace(/[\\u0660-\\u0669]/g, function (d) { return String(d.charCodeAt(0) - 0x0660); });
+  var m = t.match(/(?:season|s|part|cour|الجزء|الموسم)\\s*([0-9]+)/);
+  if (m) return parseInt(m[1], 10);
+  var words = { 'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
+                'الاول': 1, 'الأول': 1, 'الثاني': 2, 'الثالث': 3, 'الرابع': 4, 'الخامس': 5 };
+  for (var k in words) { if (t.indexOf(k) !== -1) return words[k]; }
+  return 0; // 0 = unspecified (treated as season 1-ish, never penalised hard)
+}
+// Latin-only normalisation: lowercase, drop Arabic, strip season/format
+// noise, keep alphanumerics.
+function normLatin(s) {
   return String(s || '')
     .toLowerCase()
-    .replace(/[\\u0600-\\u06FF]+/g, ' ')   // strip Arabic
-    .replace(/\\b(season|s|part|cour)\\s*\\d+\\b/g, '')
+    .replace(/[\\u0600-\\u06FF]+/g, ' ')
+    .replace(/\\b(the\\s+movie|movie|ova|ona|special|tv|season|part|cour|final)\\b/g, ' ')
+    .replace(/\\bs\\s*\\d+\\b/g, ' ')
     .replace(/[^a-z0-9 ]+/g, ' ')
     .replace(/\\s+/g, ' ')
     .trim();
 }
+// Arabic-only normalisation: strip tashkeel, keep arabic letters.
+function normArabic(s) {
+  return String(s || '')
+    .replace(/[\\u064B-\\u0652]/g, '')
+    .replace(/[^\\u0600-\\u06FF ]+/g, ' ')
+    .replace(/\\s+/g, ' ')
+    .trim();
+}
+function toks(s) { return s.split(' ').filter(function (w) { return w.length > 1; }); }
+// Token overlap as a ratio of the smaller set (0..1) — lets short and
+// partial titles match without needing many shared words.
+function overlap(a, b) {
+  if (!a.length || !b.length) return 0;
+  var set = {}; a.forEach(function (w) { set[w] = true; });
+  var shared = 0;
+  b.forEach(function (w) { if (set[w]) { shared++; set[w] = false; } });
+  return shared / Math.min(a.length, b.length);
+}
 function scrape() {
-  var want = norm(${JSON.stringify(want)});
+  var rawWant = ${JSON.stringify(want)};
+  var wantL = normLatin(rawWant), wantA = normArabic(rawWant);
+  var wantLT = toks(wantL), wantAT = toks(wantA);
+  var wantSeason = seasonNum(rawWant);
   var best = { url: null, score: 0 };
   document.querySelectorAll('.anime-card-container').forEach(function (el) {
     var titleEl = el.querySelector('.anime-card-title h3 a');
     var hrefEl = el.querySelector('.anime-card-poster a.overlay');
-    var t = norm(titleEl && titleEl.textContent);
+    var rawT = titleEl && titleEl.textContent;
     var h = hrefEl && hrefEl.getAttribute('href');
-    if (!h || !t) return;
+    if (!h || !rawT) return;
+    var gotL = normLatin(rawT), gotA = normArabic(rawT);
     var score = 0;
-    if (t === want) score = 100;
-    else if (t.indexOf(want) === 0 || want.indexOf(t) === 0) score = 80;
+    if (wantL && gotL && gotL === wantL) score = 100;
+    else if (wantL && gotL && (gotL.indexOf(wantL) === 0 || wantL.indexOf(gotL) === 0)) score = 85;
+    else if (wantA && gotA && gotA === wantA) score = 95;
     else {
-      var wantWords = want.split(' ').filter(function (w) { return w.length > 2; });
-      var gotWords = t.split(' ').filter(function (w) { return w.length > 2; });
-      var set = {};
-      wantWords.forEach(function (w) { set[w] = true; });
-      gotWords.forEach(function (w) { if (set[w]) score += 10; });
+      var r = Math.max(overlap(wantLT, toks(gotL)), overlap(wantAT, toks(gotA)));
+      score = Math.round(r * 75); // up to 75 for a perfect token overlap
+    }
+    // Season tiebreaker: when several seasons of the same show appear in the
+    // results, nudge toward the one matching the requested season so the
+    // episode-number lookup later hits the right list.
+    var gotSeason = seasonNum(rawT);
+    if (score > 0 && wantSeason && gotSeason) {
+      if (wantSeason === gotSeason) score += 8;
+      else score -= 12;
     }
     if (score > best.score) { best = { url: h, score: score }; }
   });
-  return { url: best.score >= 30 ? best.url : null, score: best.score };
+  // Permissive threshold: a ~0.5 token-overlap ratio (≈37) is enough.
+  return { url: best.score >= 34 ? best.url : null, score: best.score };
 }
 _waitFor(
   function(){ return !!document.querySelector('.anime-card-container, .no-results, .search-empty'); },
@@ -490,13 +537,14 @@ function provider(url) {
   url = (url || '').toLowerCase();
   if (/mp4upload/.test(url)) return 'mp4upload';
   if (/dailymotion|dai\\.ly/.test(url)) return 'dailymotion';
-  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed/.test(url)) return 'streamwish';
+  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|vibuxer|audinifer|masukestin|hanerix/.test(url)) return 'streamwish';
   if (/voe\\./.test(url)) return 'voe';
   if (/share4max|megamax/.test(url)) return 'share4max';
-  if (/doodstream|dood\\./.test(url)) return 'doodstream';
+  if (/rubyvidhub|streamruby|rubystm|ruby/.test(url)) return 'streamruby';
+  if (/doodstream|dood\\.|dsvplay|d-s\\.io|vidply/.test(url)) return 'doodstream';
   if (/uqload/.test(url)) return 'uqload';
   if (/ok\\.ru/.test(url)) return 'okru';
-  if (/videa\\./.test(url)) return 'videa';
+  if (/videa\\.|vidvaita|vidit/.test(url)) return 'videa';
   if (/vk\\.com/.test(url)) return 'vk';
   if (/mega\\.nz/.test(url)) return 'mega';
   return 'generic';
@@ -504,9 +552,38 @@ function provider(url) {
 function badIframe(src) {
   if (!src || src.indexOf('http') !== 0) return true;
   if (/google|facebook|pyppo|popads|disqus/.test(src)) return true;
+  // Reject malformed hosts. witanime's loadIframe() decode occasionally
+  // produces 'https://undefined/<encoded>' which dies with ERR_NAME_NOT_RESOLVED.
+  try {
+    var h = new URL(src).hostname.toLowerCase();
+    if (!h || h === 'undefined' || h === 'null' || h.indexOf('.') < 0) return true;
+  } catch (e) { return true; }
   return false;
 }
 function collectIframes(seen, out) {
+  // anime4up servers: the embed URL lives in a data-watch attribute on each
+  // tab <li>; the live iframe is only injected by JS on click and the markup
+  // also hides copies inside inert <noscript> tags. Read the attribute
+  // directly so we capture every server without depending on click handlers.
+  document.querySelectorAll('#episode-servers li[data-watch], #watch-servers li[data-watch], li[data-watch]').forEach(function (li) {
+    var src = (li.getAttribute('data-watch') || '').trim();
+    if (badIframe(src) || seen[src]) return;
+    seen[src] = true;
+    // The label sits in the <a> alongside a <noscript><iframe></noscript>
+    // copy of the embed; reading textContent directly drags the whole iframe
+    // URL into the name, so strip those inert nodes off a clone first.
+    var a = li.querySelector('a');
+    var name = '';
+    if (a) {
+      var labelEl = a.cloneNode(true);
+      labelEl.querySelectorAll('noscript, iframe, script').forEach(function (n) {
+        if (n.parentNode) n.parentNode.removeChild(n);
+      });
+      name = (labelEl.textContent || '').replace(/\\s+/g, ' ').trim();
+    }
+    if (!name) name = 'Server ' + (out.length + 1);
+    out.push({ id: String(out.length), name: name, iframeUrl: src, provider: provider(src) });
+  });
   document.querySelectorAll('iframe').forEach(function (f) {
     var src = (f.src || f.getAttribute('data-src') || '').trim();
     if (badIframe(src) || seen[src]) return;
@@ -526,29 +603,65 @@ async function runClicks() {
   var seen = {};
   var out = [];
   var titles = extractTitles();
-  // Initial iframes
+
+  // Continuously collect as the DOM mutates. Server iframes are injected
+  // asynchronously after a tab is clicked (sometimes hundreds of ms later),
+  // so a fixed wait can miss them intermittently. A MutationObserver catches
+  // every iframe / data-watch tab the moment it appears, regardless of timing.
+  var observer = null;
+  try {
+    observer = new MutationObserver(function () { collectIframes(seen, out); });
+    observer.observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['data-watch', 'src'],
+    });
+  } catch (e) {}
+
+  // 1st pass: harvest data-watch attributes + any iframes already rendered.
+  // Both anime4up and witanime keep embed URLs in li[data-watch].
+  collectIframes(seen, out);
+  await new Promise(function (r) { setTimeout(r, 150); });
   collectIframes(seen, out);
 
-  // Click each server tab
+  // 2nd pass: click through every server tab so witanime's lazy-injected
+  // iframes get created. The observer above collects whatever each click
+  // produces, even if it renders after the per-click wait.
   var tabs = document.querySelectorAll('#episode-servers .server-link, .server-btn, [data-server], .servers-list a, ul.servers li a, .episode-servers a, .server-tabs li, .servers-tabs a');
-  for (var i = 0; i < tabs.length && i < 25; i++) {
+  for (var i = 0; i < tabs.length && i < 20; i++) {
     var t = tabs[i];
     var name = (t.textContent || '').trim() || ('Server ' + (i + 1));
-    try { t.click(); } catch (e) {}
-    // wait
-    await new Promise(function (r) { setTimeout(r, 900); });
     var before = out.length;
+    try { t.click(); } catch (e) {}
+    await new Promise(function (r) { setTimeout(r, 160); });
     collectIframes(seen, out);
     // Rename just-added entries with the tab name
     for (var j = before; j < out.length; j++) out[j].name = name;
   }
 
-  _send('result', { data: { servers: out, episodeTitle: titles.episodeTitle, animeTitle: titles.animeTitle } });
+  // Final settle: catch any iframe that injected after its tab's window.
+  await new Promise(function (r) { setTimeout(r, 500); });
+  collectIframes(seen, out);
+  if (observer) { try { observer.disconnect(); } catch (e) {} }
+
+  // Harvest a direct anime4up link if witanime embeds one on this page — an
+  // exact episode URL lets us pull the anime4up servers with zero title/
+  // episode-number guessing. Prefer an episode link over an anime-page link.
+  var up4EpisodeUrl = null, up4AnimeUrl = null;
+  document.querySelectorAll('a[href*="anime4up"]').forEach(function (a) {
+    var h = (a.getAttribute('href') || '').trim();
+    if (!h) return;
+    if (h.indexOf('http') !== 0) h = (h.indexOf('//') === 0 ? 'https:' : 'https://') + h.replace(/^\\/+/, '');
+    var dh = h;
+    try { dh = decodeURIComponent(h); } catch (e) {}
+    if (/\\/episode\\/|الحلقة/.test(dh)) { if (!up4EpisodeUrl) up4EpisodeUrl = h; }
+    else if (/anime4up/.test(h) && !up4AnimeUrl) { up4AnimeUrl = h; }
+  });
+
+  _send('result', { data: { servers: out, episodeTitle: titles.episodeTitle, animeTitle: titles.animeTitle, up4EpisodeUrl: up4EpisodeUrl, up4AnimeUrl: up4AnimeUrl } });
 }
 _waitFor(
   function(){ return !!document.querySelector('iframe, #episode-servers, .server-btn, .anime-page-link, .main-section'); },
   function(ok, reason){
-    if (ok) { setTimeout(runClicks, 1500); }
+    if (ok) { setTimeout(runClicks, 400); }
     else _send('error', { message: reason });
   },
   30000
@@ -773,45 +886,40 @@ export const COLLECT_VIDEO_AFTER = `
     var dm = await tryDailymotion();
     if (dm) return done(dm);
 
-    // 2) Trigger play early so the player kicks off its real fetches
+    // 2) Kick the player so it issues its real media fetches.
     triggerPlay();
-    await new Promise(function (r) { setTimeout(r, 600); });
+    await new Promise(function (r) { setTimeout(r, 350); });
     triggerPlay();
 
-    // 3) For tokenized hosts, prefer the hook output. Poll for ~12s
-    //    before falling back to HTML extraction.
-    if (isTokenizedHost) {
-      for (var i = 0; i < 24; i++) {
-        var h0 = pickHooked();
-        if (h0) return done(h0);
-        if (i === 6) triggerPlay();
-        if (i === 12) triggerPlay();
-        await new Promise(function (r) { setTimeout(r, 500); });
-      }
-    }
-
-    // 4) HTML extractors (packed JS / JWPlayer / source tag / generic).
-    //    Poll briefly in case the player JS hasn't installed yet.
-    for (var j = 0; j < 6; j++) {
-      var html = document.documentElement.outerHTML || '';
-      var found = extractFromHtml(html);
-      if (found && !isDecoy(found)) return done(found);
-      var hooked = pickHooked();
-      if (hooked) return done(hooked);
-      await new Promise(function (r) { setTimeout(r, 800); });
-    }
-
-    // 5) Last-resort: keep watching for hook output up to 35s total
-    triggerPlay();
-    var elapsed = Date.now() - start;
-    while (elapsed < 35000) {
+    // 3) Unified fast poll. The hook (the URL the player actually fetches)
+    //    is the most reliable for tokenized CDNs, but waiting only on it is
+    //    slow — so we run the HTML extractors on every tick too and use
+    //    whichever lands first. Non-tokenized hosts commit to the HTML URL
+    //    instantly; tokenized hosts give the live hook a short (~3.5s) head
+    //    start before falling back to the HTML-extracted URL.
+    var htmlUrl = null;
+    var lastTrigger = Date.now();
+    while (Date.now() - start < 28000) {
       var h = pickHooked();
       if (h) return done(h);
-      await new Promise(function (r) { setTimeout(r, 700); });
-      elapsed = Date.now() - start;
+
+      if (!htmlUrl) {
+        var found = extractFromHtml(document.documentElement.outerHTML || '');
+        if (found && !isDecoy(found)) {
+          if (!isTokenizedHost) return done(found);
+          htmlUrl = found;
+        }
+      }
+      if (htmlUrl && Date.now() - start > 3500) return done(htmlUrl);
+
+      if (Date.now() - lastTrigger > 1600) { triggerPlay(); lastTrigger = Date.now(); }
+      await new Promise(function (r) { setTimeout(r, 250); });
     }
 
-    fail('no-video-url-after-35s');
+    if (htmlUrl) return done(htmlUrl);
+    var hLast = pickHooked();
+    if (hLast) return done(hLast);
+    fail('no-video-url');
   })();
   return true;
 })();

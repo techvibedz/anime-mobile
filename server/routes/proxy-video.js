@@ -3,85 +3,155 @@ const axios = require('axios');
 const router = express.Router();
 
 /**
- * GET /api/proxy-video?url=<encoded_video_url>
+ * GET /api/proxy-video?url=<encoded_video_url>[&ref=<encoded_referer>]
  *
- * Proxies the video stream from mp4upload CDN to the native player.
- * Solves non-standard port / TLS cert / Referer header issues.
+ * General video proxy mirroring the desktop Electron proxy. The native mobile
+ * player can't inject a per-host Referer, retry Referer strategies, or rewrite
+ * HLS playlists — this route does all three so mp4upload + the anime4up CDNs
+ * (streamwish family, voe, …) play natively.
  */
-router.get('/', async (req, res) => {
-  try {
-    const url = (req.query.url || '').trim();
-    if (!url) return res.status(400).json({ error: 'url is required' });
 
-    // HEAD often times out for mp4upload's non-standard-port CDNs.
-    // Skip it entirely — we only really need content-length when there's no Range header.
-    const range = req.headers.range;
-    let contentLength = null;
-    let contentType = 'video/mp4';
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+function canonicalReferer(hostname) {
+  const host = (hostname || '').toLowerCase();
+  if (/mp4upload/.test(host)) return { referer: 'https://www.mp4upload.com/', origin: 'https://www.mp4upload.com' };
+  if (/streamwish|hgcloud|wishfast|wishembed|jwembed|hlswish|vibuxer|audinifer|masukestin|hanerix|swhoi|streamruby|playerwish/.test(host)) {
+    const root = host.split('.').slice(-2).join('.');
+    return { referer: `https://${root}/`, origin: `https://${root}` };
+  }
+  if (/voe\./.test(host)) return { referer: 'https://voe.sx/', origin: 'https://voe.sx' };
+  if (/dailymotion|dmcdn/.test(host)) return { referer: 'https://www.dailymotion.com/', origin: 'https://www.dailymotion.com' };
+  if (/dood|d000d|doodstream/.test(host)) return { referer: 'https://dood.to/', origin: 'https://dood.to' };
+  if (/uqload/.test(host)) return { referer: 'https://uqload.net/', origin: 'https://uqload.net' };
+  if (/anime4up/.test(host)) return { referer: 'https://w1.anime4up.rest/', origin: 'https://w1.anime4up.rest' };
+  const root = host.split('.').slice(-2).join('.');
+  return { referer: `https://${root}/`, origin: `https://${root}` };
+}
+
+function isPlaylistUrl(url, contentType) {
+  if (/\.m3u8(\?|$)/i.test(url)) return true;
+  if (contentType && /mpegurl|x-mpegurl|vnd\.apple/i.test(contentType)) return true;
+  return false;
+}
+
+function rewritePlaylist(text, playlistUrl, base) {
+  const toProxy = (raw) => {
+    let abs;
     try {
-      const headResp = await axios.head(url, {
-        timeout: 4000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: 'https://www.mp4upload.com/',
-        },
+      abs = new URL(raw, playlistUrl).toString();
+    } catch {
+      return raw;
+    }
+    return `${base}/api/proxy-video?url=${encodeURIComponent(abs)}`;
+  };
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const t = line.trim();
+      if (!t) return line;
+      if (t.startsWith('#')) return line.replace(/URI="([^"]+)"/gi, (_m, uri) => `URI="${toProxy(uri)}"`);
+      return toProxy(t);
+    })
+    .join('\n');
+}
+
+// Returns { headers, status } from the first Referer strategy that succeeds.
+async function pickStrategy(target, range, refOverride) {
+  const t = new URL(target);
+  const canonical = refOverride
+    ? { referer: refOverride, origin: (() => { try { return new URL(refOverride).origin; } catch { return refOverride; } })() }
+    : canonicalReferer(t.hostname);
+
+  const strategies = [
+    { Referer: canonical.referer, Origin: canonical.origin },
+    { Referer: `${t.protocol}//${t.host}/` },
+    {},
+  ];
+
+  for (const extra of strategies) {
+    const headers = { 'User-Agent': UA, Accept: '*/*', ...extra };
+    if (range) headers.Range = range;
+    try {
+      const resp = await axios.get(target, {
+        timeout: 12000,
+        responseType: 'arraybuffer',
+        maxContentLength: 64,
+        maxBodyLength: 64,
+        headers: { ...headers, Range: 'bytes=0-1' },
         validateStatus: () => true,
       });
-      contentLength = headResp.headers['content-length'];
-      contentType = headResp.headers['content-type'] || 'video/mp4';
+      if (resp.status >= 200 && resp.status < 400) return { headers, ok: true };
     } catch {
-      // HEAD failed (port blocked, timeout) — proceed without it
+      /* try next */
     }
+  }
+  // Fallback to canonical even if the probe failed (server may reject tiny Range).
+  const headers = { 'User-Agent': UA, Accept: '*/*', Referer: canonical.referer, Origin: canonical.origin };
+  if (range) headers.Range = range;
+  return { headers, ok: false };
+}
 
-    if (range) {
-      const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : (contentLength ? contentLength - 1 : undefined);
-      const chunkSize = end ? end - start + 1 : undefined;
+router.get('/', async (req, res) => {
+  const url = (req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: 'url is required' });
+  const refOverride = (req.query.ref || '').trim() || null;
+  const range = req.headers.range;
+  const base = `${req.protocol}://${req.get('host')}`;
 
-      const resp = await axios.get(url, {
-        timeout: 30000,
-        responseType: 'stream',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: 'https://www.mp4upload.com/',
-          Range: `bytes=${start}-${end || ''}`,
-        },
-        validateStatus: (s) => s === 206 || s === 200,
-      });
-
-      res.status(206);
-      res.set({
-        'Content-Range': `bytes ${start}-${end || contentLength - 1}/${contentLength || '*'}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': contentType,
-      });
-      resp.data.pipe(res);
-    } else {
-      const resp = await axios.get(url, {
-        timeout: 60000,
-        responseType: 'stream',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: 'https://www.mp4upload.com/',
-        },
-        validateStatus: (s) => s === 200,
-      });
-
+  try {
+    // Playlists: fetch text, rewrite, return.
+    if (/\.m3u8(\?|$)/i.test(url)) {
+      const { headers } = await pickStrategy(url, null, refOverride);
+      const resp = await axios.get(url, { timeout: 15000, responseType: 'text', headers, validateStatus: (s) => s >= 200 && s < 400 });
+      const rewritten = rewritePlaylist(resp.data, url, base);
       res.status(200);
-      res.set({
-        'Content-Length': contentLength,
-        'Content-Type': contentType,
-        'Accept-Ranges': 'bytes',
-      });
-      resp.data.pipe(res);
+      res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+      return res.send(rewritten);
     }
+
+    const { headers } = await pickStrategy(url, range, refOverride);
+    const streamHeaders = { ...headers };
+    if (range) streamHeaders.Range = range;
+
+    let resp;
+    try {
+      resp = await axios.get(url, { timeout: 30000, responseType: 'stream', headers: streamHeaders, validateStatus: (s) => s >= 200 && s < 400 });
+    } catch (e) {
+      // mp4upload sometimes only answers Range requests.
+      if (!range && /mp4upload/.test(new URL(url).hostname)) {
+        resp = await axios.get(url, { timeout: 30000, responseType: 'stream', headers: { ...headers, Range: 'bytes=0-' }, validateStatus: (s) => s >= 200 && s < 400 });
+      } else {
+        throw e;
+      }
+    }
+
+    // Detect a playlist served without .m3u8 extension.
+    const ct = resp.headers['content-type'] || '';
+    if (isPlaylistUrl(url, ct)) {
+      const chunks = [];
+      for await (const c of resp.data) chunks.push(c);
+      const text = Buffer.concat(chunks).toString('utf8');
+      const rewritten = rewritePlaylist(text, url, base);
+      res.status(200);
+      res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+      return res.send(rewritten);
+    }
+
+    res.status(resp.status);
+    const passthrough = {
+      'Content-Type': ct || 'video/mp4',
+      'Accept-Ranges': 'bytes',
+      'Access-Control-Allow-Origin': '*',
+    };
+    if (resp.headers['content-length']) passthrough['Content-Length'] = resp.headers['content-length'];
+    if (resp.headers['content-range']) passthrough['Content-Range'] = resp.headers['content-range'];
+    res.set(passthrough);
+    resp.data.pipe(res);
   } catch (err) {
     console.error('[/api/proxy-video]', err.message);
-    if (!res.headersSent) {
-      res.status(502).json({ error: 'Proxy failed' });
-    }
+    if (!res.headersSent) res.status(502).json({ error: 'Proxy failed' });
   }
 });
 

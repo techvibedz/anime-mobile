@@ -14,7 +14,6 @@ import {
   findCrossSourceUrl,
   extractVideoUrl as scrapeExtractVideoUrl,
 } from "./scraper";
-import { VIDEO_PROXY_BASE, needsProxy } from "./config";
 
 const HOME_CACHE_KEY = "@home_cache_v1";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -166,12 +165,11 @@ function imgOrEmpty(s: string | null | undefined): string {
   return s ?? "";
 }
 
-/* ── proxy URL — route Referer-gated CDNs (mp4upload, streamwish family,
- * voe, anime4up, …) and all HLS playlists through the remote proxy so the
- * native player gets the right Referer / Range / rewritten segments. ── */
+/* ── proxy URL — DISABLED. We play the resolved URL directly in the native
+ * player with per-provider headers (on-device residential IP is accepted by
+ * the CDNs). Kept as identity for call-site compatibility. ── */
 export function getProxyUrl(videoUrl: string): string {
-  if (!videoUrl || !needsProxy(videoUrl)) return videoUrl;
-  return `${VIDEO_PROXY_BASE}?url=${encodeURIComponent(videoUrl)}`;
+  return videoUrl;
 }
 
 /* ── /home ──────────────────────────────────── */

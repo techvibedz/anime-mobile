@@ -213,11 +213,23 @@ export default function WatchScreen() {
       }
       const headers: Record<string, string> = {
         Referer: referer,
+        // Must match the scraper WebView UA (ScraperHost.tsx) — these CDNs
+        // bind the signed URL to the IP+UA that generated it.
         "User-Agent":
           "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
       };
       if (sendOrigin) headers.Origin = origin;
-      return { uri: videoUrl, headers };
+      // Tell the native player the stream type. expo-video needs
+      // contentType:'hls' when the uri has no .m3u8 extension (streamwish /
+      // voe / dailymotion hand out tokenized HLS URLs with query strings or
+      // no extension) — otherwise ExoPlayer/AVPlayer loads NO video tracks
+      // and the direct player shows a blank/dead frame. mp4upload is a
+      // progressive .mp4 file.
+      const isHls =
+        /\.m3u8(\?|$)/i.test(videoUrl) ||
+        /streamwish|hgcloud|wishfast|wishembed|jwembed|hlswish|voe\.|dailymotion|dmcdn/.test(videoHost);
+      const contentType: "hls" | "progressive" = isHls ? "hls" : "progressive";
+      return { uri: videoUrl, headers, contentType };
     } catch {
       return videoUrl;
     }

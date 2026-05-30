@@ -9,7 +9,7 @@
 //   Express: https://<host>/api/proxy-video
 export const VIDEO_PROXY_BASE =
   process.env.EXPO_PUBLIC_VIDEO_PROXY ||
-  "https://techvibedz-pantoufa-server.hf.space/api/proxy-video";
+  "https://xpirox-pantoufa.hf.space/api/proxy-video";
 
 // Hosts that refuse playback from the native player without a proxy
 // (Referer-gated / non-standard port / Cloudflare). Everything else plays

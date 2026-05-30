@@ -98,7 +98,10 @@ router.get('/', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'url is required' });
   const refOverride = (req.query.ref || '').trim() || null;
   const range = req.headers.range;
-  const base = `${req.protocol}://${req.get('host')}`;
+  // Honor the upstream TLS terminator (HF/Render) so rewritten playlist URLs
+  // are https — Android blocks cleartext http sub-requests by default.
+  const proto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || req.protocol;
+  const base = `${proto}://${req.get('host')}`;
 
   try {
     // Playlists: fetch text, rewrite, return.

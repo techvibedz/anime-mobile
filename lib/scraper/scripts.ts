@@ -30,7 +30,7 @@ function _absUrl(href, base) {
   return base + (href.charAt(0) === '/' ? '' : '/') + href;
 }
 function _waitFor(checkFn, doneFn, timeoutMs, intervalMs) {
-  intervalMs = intervalMs || 500;
+  intervalMs = intervalMs || 250;
   timeoutMs = timeoutMs || 25000;
   var start = Date.now();
   var iv = setInterval(function () {
@@ -255,7 +255,16 @@ _waitFor(
     if (findProcessedData()) {
       _send('result', { data: scrape() });
     } else {
-      setTimeout(function(){ _send('result', { data: scrape() }); }, 1500);
+      // Short grace for the site's JS to populate the episode payload; poll
+      // every 200ms so we return the moment it lands instead of a fixed wait.
+      var waited = 0;
+      var iv = setInterval(function(){
+        waited += 200;
+        if (findProcessedData() || waited >= 1600) {
+          clearInterval(iv);
+          _send('result', { data: scrape() });
+        }
+      }, 200);
     }
   },
   25000
@@ -315,7 +324,7 @@ function scrape() {
 _waitFor(
   function(){ return !!document.querySelector('a[href*="/episode/"], .anime-details-title'); },
   function(ok, reason){
-    if (ok) setTimeout(function(){ _send('result', { data: scrape() }); }, 1500);
+    if (ok) setTimeout(function(){ _send('result', { data: scrape() }); }, 600);
     else _send('error', { message: reason });
   },
   25000
@@ -619,7 +628,7 @@ async function runClicks() {
   // 1st pass: harvest data-watch attributes + any iframes already rendered.
   // Both anime4up and witanime keep embed URLs in li[data-watch].
   collectIframes(seen, out);
-  await new Promise(function (r) { setTimeout(r, 150); });
+  await new Promise(function (r) { setTimeout(r, 100); });
   collectIframes(seen, out);
 
   // 2nd pass: click through every server tab so witanime's lazy-injected
@@ -631,14 +640,14 @@ async function runClicks() {
     var name = (t.textContent || '').trim() || ('Server ' + (i + 1));
     var before = out.length;
     try { t.click(); } catch (e) {}
-    await new Promise(function (r) { setTimeout(r, 160); });
+    await new Promise(function (r) { setTimeout(r, 120); });
     collectIframes(seen, out);
     // Rename just-added entries with the tab name
     for (var j = before; j < out.length; j++) out[j].name = name;
   }
 
   // Final settle: catch any iframe that injected after its tab's window.
-  await new Promise(function (r) { setTimeout(r, 500); });
+  await new Promise(function (r) { setTimeout(r, 350); });
   collectIframes(seen, out);
   if (observer) { try { observer.disconnect(); } catch (e) {} }
 
@@ -661,7 +670,7 @@ async function runClicks() {
 _waitFor(
   function(){ return !!document.querySelector('iframe, #episode-servers, .server-btn, .anime-page-link, .main-section'); },
   function(ok, reason){
-    if (ok) { setTimeout(runClicks, 400); }
+    if (ok) { setTimeout(runClicks, 200); }
     else _send('error', { message: reason });
   },
   30000
@@ -815,9 +824,57 @@ export const COLLECT_VIDEO_AFTER = `
     return master || m3u8 || mp4 || us[0];
   }
 
+  // ── Provider-specific extractors ──
+  // voe: sources object with base64-encoded 'hls'/'mp4' URLs (page may have
+  // redirected from voe.sx to a random mirror domain first).
+  function tryVoe(html) {
+    var keys = ['hls', 'mp4', 'video_src'];
+    for (var i = 0; i < keys.length; i++) {
+      var m = html.match(new RegExp("['\\"]" + keys[i] + "['\\"]\\\\s*:\\\\s*['\\"]([^'\\"]+)['\\"]"));
+      if (!m) continue;
+      var u = m[1];
+      if (u.indexOf('http') !== 0) { try { u = atob(u); } catch (e) { continue; } }
+      if (u.indexOf('http') === 0 && !isDecoy(u)) return u;
+    }
+    return null;
+  }
+  // ok.ru: player options live in a data-options JSON attribute.
+  function tryOkru() {
+    var el = document.querySelector('[data-options]');
+    if (!el) return null;
+    try {
+      var opts = JSON.parse(el.getAttribute('data-options'));
+      var fv = opts && opts.flashvars;
+      var meta = fv && fv.metadata ? JSON.parse(fv.metadata) : null;
+      if (meta) {
+        if (meta.hlsManifestUrl) return meta.hlsManifestUrl;
+        if (meta.videos && meta.videos.length) return meta.videos[meta.videos.length - 1].url;
+      }
+    } catch (e) {}
+    return null;
+  }
+  // doodstream family: GET the /pass_md5/ endpoint, then append a random
+  // tail + the page token. The result is a direct progressive stream.
+  async function tryDood() {
+    try {
+      var html = document.documentElement.outerHTML || '';
+      var m = html.match(/['"]([^'"]*\\/pass_md5\\/[^'"]+)['"]/);
+      if (!m) return null;
+      var passUrl = m[1].indexOf('http') === 0 ? m[1] : location.origin + m[1];
+      var tk = html.match(/token=([a-zA-Z0-9]+)/);
+      var resp = await fetch(passUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+      var base = (await resp.text()).trim();
+      if (!base || base.indexOf('http') !== 0) return null;
+      var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      var rand = '';
+      for (var i = 0; i < 10; i++) rand += chars.charAt(Math.floor(Math.random() * chars.length));
+      return base + rand + '?token=' + (tk ? tk[1] : '') + '&expiry=' + Date.now();
+    } catch (e) { return null; }
+  }
+
   // ── Provider routing ──
   function extractFromHtml(html) {
-    return extractPackedJS(html) || extractJWPlayer(html) || extractSourceTag(html) || extractGeneric(html);
+    return tryVoe(html) || extractPackedJS(html) || extractJWPlayer(html) || extractSourceTag(html) || extractGeneric(html);
   }
   async function tryDailymotion() {
     try {
@@ -878,13 +935,23 @@ export const COLLECT_VIDEO_AFTER = `
   // missing cookies. So we wait for the fetch/XHR hook to fire before
   // falling back to HTML extractors.
   var isTokenizedHost = /mp4upload|streamwish|hgcloud|wishfast|wishembed|jwembed|voe\\.sx|voe\\./i.test(location.host);
+  var isDoodHost = /dood|ds2play|ds2video|d0o0d|do0od|d000d|vidply|all3do|doply|dsvplay|d-s\\.io/i.test(location.host);
+  var isOkruHost = /ok\\.ru|odnoklassniki/i.test(location.host);
 
   (async function run() {
     var start = Date.now();
 
-    // 1) Dailymotion metadata API (fast path)
+    // 1) Provider metadata fast paths
     var dm = await tryDailymotion();
     if (dm) return done(dm);
+    if (isOkruHost) {
+      var ok = tryOkru();
+      if (ok) return done(ok);
+    }
+    if (isDoodHost) {
+      var dd = await tryDood();
+      if (dd) return done(dd);
+    }
 
     // 2) Kick the player so it issues its real media fetches.
     triggerPlay();
@@ -899,9 +966,20 @@ export const COLLECT_VIDEO_AFTER = `
     //    start before falling back to the HTML-extracted URL.
     var htmlUrl = null;
     var lastTrigger = Date.now();
+    var doodRetried = false;
     while (Date.now() - start < 28000) {
       var h = pickHooked();
       if (h) return done(h);
+
+      if (isOkruHost) {
+        var ok2 = tryOkru();
+        if (ok2) return done(ok2);
+      }
+      if (isDoodHost && !doodRetried && Date.now() - start > 3000) {
+        doodRetried = true;
+        var dd2 = await tryDood();
+        if (dd2) return done(dd2);
+      }
 
       if (!htmlUrl) {
         var found = extractFromHtml(document.documentElement.outerHTML || '');

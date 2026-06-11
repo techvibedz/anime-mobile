@@ -21,6 +21,15 @@ const DETAIL_CACHE_PREFIX = "@detail_v1:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const UP4_CACHE_PREFIX = "@up4_eps_v2:";
 const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
+const SEARCH_CACHE_PREFIX = "@search_v1:";
+const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
+const LISTING_CACHE_PREFIX = "@listing_v1:";
+const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
+const RECENT_CACHE_PREFIX = "@recent_v1:";
+const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
+const SERVERS_CACHE_PREFIX = "@servers_v1:";
+const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
+const XSOURCE_CACHE_KEY = "@xsource_v1";
 
 async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
   try {
@@ -37,6 +46,32 @@ async function writeCache(key: string, data: unknown) {
   try {
     await AsyncStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
   } catch {}
+}
+
+// Stale-while-revalidate: cached payload renders instantly; a background
+// refresh keeps the cache fresh for the next visit. `valid` gates what gets
+// cached so transient empty scrapes aren't frozen for the whole TTL.
+const _swrInFlight = new Set<string>();
+async function swr<T>(
+  key: string,
+  ttlMs: number,
+  fresh: () => Promise<T>,
+  valid: (d: T) => boolean = () => true,
+): Promise<T> {
+  const cached = await readCache<T>(key, ttlMs);
+  if (cached) {
+    if (!_swrInFlight.has(key)) {
+      _swrInFlight.add(key);
+      void fresh()
+        .then((data) => { if (valid(data)) return writeCache(key, data); })
+        .catch(() => {})
+        .finally(() => _swrInFlight.delete(key));
+    }
+    return cached;
+  }
+  const data = await fresh();
+  if (valid(data)) void writeCache(key, data);
+  return data;
 }
 
 const WIT_BASE = "https://witanime.you";
@@ -255,8 +290,28 @@ export async function fetchHome(): Promise<HomePayload> {
 /* ── /episodes ──────────────────────────────── */
 
 // Cache cross-source URL lookups for 24h — anime URLs are stable.
+// Persisted to AsyncStorage so lookups survive app restarts.
 const xsourceCache: Map<string, { url: string | null; ts: number }> = new Map();
 const XSOURCE_TTL = 24 * 60 * 60 * 1000;
+
+let _xsourceLoaded = false;
+async function loadXsourceCache() {
+  if (_xsourceLoaded) return;
+  _xsourceLoaded = true;
+  try {
+    const raw = await AsyncStorage.getItem(XSOURCE_CACHE_KEY);
+    if (!raw) return;
+    const entries: [string, { url: string | null; ts: number }][] = JSON.parse(raw);
+    for (const [k, v] of entries) {
+      if (Date.now() - v.ts < XSOURCE_TTL && !xsourceCache.has(k)) xsourceCache.set(k, v);
+    }
+  } catch {}
+}
+function saveXsourceCache() {
+  try {
+    void AsyncStorage.setItem(XSOURCE_CACHE_KEY, JSON.stringify(Array.from(xsourceCache.entries())));
+  } catch {}
+}
 
 // Progressively shorter title variants. The full title is most precise but
 // anime4up's search is fussy — dropping trailing season/format words and
@@ -277,6 +332,7 @@ async function getCrossSourceUrl(
   primary: "witanime" | "anime4up",
 ): Promise<string | null> {
   const key = `${primary}:${title.toLowerCase().trim()}`;
+  await loadXsourceCache();
   const hit = xsourceCache.get(key);
   if (hit && Date.now() - hit.ts < XSOURCE_TTL) return hit.url;
 
@@ -293,7 +349,10 @@ async function getCrossSourceUrl(
   }
   // Only cache positive hits — a null is likely a transient search/CF miss,
   // so let the next call retry instead of remembering the failure.
-  if (url) xsourceCache.set(key, { url, ts: Date.now() });
+  if (url) {
+    xsourceCache.set(key, { url, ts: Date.now() });
+    saveXsourceCache();
+  }
   return url;
 }
 
@@ -401,21 +460,28 @@ export async function fetchRecent(page = 1): Promise<{
   success: boolean;
   data: { page: number; episodes: EpisodeItem[]; hasNext: boolean };
 }> {
-  const r = await scrapeRecent(page);
-  const episodes: EpisodeItem[] = r.episodes.map((e) => ({
-    title: e.title,
-    href: e.href,
-    image: imgOrEmpty(e.image),
-    animeTitle: e.animeTitle,
-    animeHref: e.animeHref,
-    isNew: e.isNew,
-  }));
-  return { success: true, data: { page, episodes, hasNext: episodes.length > 0 } };
+  return swr(
+    RECENT_CACHE_PREFIX + page,
+    RECENT_CACHE_TTL,
+    async () => {
+      const r = await scrapeRecent(page);
+      const episodes: EpisodeItem[] = r.episodes.map((e) => ({
+        title: e.title,
+        href: e.href,
+        image: imgOrEmpty(e.image),
+        animeTitle: e.animeTitle,
+        animeHref: e.animeHref,
+        isNew: e.isNew,
+      }));
+      return { success: true, data: { page, episodes, hasNext: episodes.length > 0 } };
+    },
+    (d) => d.data.episodes.length > 0,
+  );
 }
 
 /* ── /extract-video ─────────────────────────── */
 
-export async function fetchVideoServers(episodeUrl: string, url4up?: string): Promise<{
+type VideoServersPayload = {
   success: boolean;
   data: {
     episodeTitle: string;
@@ -426,7 +492,21 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string): Pr
     navigation: { prev: string | null; next: string | null };
     up4EpisodeUrl?: string;
   };
-}> {
+};
+
+export async function fetchVideoServers(episodeUrl: string, url4up?: string): Promise<VideoServersPayload> {
+  // Embed URLs on the episode page are stable for hours, so SWR-cache the
+  // server LIST (the per-server video URL is still resolved live, since
+  // those carry short-lived tokens). Re-opening an episode is instant.
+  return swr(
+    `${SERVERS_CACHE_PREFIX}${episodeUrl}|${url4up || ""}`,
+    SERVERS_CACHE_TTL,
+    () => fetchVideoServersFresh(episodeUrl, url4up),
+    (d) => d.data.servers.length > 0,
+  );
+}
+
+async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Promise<VideoServersPayload> {
   const primaryIsUp4 = /anime4up/i.test(episodeUrl);
   // If we have a url4up AND the primary isn't already anime4up, scrape both
   // sources' servers in parallel (uses 2 WebView slots simultaneously).
@@ -509,16 +589,23 @@ export async function searchAnime(query: string): Promise<{
   success: boolean;
   data: { query: string; totalResults: number; results: SearchResult[] };
 }> {
-  const r = await scrapeSearch(query);
-  const results: SearchResult[] = r.results.map((it) => ({
-    title: it.title,
-    href: it.href,
-    image: imgOrEmpty(it.image),
-    type: it.type ?? undefined,
-    status: it.status ?? undefined,
-    synopsis: it.synopsis ?? undefined,
-  }));
-  return { success: true, data: { query, totalResults: results.length, results } };
+  return swr(
+    SEARCH_CACHE_PREFIX + query.toLowerCase().trim(),
+    SEARCH_CACHE_TTL,
+    async () => {
+      const r = await scrapeSearch(query);
+      const results: SearchResult[] = r.results.map((it) => ({
+        title: it.title,
+        href: it.href,
+        image: imgOrEmpty(it.image),
+        type: it.type ?? undefined,
+        status: it.status ?? undefined,
+        synopsis: it.synopsis ?? undefined,
+      }));
+      return { success: true, data: { query, totalResults: results.length, results } };
+    },
+    (d) => d.data.results.length > 0,
+  );
 }
 
 /* ── /genre ─────────────────────────────────── */
@@ -527,15 +614,22 @@ export async function fetchGenre(name: string, page = 1): Promise<{
   success: boolean;
   data: { genre: string; page: number; items: SearchResult[]; hasNext: boolean };
 }> {
-  const r = await scrapeGenre(name, page);
-  const items: SearchResult[] = r.items.map((it) => ({
-    title: it.title,
-    href: it.href,
-    image: imgOrEmpty(it.image),
-    type: it.type ?? undefined,
-    status: it.status ?? undefined,
-  }));
-  return { success: true, data: { genre: name, page, items, hasNext: items.length > 0 } };
+  return swr(
+    `${LISTING_CACHE_PREFIX}genre:${name}:${page}`,
+    LISTING_CACHE_TTL,
+    async () => {
+      const r = await scrapeGenre(name, page);
+      const items: SearchResult[] = r.items.map((it) => ({
+        title: it.title,
+        href: it.href,
+        image: imgOrEmpty(it.image),
+        type: it.type ?? undefined,
+        status: it.status ?? undefined,
+      }));
+      return { success: true, data: { genre: name, page, items, hasNext: items.length > 0 } };
+    },
+    (d) => d.data.items.length > 0,
+  );
 }
 
 /* ── /all-anime ─────────────────────────────── */
@@ -544,15 +638,22 @@ export async function fetchAllAnime(page = 1): Promise<{
   success: boolean;
   data: { page: number; items: SearchResult[]; hasNext: boolean };
 }> {
-  const r = await scrapeAllAnime(page);
-  const items: SearchResult[] = r.items.map((it) => ({
-    title: it.title,
-    href: it.href,
-    image: imgOrEmpty(it.image),
-    type: it.type ?? undefined,
-    status: it.status ?? undefined,
-  }));
-  return { success: true, data: { page, items, hasNext: items.length > 0 } };
+  return swr(
+    `${LISTING_CACHE_PREFIX}all:${page}`,
+    LISTING_CACHE_TTL,
+    async () => {
+      const r = await scrapeAllAnime(page);
+      const items: SearchResult[] = r.items.map((it) => ({
+        title: it.title,
+        href: it.href,
+        image: imgOrEmpty(it.image),
+        type: it.type ?? undefined,
+        status: it.status ?? undefined,
+      }));
+      return { success: true, data: { page, items, hasNext: items.length > 0 } };
+    },
+    (d) => d.data.items.length > 0,
+  );
 }
 
 /* ── /resolve-video ─────────────────────────── */

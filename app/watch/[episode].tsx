@@ -9,6 +9,7 @@ import {
   StatusBar,
 } from "react-native";
 import { VideoView, useVideoPlayer } from "expo-video";
+import { LinearGradient } from "expo-linear-gradient";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { useLocalSearchParams, router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -34,19 +35,21 @@ const PROVIDER_RANK: Record<string, number> = {
   dailymotion: 0,   // HLS via metadata API — reliable
   mp4upload: 1,     // direct MP4 via packed JS — reliable
   streamwish: 2,    // HLS via packed JS — reliable
-  videa: 3,         // MP4 via Chrome interception — reliable
-  voe: 4,           // sometimes resolves; falls back to WebView
-  share4max: 5,     // mostly WebView
-  streamruby: 6,    // mostly WebView
-  doodstream: 6,    // mostly WebView
-  uqload: 7,        // mostly WebView
-  okru: 8,
+  videa: 3,         // MP4 via request interception — reliable
+  voe: 4,           // HLS via base64 sources extractor
+  doodstream: 5,    // MP4 via pass_md5 token extractor
+  okru: 6,          // HLS via data-options metadata
+  share4max: 7,     // packed JS; falls back to WebView
+  streamruby: 7,    // packed JS; falls back to WebView
+  uqload: 8,        // packed JS; falls back to WebView
   larhu: 9,
   generic: 10,
   vk: 11,           // WebView only
   mega: 12,         // WebView only
   yonaplay: 99,     // blocked server-side
 };
+
+const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 0.75];
 
 function qualityScore(name: string): number {
   const n = (name || "").toLowerCase();
@@ -202,6 +205,19 @@ export default function WatchScreen() {
       } else if (/voe\./.test(videoHost)) {
         referer = "https://voe.sx/";
         origin = "https://voe.sx";
+      } else if (/dood|ds2play|ds2video|vidply|all3do|doply|dsvplay/.test(videoHost)) {
+        // dood CDN binds the tokenized URL to the embed page as Referer and
+        // rejects requests that carry an Origin header.
+        referer = iframeUrl ? new URL(iframeUrl).origin + "/" : `https://${videoHost}/`;
+        origin = "";
+        sendOrigin = false;
+      } else if (/mycdn\.me|okcdn|ok\.ru/.test(videoHost)) {
+        referer = "https://ok.ru/";
+        origin = "https://ok.ru";
+      } else if (/videa/.test(videoHost)) {
+        referer = "https://videa.hu/";
+        origin = "https://videa.hu";
+        sendOrigin = false;
       } else if (iframeUrl) {
         const iframeOrigin = new URL(iframeUrl).origin;
         referer = iframeOrigin + "/";
@@ -227,7 +243,8 @@ export default function WatchScreen() {
       // progressive .mp4 file.
       const isHls =
         /\.m3u8(\?|$)/i.test(videoUrl) ||
-        /streamwish|hgcloud|wishfast|wishembed|jwembed|hlswish|voe\.|dailymotion|dmcdn/.test(videoHost);
+        (/streamwish|hgcloud|wishfast|wishembed|jwembed|hlswish|voe\.|dailymotion|dmcdn|mycdn\.me|okcdn/.test(videoHost) &&
+          !/\.mp4(\?|$)/i.test(videoUrl));
       const contentType: "hls" | "progressive" = isHls ? "hls" : "progressive";
       return { uri: videoUrl, headers, contentType };
     } catch {
@@ -863,6 +880,8 @@ export default function WatchScreen() {
   const [duration, setDuration] = useState(0);
   const [seekValue, setSeekValue] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [speedIdx, setSpeedIdx] = useState(0);
 
   // Poll player state every 500ms
   useEffect(() => {
@@ -876,10 +895,20 @@ export default function WatchScreen() {
           setDuration(d);
           setSeekValue(isSeeking ? seekValue : ct / d);
         }
+        setIsBuffering(player.status === "loading");
       } catch {}
     }, 500);
     return () => clearInterval(iv);
   }, [isPlaying, player, isSeeking, seekValue]);
+
+  // Playback speed
+  const cycleSpeed = useCallback(() => {
+    setSpeedIdx((i) => (i + 1) % SPEEDS.length);
+  }, []);
+  useEffect(() => {
+    if (!player) return;
+    try { player.playbackRate = SPEEDS[speedIdx]; } catch {}
+  }, [speedIdx, player, videoUrl]);
 
   const togglePlayPause = useCallback(() => {
     if (!player) return;
@@ -1073,93 +1102,125 @@ export default function WatchScreen() {
         />
       )}
 
+      {/* Buffering spinner — floats above the video even when chrome is hidden */}
+      {isPlaying && isBuffering && !controlsVisible && (
+        <View style={ss.bufferOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color={C.accent} />
+        </View>
+      )}
+
       {/* Custom Controls Overlay */}
       {isPlaying && !pickerOpen && controlsVisible && (
         <View style={ss.controlsOverlay} pointerEvents="box-none">
-          {/* Top: back + title */}
-          <View style={[ss.ctrlTopBar, { paddingTop: (insets.top || 8) + 4 }]}>
-            <Pressable onPress={() => router.back()} style={ss.circleBtn}>
+          {/* Tap on empty space hides the chrome */}
+          <Pressable style={StyleSheet.absoluteFill} onPress={tapToToggle} />
+          <LinearGradient
+            colors={["rgba(0,0,0,0.8)", "rgba(0,0,0,0.35)", "transparent"]}
+            style={ss.gradTop}
+            pointerEvents="none"
+          />
+          <LinearGradient
+            colors={["transparent", "rgba(0,0,0,0.45)", "rgba(0,0,0,0.9)"]}
+            style={ss.gradBottom}
+            pointerEvents="none"
+          />
+
+          {/* Top: back + titles + actions */}
+          <View style={[ss.ctrlTopBar, { paddingTop: (insets.top || 10) + 6 }]} pointerEvents="box-none">
+            <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
-            <View style={ss.titleArea}>
+            <View style={ss.titleArea} pointerEvents="none">
               <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
               {active && (
-                <Text style={ss.serverLabelText} numberOfLines={1}>
-                  {getDisplayName(active.server)} • Direct
-                </Text>
+                <View style={ss.metaRow}>
+                  <View style={ss.directPill}>
+                    <View style={ss.liveDot} />
+                    <Text style={ss.directPillText}>DIRECT</Text>
+                  </View>
+                  <Text style={ss.serverLabelText} numberOfLines={1}>
+                    {getDisplayName(active.server)}
+                  </Text>
+                </View>
               )}
             </View>
-            <View style={{ flexDirection: "row", gap: 8 }}>
-              <Pressable
-                onPress={() => setVideoFit((f) => (f === "contain" ? "fill" : "contain"))}
-                style={ss.circleBtn}
-              >
-                <Ionicons
-                  name={videoFit === "contain" ? "expand-outline" : "contract-outline"}
-                  size={18}
-                  color={C.white}
-                />
-              </Pressable>
-              <Pressable onPress={() => setPickerOpen(true)} style={ss.circleBtn}>
-                <Ionicons name="layers-outline" size={18} color={C.white} />
-              </Pressable>
-            </View>
+            <Pressable onPress={cycleSpeed} style={ss.speedBtn} hitSlop={6}>
+              <Text style={ss.speedBtnText}>{SPEEDS[speedIdx]}x</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setVideoFit((f) => (f === "contain" ? "fill" : "contain"))}
+              style={ss.iconBtn}
+              hitSlop={6}
+            >
+              <Ionicons
+                name={videoFit === "contain" ? "expand-outline" : "contract-outline"}
+                size={18}
+                color={C.white}
+              />
+            </Pressable>
+            <Pressable onPress={() => setPickerOpen(true)} style={ss.iconBtn} hitSlop={6}>
+              <Ionicons name="server-outline" size={18} color={C.white} />
+            </Pressable>
           </View>
 
-          {/* Center: play/pause overlay */}
-          <Pressable onPress={togglePlayPause} style={[ss.ctrlCenter, { pointerEvents: "auto" }]}>
-            <Ionicons
-              name={isPlayerPaused ? "play-circle" : "pause-circle"}
-              size={56}
-              color="rgba(255,255,255,0.8)"
-            />
-          </Pressable>
+          {/* Center: skip back / play / skip forward */}
+          <View style={ss.centerCluster} pointerEvents="box-none">
+            <Pressable onPress={skipBack} style={ss.skipBtn} hitSlop={8}>
+              <Ionicons name="play-back" size={24} color={C.white} />
+              <Text style={ss.skipLabel}>10</Text>
+            </Pressable>
+            <Pressable onPress={togglePlayPause} style={ss.playBtn} hitSlop={8}>
+              {isBuffering && !isPlayerPaused ? (
+                <ActivityIndicator size="large" color={C.white} />
+              ) : (
+                <Ionicons
+                  name={isPlayerPaused ? "play" : "pause"}
+                  size={38}
+                  color={C.white}
+                  style={isPlayerPaused ? { marginLeft: 4 } : undefined}
+                />
+              )}
+            </Pressable>
+            <Pressable onPress={skipForward} style={ss.skipBtn} hitSlop={8}>
+              <Ionicons name="play-forward" size={24} color={C.white} />
+              <Text style={ss.skipLabel}>10</Text>
+            </Pressable>
+          </View>
 
-          {/* Bottom: seek bar + controls */}
-          <View style={[ss.ctrlBottom, { paddingBottom: (insets.bottom || 8) + 4 }]}>
-            {/* Seek bar */}
+          {/* Bottom: seek bar + chips */}
+          <View style={[ss.ctrlBottom, { paddingBottom: (insets.bottom || 10) + 8 }]} pointerEvents="box-none">
             <View style={ss.seekRow}>
               <Text style={ss.timeText}>{fmtTime(currentTime)}</Text>
               <View ref={seekBarRef} style={ss.seekBarWrap} collapsable={false}>
                 <View style={ss.seekTrack}>
                   <View style={[ss.seekFill, { width: `${Math.min(seekValue * 100, 100)}%` }]} />
                 </View>
+                <View
+                  style={[ss.seekThumb, { left: `${Math.min(seekValue * 100, 100)}%` }]}
+                  pointerEvents="none"
+                />
                 <Pressable style={ss.seekTouchArea} onPress={onSeekPress} />
               </View>
-              <Text style={ss.timeText}>{fmtTime(duration)}</Text>
+              <Text style={ss.timeTextDur}>{fmtTime(duration)}</Text>
             </View>
 
-            {/* Control buttons row */}
             <View style={ss.ctrlRow}>
-              <View style={{ flexDirection: "row", gap: 6 }}>
-                <Pressable onPress={skipBack} style={ss.ctrlBtn}>
-                  <Ionicons name="play-back" size={20} color={C.white} />
-                  <Text style={ss.ctrlBtnLabel}>10</Text>
-                </Pressable>
-                <Pressable onPress={togglePlayPause} style={ss.ctrlBtn}>
-                  <Ionicons name={isPlayerPaused ? "play" : "pause"} size={22} color={C.white} />
-                </Pressable>
-                <Pressable onPress={skipForward} style={ss.ctrlBtn}>
-                  <Ionicons name="play-forward" size={20} color={C.white} />
-                  <Text style={ss.ctrlBtnLabel}>10</Text>
-                </Pressable>
-                <Pressable onPress={skipForward90} style={ss.ctrlBtn}>
-                  <Ionicons name="play-forward-circle" size={20} color={C.white} />
-                  <Text style={ss.ctrlBtnLabel}>90</Text>
-                </Pressable>
-              </View>
+              <Pressable onPress={skipForward90} style={ss.chipBtn}>
+                <Ionicons name="play-forward-circle-outline" size={16} color={C.white} />
+                <Text style={ss.chipBtnText}>+90s</Text>
+              </Pressable>
 
-              <View style={{ flexDirection: "row", gap: 6 }}>
+              <View style={{ flexDirection: "row", gap: 8 }}>
                 {prevEpisodeHref && (
-                  <Pressable onPress={goPrevEpisode} style={ss.ctrlBtn}>
-                    <Ionicons name="play-skip-back" size={18} color={C.white} />
-                    <Text style={ss.ctrlBtnLabel}>Prev</Text>
+                  <Pressable onPress={goPrevEpisode} style={ss.chipBtn}>
+                    <Ionicons name="play-skip-back" size={14} color={C.white} />
+                    <Text style={ss.chipBtnText}>Prev</Text>
                   </Pressable>
                 )}
                 {nextEpisodeHref && (
-                  <Pressable onPress={goNextEpisode} style={[ss.ctrlBtn, { borderColor: C.green }]}>
-                    <Ionicons name="play-skip-forward" size={18} color={C.green} />
-                    <Text style={[ss.ctrlBtnLabel, { color: C.green }]}>Next</Text>
+                  <Pressable onPress={goNextEpisode} style={ss.chipBtnAccent}>
+                    <Text style={ss.chipBtnAccentText}>Next Episode</Text>
+                    <Ionicons name="play-skip-forward" size={14} color={C.white} />
                   </Pressable>
                 )}
               </View>
@@ -1171,29 +1232,40 @@ export default function WatchScreen() {
       {/* TOP BAR for non-native states (WebView, loading) */}
       {controlsVisible && !pickerOpen && !isPlaying && (
         <View style={ss.overlay} pointerEvents="box-none">
-          <View style={[ss.topBar, { paddingTop: (insets.top || 8) + 4 }]}>
-            <Pressable onPress={() => router.back()} style={ss.circleBtn}>
+          <View style={[ss.ctrlTopBar, { paddingTop: (insets.top || 10) + 6 }]}>
+            <LinearGradient
+              colors={["rgba(0,0,0,0.85)", "rgba(0,0,0,0.4)", "transparent"]}
+              style={ss.topBarGrad}
+              pointerEvents="none"
+            />
+            <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
             <View style={ss.titleArea}>
               <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
               {active && (
-                <Text style={ss.serverLabelText} numberOfLines={1}>
-                  {getDisplayName(active.server)}
-                  {isWebView ? " • Embed" : ""}
-                </Text>
+                <View style={ss.metaRow}>
+                  {isWebView && (
+                    <View style={[ss.directPill, { backgroundColor: "rgba(0,212,255,0.18)", borderColor: "rgba(0,212,255,0.35)" }]}>
+                      <Text style={[ss.directPillText, { color: C.cyan }]}>EMBED</Text>
+                    </View>
+                  )}
+                  <Text style={ss.serverLabelText} numberOfLines={1}>
+                    {getDisplayName(active.server)}
+                  </Text>
+                </View>
               )}
             </View>
-            <Pressable onPress={skipForward} style={ss.circleBtn}>
+            <Pressable onPress={skipForward} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="play-forward" size={18} color={C.white} />
             </Pressable>
             {nextEpisodeHref && (
-              <Pressable onPress={goNextEpisode} style={[ss.circleBtn, { backgroundColor: C.green + "44" }]}>
-                <Ionicons name="play-skip-forward" size={18} color={C.green} />
+              <Pressable onPress={goNextEpisode} style={[ss.iconBtn, ss.iconBtnAccent]} hitSlop={6}>
+                <Ionicons name="play-skip-forward" size={18} color={C.white} />
               </Pressable>
             )}
-            <Pressable onPress={() => setPickerOpen(true)} style={ss.circleBtn}>
-              <Ionicons name="layers-outline" size={20} color={C.white} />
+            <Pressable onPress={() => setPickerOpen(true)} style={ss.iconBtn} hitSlop={6}>
+              <Ionicons name="server-outline" size={18} color={C.white} />
             </Pressable>
           </View>
         </View>
@@ -1203,46 +1275,70 @@ export default function WatchScreen() {
       {pickerOpen && (
         <View style={ss.pickerOverlay}>
           <Pressable style={ss.pickerBackdrop} onPress={() => setPickerOpen(false)} />
-          <View style={[ss.pickerSheet, { paddingTop: (insets.top || 8) + 8 }]}>
+          <View style={[ss.pickerSheet, { paddingTop: (insets.top || 10) + 10 }]}>
             <View style={ss.pickerHeader}>
-              <View>
-                <Text style={ss.pickerTitle}>Servers</Text>
-                <Text style={ss.pickerSub}>
-                  {servers.filter((s) => s.status === "playing" || s.status === "webview").length}/{servers.length} ready
-                </Text>
+              <View style={ss.pickerHeaderLeft}>
+                <View style={ss.pickerHeaderIcon}>
+                  <Ionicons name="server-outline" size={16} color={C.accent} />
+                </View>
+                <View>
+                  <Text style={ss.pickerTitle}>Servers</Text>
+                  <Text style={ss.pickerSub}>
+                    {servers.filter((s) => s.status === "playing" || s.status === "webview").length} of {servers.length} ready
+                  </Text>
+                </View>
               </View>
-              <Pressable onPress={() => setPickerOpen(false)} style={ss.circleBtn}>
-                <Ionicons name="close" size={22} color={C.white} />
+              <Pressable onPress={() => setPickerOpen(false)} style={ss.iconBtn} hitSlop={6}>
+                <Ionicons name="close" size={20} color={C.white} />
               </Pressable>
             </View>
             <ScrollView showsVerticalScrollIndicator={false} style={ss.pickerScroll} contentContainerStyle={ss.pickerContent}>
               {servers.map((item, index) => {
                 const isActive = index === activeIdx;
-                const color = item.status === "playing" ? C.green
-                  : item.status === "webview" ? "#4FC3F7"
-                  : item.status === "failed" ? "#FF6B6B"
-                  : item.status === "resolving" ? "#FFB800"
-                  : C.textMuted;
-                const label = item.status === "playing" ? "Direct ▶"
+                const color = item.status === "playing" ? "#00E676"
+                  : item.status === "webview" ? C.cyan
+                  : item.status === "failed" ? "#FF5252"
+                  : item.status === "resolving" ? C.gold
+                  : "rgba(255,255,255,0.35)";
+                const label = item.status === "playing" ? "Direct"
                   : item.status === "webview" ? "Embed"
                   : item.status === "failed" ? "Failed"
-                  : item.status === "resolving" ? "Connecting..."
+                  : item.status === "resolving" ? "Connecting…"
                   : "Tap to play";
-                const icon = item.status === "playing" ? "play" as const
-                  : item.status === "webview" ? "globe" as const
-                  : item.status === "failed" ? "close" as const
-                  : item.status === "resolving" ? undefined
-                  : "ellipse-outline" as const;
+                const initial = (getDisplayName(item.server).charAt(0) || "S").toUpperCase();
                 return (
-                  <Pressable key={`${item.server.id}-${index}`} onPress={() => selectServer(index)} style={({ pressed }) => [ss.serverItem, isActive && ss.serverItemActive, pressed && { opacity: 0.7 }]}>
-                    <View style={[ss.statusDot, { backgroundColor: color }]}>
-                      {item.status === "resolving" ? <ActivityIndicator size="small" color="#000" /> : icon ? <Ionicons name={icon} size={14} color="#000" /> : null}
+                  <Pressable
+                    key={`${item.server.id}-${index}`}
+                    onPress={() => selectServer(index)}
+                    style={({ pressed }) => [ss.serverItem, isActive && ss.serverItemActive, pressed && { opacity: 0.7 }]}
+                  >
+                    <View style={[ss.serverAvatar, isActive && { borderColor: C.accent }]}>
+                      {item.status === "resolving" ? (
+                        <ActivityIndicator size="small" color={C.gold} />
+                      ) : (
+                        <Text style={[ss.serverAvatarText, isActive && { color: C.accent }]}>{initial}</Text>
+                      )}
+                      <View style={[ss.serverStatusDot, { backgroundColor: color }]} />
                     </View>
                     <View style={ss.serverInfo}>
-                      <Text style={[ss.serverName, isActive && ss.serverNameActive]} numberOfLines={1}>{getDisplayName(item.server)}</Text>
-                      <Text style={ss.serverMeta}>{label}{item.server.source ? ` • ${item.server.source}` : ""}</Text>
+                      <Text style={[ss.serverName, isActive && ss.serverNameActive]} numberOfLines={1}>
+                        {getDisplayName(item.server)}
+                      </Text>
+                      <View style={ss.serverMetaRow}>
+                        <Text style={[ss.serverMetaLabel, { color }]}>{label}</Text>
+                        {item.server.source ? (
+                          <Text style={ss.serverMeta} numberOfLines={1}> • {item.server.source}</Text>
+                        ) : null}
+                      </View>
                     </View>
-                    {isActive && <View style={ss.activeBadge}><Text style={ss.activeBadgeText}>ON</Text></View>}
+                    {isActive ? (
+                      <View style={ss.activeBadge}>
+                        <Ionicons name="play" size={9} color={C.white} />
+                        <Text style={ss.activeBadgeText}>NOW</Text>
+                      </View>
+                    ) : item.status === "playing" ? (
+                      <Ionicons name="flash" size={14} color="#00E676" />
+                    ) : null}
                   </Pressable>
                 );
               })}
@@ -1256,108 +1352,177 @@ export default function WatchScreen() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#000" },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8 },
+  centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
   player: { flex: 1, backgroundColor: "#000" },
+  playerWrap: { flex: 1 },
 
   overlay: { ...StyleSheet.absoluteFillObject, justifyContent: "flex-start", zIndex: 3 },
-  topBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "rgba(0,0,0,0.55)", gap: 12 },
-  persistentBar: { position: "absolute", left: 12, right: 12, flexDirection: "row", alignItems: "center", gap: 8, zIndex: 5 },
-  nativeTopBar: {
-    position: "absolute", left: 0, right: 0, top: 0,
+
+  // Status / error states
+  statusText: { color: "rgba(255,255,255,0.85)", fontSize: 15, fontWeight: "700", textAlign: "center", paddingHorizontal: 32, fontFamily: "Outfit_700Bold" },
+  statusSub: { color: "rgba(255,255,255,0.45)", fontSize: 12, textAlign: "center", fontFamily: "DMSans_500Medium" },
+  errorTitle: { color: "rgba(255,255,255,0.7)", fontSize: 16, fontWeight: "700", marginTop: 8, textAlign: "center", paddingHorizontal: 32, fontFamily: "Outfit_700Bold" },
+  actionBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    paddingHorizontal: 12, paddingBottom: 10,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    zIndex: 5,
+    backgroundColor: C.accent, borderRadius: 24, paddingHorizontal: 22, paddingVertical: 11,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 16, elevation: 6,
   },
-  nativeTopTapZone: {
-    position: "absolute", left: 0, right: 0, top: 0,
-    zIndex: 4, backgroundColor: "transparent",
-  },
-  nativeTitleArea: { flex: 1, marginHorizontal: 4 },
-  nativeTitleText: {
-    color: "#fff", fontSize: 14, fontWeight: "700",
-    textShadowColor: "rgba(0,0,0,0.8)", textShadowRadius: 4,
-  },
-  nativeSubText: {
-    color: "#cfcfcf", fontSize: 10, marginTop: 1,
-    textShadowColor: "rgba(0,0,0,0.8)", textShadowRadius: 3,
-  },
-  circleBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" },
-  circleBtnSm: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center" },
-  titleArea: { flex: 1 },
-  titleText: { color: "#fff", fontSize: 15, fontWeight: "700" },
-  serverLabelText: { color: "#aaa", fontSize: 11, marginTop: 1 },
+  actionBtnText: { color: "#fff", fontSize: 14, fontWeight: "700", fontFamily: "Outfit_700Bold" },
 
-  statusText: { color: "#ccc", fontSize: 15, fontWeight: "600", textAlign: "center", paddingHorizontal: 32 },
-  statusSub: { color: "#888", fontSize: 12, textAlign: "center" },
-  errorTitle: { color: "#999", fontSize: 16, fontWeight: "600", marginTop: 8, textAlign: "center", paddingHorizontal: 32 },
-  actionBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: C.green, borderRadius: 24, paddingHorizontal: 20, paddingVertical: 10 },
-  actionBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  // Gradient scrims
+  gradTop: { position: "absolute", top: 0, left: 0, right: 0, height: 120 },
+  gradBottom: { position: "absolute", bottom: 0, left: 0, right: 0, height: 150 },
+  topBarGrad: { position: "absolute", top: 0, left: 0, right: 0, height: 110 },
 
-  pickerOverlay: { ...StyleSheet.absoluteFillObject, flexDirection: "row", zIndex: 10 },
-  pickerBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)" },
-  pickerSheet: { width: "60%", backgroundColor: "#111", paddingHorizontal: 16, paddingBottom: 16, borderLeftWidth: 1, borderLeftColor: "#333" },
-  pickerHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
-  pickerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  pickerSub: { color: "#888", fontSize: 12, marginTop: 2 },
-  pickerScroll: { flex: 1 },
-  pickerContent: { gap: 6, paddingBottom: 20 },
+  // Controls overlay
+  controlsOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between", zIndex: 3 },
+  bufferOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", zIndex: 2 },
 
-  serverItem: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.04)" },
-  serverItemActive: { backgroundColor: "rgba(76,175,80,0.15)", borderWidth: 1, borderColor: "rgba(76,175,80,0.4)" },
-  statusDot: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
-  serverInfo: { flex: 1 },
-  serverName: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  serverNameActive: { color: C.green },
-  serverMeta: { color: "#888", fontSize: 11, marginTop: 2 },
-  activeBadge: { backgroundColor: C.green, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },
-  activeBadgeText: { color: "#fff", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
-
-  // Custom player controls
-  playerWrap: { flex: 1 },
-  controlsOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between" },
+  // Top bar
   ctrlTopBar: {
     flexDirection: "row", alignItems: "center", gap: 10,
-    paddingHorizontal: 16, paddingBottom: 10,
-    backgroundColor: "rgba(0,0,0,0.55)",
+    paddingHorizontal: 18, paddingBottom: 12,
   },
-  ctrlCenter: {
-    flex: 1, alignItems: "center", justifyContent: "center",
-  },
-  ctrlBottom: {
-    paddingHorizontal: 20, paddingTop: 10, gap: 8,
-    backgroundColor: "rgba(0,0,0,0.65)",
-  },
-  seekRow: {
-    flexDirection: "row", alignItems: "center", gap: 10,
-  },
-  timeText: {
-    color: "rgba(255,255,255,0.8)", fontSize: 11, fontWeight: "600",
-    minWidth: 38, textAlign: "center",
-  },
-  seekBarWrap: {
-    flex: 1, height: 28, justifyContent: "center",
-  },
-  seekTrack: {
-    height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.2)",
-  },
-  seekFill: {
-    height: 4, borderRadius: 2, backgroundColor: C.green,
-  },
-  seekTouchArea: {
-    ...StyleSheet.absoluteFillObject, height: 30, top: -13,
-  },
-  ctrlRow: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    paddingBottom: 4,
-  },
-  ctrlBtn: {
+  iconBtn: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
     alignItems: "center", justifyContent: "center",
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: "rgba(255,255,255,0.08)",
   },
-  ctrlBtnLabel: {
-    color: "rgba(255,255,255,0.6)", fontSize: 9, fontWeight: "700",
-    marginTop: -4,
+  iconBtnAccent: {
+    backgroundColor: "rgba(255,45,85,0.25)",
+    borderColor: "rgba(255,45,85,0.5)",
   },
+  speedBtn: {
+    height: 38, minWidth: 48, borderRadius: 19, paddingHorizontal: 10,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center", justifyContent: "center",
+  },
+  speedBtnText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.3 },
+  titleArea: { flex: 1, gap: 3 },
+  titleText: {
+    color: "#fff", fontSize: 15, fontWeight: "700", fontFamily: "Outfit_700Bold",
+    textShadowColor: "rgba(0,0,0,0.6)", textShadowRadius: 6,
+  },
+  metaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  directPill: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    backgroundColor: "rgba(0,230,118,0.15)", borderWidth: 1, borderColor: "rgba(0,230,118,0.35)",
+    borderRadius: 100, paddingHorizontal: 8, paddingVertical: 2,
+  },
+  directPillText: { color: "#00E676", fontSize: 8, fontWeight: "800", letterSpacing: 1, fontFamily: "Outfit_800ExtraBold" },
+  liveDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#00E676" },
+  serverLabelText: { color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "DMSans_500Medium", flexShrink: 1 },
+
+  // Center cluster
+  centerCluster: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 44,
+  },
+  playBtn: {
+    width: 76, height: 76, borderRadius: 38,
+    backgroundColor: "rgba(255,45,85,0.9)",
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 24, elevation: 10,
+  },
+  skipBtn: {
+    width: 54, height: 54, borderRadius: 27,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.14)",
+    alignItems: "center", justifyContent: "center",
+  },
+  skipLabel: { color: "rgba(255,255,255,0.7)", fontSize: 9, fontWeight: "800", marginTop: -3, fontFamily: "Outfit_800ExtraBold" },
+
+  // Bottom area
+  ctrlBottom: { paddingHorizontal: 20, gap: 10 },
+  seekRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  timeText: {
+    color: "#fff", fontSize: 12, fontWeight: "700", minWidth: 42, textAlign: "center",
+    fontFamily: "Outfit_700Bold", fontVariant: ["tabular-nums"],
+  },
+  timeTextDur: {
+    color: "rgba(255,255,255,0.5)", fontSize: 12, fontWeight: "600", minWidth: 42, textAlign: "center",
+    fontFamily: "Outfit_600SemiBold", fontVariant: ["tabular-nums"],
+  },
+  seekBarWrap: { flex: 1, height: 32, justifyContent: "center" },
+  seekTrack: { height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.18)", overflow: "hidden" },
+  seekFill: { height: 4, borderRadius: 2, backgroundColor: C.accent },
+  seekThumb: {
+    position: "absolute", top: 9, marginLeft: -7,
+    width: 14, height: 14, borderRadius: 7,
+    backgroundColor: C.accent, borderWidth: 2, borderColor: "#fff",
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 8, elevation: 4,
+  },
+  seekTouchArea: { ...StyleSheet.absoluteFillObject },
+  ctrlRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  chipBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 100, paddingHorizontal: 14, paddingVertical: 8,
+  },
+  chipBtnText: { color: "#fff", fontSize: 12, fontWeight: "700", fontFamily: "Outfit_600SemiBold" },
+  chipBtnAccent: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: C.accent,
+    borderRadius: 100, paddingHorizontal: 16, paddingVertical: 8,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 14, elevation: 6,
+  },
+  chipBtnAccentText: { color: "#fff", fontSize: 12, fontWeight: "800", fontFamily: "Outfit_700Bold" },
+
+  // Server picker
+  pickerOverlay: { ...StyleSheet.absoluteFillObject, flexDirection: "row", zIndex: 10 },
+  pickerBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.65)" },
+  pickerSheet: {
+    width: "58%", backgroundColor: "#0B0C1E",
+    paddingHorizontal: 16, paddingBottom: 16,
+    borderTopLeftRadius: 24, borderBottomLeftRadius: 24,
+    borderLeftWidth: 1, borderColor: "rgba(255,255,255,0.08)",
+  },
+  pickerHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+  pickerHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
+  pickerHeaderIcon: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: "rgba(255,45,85,0.14)", borderWidth: 1, borderColor: "rgba(255,45,85,0.3)",
+    alignItems: "center", justifyContent: "center",
+  },
+  pickerTitle: { color: "#fff", fontSize: 17, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  pickerSub: { color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 1, fontFamily: "DMSans_500Medium" },
+  pickerScroll: { flex: 1 },
+  pickerContent: { gap: 7, paddingBottom: 20 },
+
+  serverItem: {
+    flexDirection: "row", alignItems: "center", gap: 11,
+    paddingVertical: 10, paddingHorizontal: 11, borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.05)",
+  },
+  serverItemActive: {
+    backgroundColor: "rgba(255,45,85,0.12)",
+    borderColor: "rgba(255,45,85,0.45)",
+  },
+  serverAvatar: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
+    alignItems: "center", justifyContent: "center",
+  },
+  serverAvatarText: { color: "rgba(255,255,255,0.85)", fontSize: 14, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  serverStatusDot: {
+    position: "absolute", bottom: -1, right: -1,
+    width: 10, height: 10, borderRadius: 5,
+    borderWidth: 2, borderColor: "#0B0C1E",
+  },
+  serverInfo: { flex: 1 },
+  serverName: { color: "#fff", fontSize: 13, fontWeight: "700", fontFamily: "Outfit_600SemiBold" },
+  serverNameActive: { color: C.accent },
+  serverMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
+  serverMetaLabel: { fontSize: 10, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  serverMeta: { color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "DMSans_500Medium", flexShrink: 1 },
+  activeBadge: {
+    flexDirection: "row", alignItems: "center", gap: 3,
+    backgroundColor: C.accent, borderRadius: 100, paddingHorizontal: 8, paddingVertical: 3,
+  },
+  activeBadgeText: { color: "#fff", fontSize: 8, fontWeight: "800", letterSpacing: 0.8, fontFamily: "Outfit_800ExtraBold" },
 });

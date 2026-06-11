@@ -57,7 +57,7 @@ export async function checkForOtaUpdate(): Promise<UpdateInfo | null> {
 
     return {
       type: "ota",
-      version: check.manifest?.runtimeVersion || null,
+      version: (check.manifest as { runtimeVersion?: string } | undefined)?.runtimeVersion ?? undefined,
     };
   } catch {
     return null;

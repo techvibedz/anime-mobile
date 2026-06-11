@@ -3,9 +3,9 @@ import { View } from "react-native";
 import { _claimNext, _hasPending, _resolve, _reject, _subscribe, ScrapeJob } from "./bus";
 
 // Number of concurrent WebView slots. Each slot can run one scrape job at a
-// time. 3 lets the parallel video-server scrape (wit+up4 = 2 slots) run while
-// a third slot starts resolving the first embed, so playback begins sooner.
-const SLOT_COUNT = 3;
+// time. 4 lets the parallel video-server scrape (wit+up4 = 2 slots) run while
+// two more slots resolve the first embeds, so playback begins sooner.
+const SLOT_COUNT = 4;
 
 import { WebView, WebViewMessageEvent } from "react-native-webview";
 

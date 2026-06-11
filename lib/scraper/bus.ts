@@ -15,6 +15,9 @@ export type ScrapeJob = {
   timeoutMs: number;
   // User-facing video extraction jumps ahead of background scrape jobs.
   priority?: boolean;
+  // Inject scripts into every frame (not just the main one). Used by video
+  // extraction so nested player iframes (videa intermediaries) get hooked.
+  allFrames?: boolean;
 };
 
 type Pending = {

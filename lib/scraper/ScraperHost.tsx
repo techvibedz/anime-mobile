@@ -59,6 +59,18 @@ function ScraperSlot({
       sharedCookiesEnabled
       cacheEnabled
       incognito={false}
+      // Without this, Android WebView blocks JS-initiated play() — the embed
+      // player never starts, so the fetch/XHR/video hook never sees the real
+      // media URL (videa & mp4upload resolve via that hook).
+      mediaPlaybackRequiresUserAction={false}
+      allowsInlineMediaPlayback
+      setSupportMultipleWindows={false}
+      // Video-extraction jobs inject into ALL frames: some providers (videa
+      // via vidvaita/vidit) nest the real player inside an iframe that the
+      // main-frame script can't reach. Scrape jobs stay main-frame-only so a
+      // stray ad iframe can't reject a job that the page itself would resolve.
+      injectedJavaScriptForMainFrameOnly={!job.allFrames}
+      injectedJavaScriptBeforeContentLoadedForMainFrameOnly={!job.allFrames}
       injectedJavaScriptBeforeContentLoaded={job.injectBefore}
       injectedJavaScript={job.injectAfter}
       onMessage={handleMessage}

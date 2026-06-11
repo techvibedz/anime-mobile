@@ -161,5 +161,6 @@ export async function extractVideoUrl(embedUrl: string, priority = false) {
     injectAfter: COLLECT_VIDEO_AFTER,
     timeoutMs: 30000,
     priority,
+    allFrames: true,
   }) as Promise<{ url: string }>;
 }

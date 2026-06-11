@@ -680,8 +680,15 @@ export default function WatchScreen() {
       if (fastQueue.length === 0) return;
       if (fastActive >= 2) return;
       const idx = fastQueue.shift()!;
-      fastActive++;
       const srv = servers[idx].server;
+      // mega.nz / vk decrypt or stream via in-page MediaSource — no direct
+      // URL ever exists, so don't burn a WebView slot trying to extract one.
+      if (srv.provider === "mega" || srv.provider === "vk") {
+        setServers((p) => p.map((s, i) => (i === idx ? { ...s, status: "webview" } : s)));
+        fastNext();
+        return;
+      }
+      fastActive++;
       const url = getIframeUrl(srv);
       if (!url) {
         setServers((p) => p.map((s, i) => (i === idx ? { ...s, status: "failed" } : s)));
@@ -761,6 +768,15 @@ export default function WatchScreen() {
     }
 
     const idx = activeIdx;
+
+    // mega.nz / vk never resolve to a direct URL (mega decrypts AES chunks
+    // in-page via MediaSource) — selecting them used to stall ~30s in a
+    // doomed extraction before falling back. Go straight to the embed.
+    if (srv.provider === "mega" || srv.provider === "vk") {
+      setServers((p) => p.map((s, i) => i === idx ? { ...s, status: "webview" } : s));
+      return;
+    }
+
     setServers((p) => p.map((s, i) => i === idx ? { ...s, status: "resolving" } : s));
 
     // Try server-side HTTP resolution to get direct video URL.
@@ -829,13 +845,13 @@ export default function WatchScreen() {
     }
   }, [isPlaying, isWebView, player]);
 
-  const skipForward90 = useCallback(() => {
+  const skipForward85 = useCallback(() => {
     if (isPlaying && player) {
-      try { player.currentTime = Math.min(player.currentTime + 90, player.duration || Infinity); } catch {}
+      try { player.currentTime = Math.min(player.currentTime + 85, player.duration || Infinity); } catch {}
     } else if (isWebView) {
       webViewRef.current?.injectJavaScript(`
-        try{var v=document.querySelector('video');if(v)v.currentTime=Math.min(v.duration,v.currentTime+90);
-        else if(typeof jwplayer==='function'){var p=jwplayer();if(p)p.seek(Math.min(p.getDuration(),p.getPosition()+90));}
+        try{var v=document.querySelector('video');if(v)v.currentTime=Math.min(v.duration,v.currentTime+85);
+        else if(typeof jwplayer==='function'){var p=jwplayer();if(p)p.seek(Math.min(p.getDuration(),p.getPosition()+85));}
         }catch(e){}
       `);
     }
@@ -1205,9 +1221,9 @@ export default function WatchScreen() {
             </View>
 
             <View style={ss.ctrlRow}>
-              <Pressable onPress={skipForward90} style={ss.chipBtn}>
+              <Pressable onPress={skipForward85} style={ss.chipBtn}>
                 <Ionicons name="play-forward-circle-outline" size={16} color={C.white} />
-                <Text style={ss.chipBtnText}>+90s</Text>
+                <Text style={ss.chipBtnText}>+85s</Text>
               </Pressable>
 
               <View style={{ flexDirection: "row", gap: 8 }}>

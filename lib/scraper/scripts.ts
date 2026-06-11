@@ -719,8 +719,15 @@ export const HOOK_VIDEO_BEFORE = `
   setInterval(function () {
     document.querySelectorAll('video').forEach(function (v) {
       if (v.src) maybeReport(v.src);
+      if (v.currentSrc) maybeReport(v.currentSrc);
       v.querySelectorAll('source').forEach(function (s) { if (s.src) maybeReport(s.src); });
     });
+    // <video> element requests bypass fetch/XHR, but they DO land in the
+    // resource-timing log — scan it so progressive MP4 loads (videa,
+    // mp4upload) are captured even when the src attribute is cleared.
+    try {
+      performance.getEntriesByType('resource').forEach(function (en) { maybeReport(en.name); });
+    } catch (e) {}
   }, 500);
   return true;
 })();
@@ -741,6 +748,13 @@ true;
 // ──────────────────────────────────────────────────────────────
 export const COLLECT_VIDEO_AFTER = `
 (function () {
+  // This script now runs in EVERY frame (allFrames job flag) so providers
+  // that nest the real player in an iframe (videa via vidvaita/vidit) still
+  // get extracted. Subframes may report a found URL but must stay silent on
+  // failure — only the main frame is allowed to fail the job.
+  var isTop = true;
+  try { isTop = (window.top === window.self); } catch (e) { isTop = false; }
+  if (!isTop && /google|doubleclick|facebook|analytics|adservice|popads|pyppo|disqus/i.test(location.host)) return true;
   function send(type, payload) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({type:type}, payload))); } catch (e) {}
   }
@@ -772,8 +786,14 @@ export const COLLECT_VIDEO_AFTER = `
     return p;
   }
   function extractPackedJS(html) {
-    var re = /eval\\s*\\(\\s*function\\s*\\(\\s*p\\s*,\\s*a\\s*,\\s*c\\s*,\\s*k\\s*,\\s*e\\s*,\\s*d\\s*\\)\\s*\\{[^}]+?\\}\\s*\\(\\s*'((?:[^'\\\\]|\\\\.)*)'\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*'(.*?)'\\s*\\.\\s*split\\s*\\(\\s*'\\|'\\s*\\)/;
-    var m = html.match(re);
+    // The packer's function body can't be matched with [^}] — real packer
+    // output nests braces inside it, so the old single-regex approach never
+    // matched (mp4upload/streamwish packed sources silently fell through).
+    // Find the eval head, then match the packed args from there. The last
+    // param is 'd' or 'r' depending on the packer variant.
+    var head = /eval\\s*\\(\\s*function\\s*\\(\\s*p\\s*,\\s*a\\s*,\\s*c\\s*,\\s*k\\s*,\\s*e\\s*,\\s*[dr]\\s*\\)/.exec(html);
+    if (!head) return null;
+    var m = html.slice(head.index).match(/\\}\\s*\\(\\s*'((?:[^'\\\\]|\\\\.)*)'\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*'((?:[^'\\\\]|\\\\.)*)'\\s*\\.\\s*split\\s*\\(\\s*'\\|'\\s*\\)/);
     if (!m) return null;
     try {
       var unpacked = unpack(m[1].replace(/\\\\(.)/g, '$1'), +m[2], +m[3], m[4].split('|'));
@@ -926,7 +946,7 @@ export const COLLECT_VIDEO_AFTER = `
   function fail(reason) {
     if (sent) return;
     sent = true;
-    send('error', { message: reason });
+    if (isTop) send('error', { message: reason });
   }
   // For providers whose CDN ties URLs to per-session tokens (mp4upload,
   // streamwish, voe, …), the LIVE URL the player actually fetches is

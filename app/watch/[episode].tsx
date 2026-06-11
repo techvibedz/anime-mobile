@@ -49,6 +49,26 @@ const PROVIDER_RANK: Record<string, number> = {
   yonaplay: 99,     // blocked server-side
 };
 
+// Providers with PROVEN direct-URL extractors. These must NEVER fall back to
+// the ad-filled embed page: extraction failures are retried, and if a direct
+// URL still can't be produced the server is marked "failed" so auto-advance
+// moves on to the next server. The embed WebView stays reserved for providers
+// that can never resolve a direct URL (mega/vk) or the rarely-working
+// low-rank ones (uqload/share4max/…).
+const DIRECT_ONLY = new Set([
+  "dailymotion",
+  "mp4upload",
+  "streamwish",
+  "videa",
+  "voe",
+  "doodstream",
+  "okru",
+]);
+
+// Where a server should land when direct resolution is exhausted.
+const failStatus = (provider?: string): ServerStatus =>
+  provider && DIRECT_ONLY.has(provider) ? "failed" : "webview";
+
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 0.75];
 
 function qualityScore(name: string): number {
@@ -300,7 +320,8 @@ export default function WatchScreen() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [videoUrl, player]);
 
-  // Auto-fall back to WebView ONLY if the native player never starts.
+  // Self-heal / fallback ONLY if the native player never starts. DIRECT_ONLY
+  // providers re-extract a fresh URL (never the embed); others fall to WebView.
   // Once playback begins (currentTime advances past 0 OR duration > 0), we
   // never trigger the fallback again — otherwise transient buffering /
   // seeking reports a 0 currentTime mid-watch and we'd kick the user out
@@ -328,7 +349,7 @@ export default function WatchScreen() {
       const attempts = retryCountRef.current[idx] ?? 0;
       if (!srv || !embedUrl || attempts >= 2) {
         setServers((p) => p.map((s, i) =>
-          i === idx ? { ...s, status: "webview" as ServerStatus, videoUrl: null } : s));
+          i === idx ? { ...s, status: failStatus(srv?.provider), videoUrl: null } : s));
         return;
       }
       retryCountRef.current[idx] = attempts + 1;
@@ -342,11 +363,11 @@ export default function WatchScreen() {
               i === idx ? { ...s, status: "playing" as ServerStatus, videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
           } else {
             setServers((p) => p.map((s, i) =>
-              i === idx ? { ...s, status: "webview" as ServerStatus } : s));
+              i === idx ? { ...s, status: failStatus(srv.provider) } : s));
           }
         })
         .catch(() => setServers((p) => p.map((s, i) =>
-          i === idx ? { ...s, status: "webview" as ServerStatus } : s)));
+          i === idx ? { ...s, status: failStatus(srv.provider) } : s)));
     };
 
     // Poll for "started playing" every 250ms; once we see motion, lock in.
@@ -373,6 +394,10 @@ export default function WatchScreen() {
       if (cancelled) return;
       try {
         if (!hasStarted && player.duration === 0 && player.currentTime === 0) {
+          // A direct URL that never produced a byte usually means an expired
+          // CDN token — re-extract a fresh one instead of falling back to the
+          // embed page (DIRECT_ONLY providers must stay in the custom player).
+          if (DIRECT_ONLY.has(prov || "")) { reResolve(); return; }
           setServers((p) => p.map((srv, i) =>
             i === idx ? { ...srv, status: "webview" as ServerStatus, videoUrl: null } : srv
           ));
@@ -829,11 +854,18 @@ export default function WatchScreen() {
         fastActive--; fastNext();
         return;
       }
-      resolveVideo(url, srv.provider)
-        .then((r) => updateServer(idx, r))
-        .catch(() => setServers((p) => p.map((s, i) =>
-          i === idx ? { ...s, status: "webview" } : s)))
-        .finally(() => { fastActive--; fastNext(); });
+      // DIRECT_ONLY providers get a second extraction attempt — a single
+      // scrape timeout must not strand a direct-capable server on the embed.
+      const fastAttempts = DIRECT_ONLY.has(srv.provider) ? 2 : 1;
+      (async () => {
+        for (let a = 0; a < fastAttempts; a++) {
+          const r = await resolveVideo(url, srv.provider).catch(() => null);
+          if (r?.success && r.data?.videoUrl) { updateServer(idx, r); return; }
+          if (a < fastAttempts - 1) await new Promise((res) => setTimeout(res, 2000));
+        }
+        setServers((p) => p.map((s, i) =>
+          i === idx ? { ...s, status: failStatus(srv.provider) } : s));
+      })().finally(() => { fastActive--; fastNext(); });
     };
     fastNext(); fastNext();
 
@@ -884,7 +916,7 @@ export default function WatchScreen() {
         i === idx ? { ...s, status: "playing", videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
     } else {
       setServers((p) => p.map((s, i) =>
-        i === idx ? { ...s, status: "webview" } : s));
+        i === idx ? { ...s, status: failStatus(s.server.provider) } : s));
     }
   }, [servers]);
 
@@ -913,31 +945,25 @@ export default function WatchScreen() {
 
     setServers((p) => p.map((s, i) => i === idx ? { ...s, status: "resolving" } : s));
 
-    // Try server-side HTTP resolution to get direct video URL.
+    // Try in-app extraction to get a direct video URL.
     // priority=true → this user-selected server jumps ahead of any
     // background pre-resolve jobs still in the scraper queue.
-    resolveVideo(url, srv.provider, true)
-      .then((r) => {
-        if (r.success && r.data?.videoUrl) {
+    // DIRECT_ONLY providers retry once before giving up — and when they do
+    // give up they go to "failed" (auto-advance), never the embed page.
+    const attempts = DIRECT_ONLY.has(srv.provider) ? 2 : 1;
+    (async () => {
+      for (let a = 0; a < attempts; a++) {
+        const r = await resolveVideo(url, srv.provider, true).catch(() => null);
+        if (r?.success && r.data?.videoUrl) {
           setServers((p) => p.map((s, i) =>
             i === idx ? { ...s, status: "playing", videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
-        } else if (srv.provider === "streamwish") {
-          setServers((p) => p.map((s, i) =>
-            i === idx ? { ...s, status: "failed" } : s));
-        } else {
-          setServers((p) => p.map((s, i) =>
-            i === idx ? { ...s, status: "webview" } : s));
+          return;
         }
-      })
-      .catch(() => {
-        if (srv.provider === "streamwish") {
-          setServers((p) => p.map((s, i) =>
-            i === idx ? { ...s, status: "failed" } : s));
-        } else {
-          setServers((p) => p.map((s, i) =>
-            i === idx ? { ...s, status: "webview" } : s));
-        }
-      });
+        if (a < attempts - 1) await new Promise((res) => setTimeout(res, 1500));
+      }
+      setServers((p) => p.map((s, i) =>
+        i === idx ? { ...s, status: failStatus(srv.provider) } : s));
+    })();
   }, [activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null]);
 
   // Auto-advance to next server on failure
@@ -950,6 +976,11 @@ export default function WatchScreen() {
   }, [servers, activeIdx]);
 
   const selectServer = useCallback((idx: number) => {
+    // A failed server gets a fresh chance when the user explicitly taps it —
+    // reset to idle so the resolve effect re-runs the extraction.
+    retryCountRef.current[idx] = 0;
+    setServers((p) => p.map((s, i) =>
+      i === idx && s.status === "failed" ? { ...s, status: "idle", videoUrl: null } : s));
     setActiveIdx(idx);
     setPickerOpen(false);
   }, []);

@@ -94,7 +94,7 @@ export default function MyListScreen() {
           keyExtractor={(item) => item.href}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: S.paddingContent, paddingBottom: insets.bottom + 100 }}
-          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
           renderItem={({ item }) => (
             <Pressable
               onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
@@ -113,18 +113,24 @@ export default function MyListScreen() {
               </View>
               {/* Info */}
               <View style={ss.rowInfo}>
-                <Text style={ss.rowTitle} numberOfLines={1}>{item.title}</Text>
+                <Text style={ss.rowTitle} numberOfLines={2}>{item.title}</Text>
                 <View style={ss.rowMeta}>
-                  <Ionicons
-                    name={item.list === "watching" ? "play-circle" : "bookmark"}
-                    size={11}
-                    color={item.list === "watching" ? C.green : C.accent}
-                  />
-                  <Text style={[ss.rowMetaText, { color: item.list === "watching" ? C.green : C.accent }]}>
-                    {item.list === "watching" ? t.currentlyWatching : t.planToWatch}
-                  </Text>
+                  <View style={[ss.listTag, { backgroundColor: item.list === "watching" ? "rgba(0,230,118,0.12)" : C.accentSoft }]}>
+                    <Ionicons
+                      name={item.list === "watching" ? "play-circle" : "bookmark"}
+                      size={11}
+                      color={item.list === "watching" ? C.success : C.accent}
+                    />
+                    <Text style={[ss.rowMetaText, { color: item.list === "watching" ? C.success : C.accent }]}>
+                      {item.list === "watching" ? t.currentlyWatching : t.planToWatch}
+                    </Text>
+                  </View>
                 </View>
               </View>
+              {/* Remove */}
+              <Pressable onPress={() => handleRemove(item.href)} hitSlop={8} style={ss.removeBtn}>
+                <Ionicons name="trash-outline" size={15} color={C.textMuted} />
+              </Pressable>
               {/* Play button */}
               <View style={ss.playCircle}>
                 <Ionicons name="play" size={14} color={C.accent} />
@@ -194,20 +200,30 @@ const ss = StyleSheet.create({
   // List rows
   listRow: {
     flexDirection: "row", alignItems: "center", gap: 14, padding: 10,
-    borderRadius: R.lg, backgroundColor: "transparent",
+    borderRadius: R.xl, backgroundColor: C.surfaceCard,
+    borderWidth: 1, borderColor: C.border,
   },
   poster: {
     width: 56, height: 80, borderRadius: R.default, overflow: "hidden",
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     ...ELEVATION_CARD,
   },
-  rowInfo: { flex: 1, gap: 4 },
+  rowInfo: { flex: 1, gap: 6 },
   rowTitle: {
-    color: C.text, fontSize: 16, fontWeight: "600",
+    color: C.text, fontSize: 15, fontWeight: "600", lineHeight: 20,
     fontFamily: "Outfit_600SemiBold",
   },
   rowMeta: { flexDirection: "row", alignItems: "center", gap: 4 },
-  rowMetaText: { color: C.textMuted, fontSize: 10, fontFamily: "DMSans_500Medium" },
+  listTag: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 3,
+  },
+  rowMetaText: { color: C.textMuted, fontSize: 10, fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
+  removeBtn: {
+    width: 32, height: 32, borderRadius: R.circle,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    alignItems: "center", justifyContent: "center",
+  },
   playCircle: {
     width: 36, height: 36, borderRadius: R.circle,
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,

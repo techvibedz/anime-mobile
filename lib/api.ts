@@ -7,6 +7,7 @@ import {
   scrapeAnime4upHome,
   scrapeEpisodesPage,
   scrapeSearch,
+  scrapeSearchUp4,
   scrapeRecent,
   scrapeGenre,
   scrapeAllAnime,
@@ -27,7 +28,7 @@ const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const RECENT_CACHE_PREFIX = "@recent_v1:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v1:";
+const SERVERS_CACHE_PREFIX = "@servers_v2:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
 
@@ -343,7 +344,7 @@ async function getCrossSourceUrl(
   for (const v of searchVariants(title)) {
     for (let attempt = 0; attempt < 3 && !url; attempt++) {
       url = await findCrossSourceUrl(v, primary).catch(() => null);
-      if (!url && attempt < 2) await new Promise((r) => setTimeout(r, 4000));
+      if (!url && attempt < 2) await new Promise((r) => setTimeout(r, 2000));
     }
     if (url) break;
   }
@@ -494,16 +495,26 @@ type VideoServersPayload = {
   };
 };
 
-export async function fetchVideoServers(episodeUrl: string, url4up?: string): Promise<VideoServersPayload> {
+export async function fetchVideoServers(episodeUrl: string, url4up?: string, force = false): Promise<VideoServersPayload> {
   // Embed URLs on the episode page are stable for hours, so SWR-cache the
   // server LIST (the per-server video URL is still resolved live, since
   // those carry short-lived tokens). Re-opening an episode is instant.
-  return swr(
-    `${SERVERS_CACHE_PREFIX}${episodeUrl}|${url4up || ""}`,
-    SERVERS_CACHE_TTL,
-    () => fetchVideoServersFresh(episodeUrl, url4up),
-    (d) => d.data.servers.length > 0,
-  );
+  const primaryIsUp4 = /anime4up/i.test(episodeUrl);
+  const key = `${SERVERS_CACHE_PREFIX}${episodeUrl}|${url4up || ""}`;
+  // When a cross-source URL was requested, only cache COMPLETE results.
+  // Caching a wit-only list (because the anime4up scrape timed out once)
+  // used to hide the anime4up servers for the whole 6h TTL.
+  const valid = (d: VideoServersPayload) =>
+    d.data.servers.length > 0 &&
+    (!url4up || primaryIsUp4 || d.data.servers.some((s) => s.source === "anime4up"));
+  if (force) {
+    // User-requested refresh: skip the cache entirely and re-scrape, so
+    // servers that were missing from a cached/partial list can show up.
+    const data = await fetchVideoServersFresh(episodeUrl, url4up);
+    if (valid(data)) void writeCache(key, data);
+    return data;
+  }
+  return swr(key, SERVERS_CACHE_TTL, () => fetchVideoServersFresh(episodeUrl, url4up), valid);
 }
 
 async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Promise<VideoServersPayload> {
@@ -585,6 +596,17 @@ async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Prom
 
 /* ── /search ────────────────────────────────── */
 
+function toSearchResult(it: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis?: string | null }): SearchResult {
+  return {
+    title: it.title,
+    href: it.href,
+    image: imgOrEmpty(it.image),
+    type: it.type ?? undefined,
+    status: it.status ?? undefined,
+    synopsis: it.synopsis ?? undefined,
+  };
+}
+
 export async function searchAnime(query: string): Promise<{
   success: boolean;
   data: { query: string; totalResults: number; results: SearchResult[] };
@@ -593,15 +615,30 @@ export async function searchAnime(query: string): Promise<{
     SEARCH_CACHE_PREFIX + query.toLowerCase().trim(),
     SEARCH_CACHE_TTL,
     async () => {
-      const r = await scrapeSearch(query);
-      const results: SearchResult[] = r.results.map((it) => ({
-        title: it.title,
-        href: it.href,
-        image: imgOrEmpty(it.image),
-        type: it.type ?? undefined,
-        status: it.status ?? undefined,
-        synopsis: it.synopsis ?? undefined,
-      }));
+      // Search BOTH sources in parallel (each gets its own WebView slot).
+      // witanime is the primary; don't make the user wait on a slow/CF-cold
+      // anime4up scrape — once the primary lands, give the secondary a short
+      // grace window and merge whatever arrived by then.
+      const witP = scrapeSearch(query).catch(() => null);
+      const up4P = scrapeSearchUp4(query).catch(() => null);
+      const wit = await witP;
+      const up4 = await Promise.race([
+        up4P,
+        new Promise<null>((r) => setTimeout(() => r(null), wit?.results.length ? 5000 : 20000)),
+      ]);
+
+      const results: SearchResult[] = (wit?.results ?? []).map(toSearchResult);
+      if (up4?.results?.length) {
+        // Dedupe across sources by normalised title so the same show
+        // doesn't appear twice; anime4up-only titles get appended.
+        const seen = new Set(results.map((r) => norm(r.title)));
+        for (const it of up4.results) {
+          const k = norm(it.title);
+          if (k && seen.has(k)) continue;
+          seen.add(k);
+          results.push(toSearchResult(it));
+        }
+      }
       return { success: true, data: { query, totalResults: results.length, results } };
     },
     (d) => d.data.results.length > 0,

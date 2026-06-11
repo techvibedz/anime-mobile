@@ -702,7 +702,11 @@ export const HOOK_VIDEO_BEFORE = `
 
   function isVideoUrl(u) {
     if (typeof u !== 'string') return false;
-    return /\\.(m3u8|mp4)(\\?|$)/i.test(u);
+    if (/\\.(m3u8|mp4)(\\?|$)/i.test(u)) return true;
+    // videa.hu streams carry NO file extension — the path is
+    // /static/<quality>/<numeric id>?md5=...&expires=... — so the extension
+    // check above never matches them.
+    return /videa\\.hu\\/static\\/.*[?&]md5=/i.test(u);
   }
   function isDecoy(u) {
     var lu = (u || '').toLowerCase();
@@ -836,7 +840,7 @@ export const COLLECT_VIDEO_AFTER = `
     return m ? m[1] : null;
   }
   function extractGeneric(text) {
-    var patterns = [/https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*/gi, /https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*/gi];
+    var patterns = [/https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*/gi, /https?:\\/\\/[^"'\\s<>]+\\.mp4[^"'\\s<>]*/gi, /https?:\\/\\/[^"'\\s<>]*videa\\.hu\\/static\\/[^"'\\s<>]*[?&]md5=[^"'\\s<>]*/gi];
     for (var i = 0; i < patterns.length; i++) {
       var ms = text.match(patterns[i]);
       if (ms) {
@@ -912,6 +916,12 @@ export const COLLECT_VIDEO_AFTER = `
   async function tryDailymotion() {
     try {
       var m = location.href.match(/(?:dailymotion\\.com\\/(?:embed\\/)?video\\/|dai\\.ly\\/)([a-zA-Z0-9]+)/);
+      // www.dailymotion.com/embed/video/<id> now 301s to
+      // geo.dailymotion.com/player.html?video=<id> — the path regex above
+      // never matches that shape, so also accept a ?video= query param.
+      if (!m && /dailymotion/i.test(location.host)) {
+        m = location.href.match(/[?&]video=([a-zA-Z0-9]+)/);
+      }
       if (!m) return null;
       var resp = await fetch('https://www.dailymotion.com/player/metadata/video/' + m[1], { credentials: 'omit' });
       var data = await resp.json();
@@ -941,15 +951,27 @@ export const COLLECT_VIDEO_AFTER = `
     var fr = document.querySelectorAll('iframe');
     for (var i = 0; i < fr.length; i++) {
       var src = (fr[i].src || fr[i].getAttribute('data-src') || '').trim();
+      if (src.indexOf('//') === 0) src = 'https:' + src;
       if (src.indexOf('http') !== 0) continue;
       if (src === location.href) continue;
-      if (/videa\\.|videakid|mp4upload|streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|voe\\.|dood|ds2play|ds2video|vidply|all3do|doply|dsvplay|uqload|ok\\.ru|rubyvidhub|streamruby|share4max|megamax/i.test(src)) return src;
+      if (/videa\\.|videakid|mp4upload|streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|voe\\.|dood|ds2play|ds2video|vidply|all3do|doply|dsvplay|uqload|ok\\.ru|rubyvidhub|streamruby|share4max|megamax|dailymotion|dai\\.ly/i.test(src)) return src;
     }
     return null;
   }
-  function triggerPlay() {
+  function triggerPlay(safeOnly) {
+    // flowplayer (videa.hu) exposes a global API — far more reliable than
+    // clicking its overlay, which sometimes sits under an ad layer.
     try {
-      var sels = ['.jw-icon-display', '.vjs-big-play-button', '.fp-ui', '.fp-play', '.plyr__control--overlaid', '[class*="play"][class*="btn"]', 'button[aria-label*="lay" i]', '.play', 'button'];
+      if (typeof flowplayer === 'function') {
+        var fp = flowplayer();
+        if (fp && fp.play) fp.play();
+      }
+    } catch (e) {}
+    try {
+      var sels = ['.jw-icon-display', '.vjs-big-play-button', '.fp-ui', '.fp-play', '.plyr__control--overlaid', '[class*="play"][class*="btn"]', 'button[aria-label*="lay" i]'];
+      // The catch-all selectors can hit ad overlays / popunder triggers on
+      // shell pages — only use them when the host is a known player.
+      if (!safeOnly) { sels.push('.play'); sels.push('button'); }
       for (var i = 0; i < sels.length; i++) {
         var el = document.querySelector(sels[i]);
         if (el) { try { el.click(); return; } catch (e) {} }
@@ -983,9 +1005,27 @@ export const COLLECT_VIDEO_AFTER = `
   var isTokenizedHost = /mp4upload|streamwish|hgcloud|wishfast|wishembed|jwembed|voe\\.sx|voe\\./i.test(location.host);
   var isDoodHost = /dood|ds2play|ds2video|d0o0d|do0od|d000d|vidply|all3do|doply|dsvplay|d-s\\.io/i.test(location.host);
   var isOkruHost = /ok\\.ru|odnoklassniki/i.test(location.host);
+  // Intermediary shells (vidvaita/vidit wrap videa.hu) never serve media
+  // themselves — the real player sits in a nested cross-origin iframe that
+  // Android can't inject into. Their HTML often contains decoy mp4 strings
+  // too, so on these hosts we skip extraction entirely and hop ASAP.
+  var isIntermediaryHost = /vidvaita|vidit|videakid|yonaplay/i.test(location.host) && !/videa\\./i.test(location.host);
 
   (async function run() {
     var start = Date.now();
+
+    // 0) Intermediary shells: hop into the nested player iframe the moment
+    //    it exists (waiting the generic 2.5s here used to eat most of the
+    //    extraction budget, and a junk HTML match could pre-empt the hop).
+    if (isTop && isIntermediaryHost) {
+      for (var w = 0; w < 24; w++) {
+        var inner0 = findPlayerIframe();
+        if (inner0) { sent = true; location.replace(inner0); return; }
+        // Some shells only create the iframe after a first interaction.
+        if (w === 6) triggerPlay(true);
+        await new Promise(function (r) { setTimeout(r, 250); });
+      }
+    }
 
     // 1) Provider metadata fast paths
     var dm = await tryDailymotion();
@@ -1000,9 +1040,9 @@ export const COLLECT_VIDEO_AFTER = `
     }
 
     // 2) Kick the player so it issues its real media fetches.
-    triggerPlay();
+    triggerPlay(isIntermediaryHost);
     await new Promise(function (r) { setTimeout(r, 350); });
-    triggerPlay();
+    triggerPlay(isIntermediaryHost);
 
     // 3) Unified fast poll. The hook (the URL the player actually fetches)
     //    is the most reliable for tokenized CDNs, but waiting only on it is
@@ -1027,7 +1067,7 @@ export const COLLECT_VIDEO_AFTER = `
         if (dd2) return done(dd2);
       }
 
-      if (!htmlUrl) {
+      if (!htmlUrl && !isIntermediaryHost) {
         var found = extractFromHtml(document.documentElement.outerHTML || '');
         if (found && !isDecoy(found)) {
           if (!isTokenizedHost) return done(found);
@@ -1045,7 +1085,7 @@ export const COLLECT_VIDEO_AFTER = `
         if (inner) { sent = true; location.replace(inner); return; }
       }
 
-      if (Date.now() - lastTrigger > 1600) { triggerPlay(); lastTrigger = Date.now(); }
+      if (Date.now() - lastTrigger > 1600) { triggerPlay(isIntermediaryHost); lastTrigger = Date.now(); }
       await new Promise(function (r) { setTimeout(r, 250); });
     }
 

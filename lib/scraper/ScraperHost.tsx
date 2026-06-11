@@ -80,8 +80,16 @@ function ScraperSlot({
         onDone();
       }}
       onHttpError={(e) => {
+        // Cloudflare answers the FIRST main-frame request of a challenge
+        // with 403/503 — the WebView then solves it and reloads on its own.
+        // Rejecting on those codes kills jobs that would succeed seconds
+        // later (this was why anime4up servers only appeared when CF
+        // cookies were already warm). Let the injected _waitFor / the job
+        // timeout decide instead. 429 is likewise transient.
+        const sc = e.nativeEvent.statusCode;
+        if (sc === 403 || sc === 503 || sc === 429) return;
         if (timerRef.current) clearTimeout(timerRef.current);
-        _reject(job.id, `HTTP ${e.nativeEvent.statusCode}`);
+        _reject(job.id, `HTTP ${sc}`);
         onDone();
       }}
       style={{ width: 1, height: 1 }}

@@ -102,10 +102,12 @@ export default function SeeAllScreen() {
         <Pressable onPress={() => router.back()} style={s.backBtn}>
           <Ionicons name={I18nManager.isRTL ? "chevron-forward" : "chevron-back"} size={22} color={C.white} />
         </Pressable>
-        <Text style={s.heading}>
+        <Text style={s.heading} numberOfLines={1}>
           {title ? decodeURIComponent(title) : t.seeAllShort}
         </Text>
-        <Text style={s.count}>{items.length}</Text>
+        <View style={s.countPill}>
+          <Text style={s.count}>{items.length}</Text>
+        </View>
       </View>
 
       <FlatList
@@ -227,20 +229,33 @@ const s = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: C.surface,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.glassBorder,
     alignItems: "center",
     justifyContent: "center",
   },
   heading: {
-    color: C.white,
+    color: C.text,
     fontSize: 22,
     fontWeight: "800",
     flex: 1,
+    fontFamily: "Outfit_800ExtraBold",
+    letterSpacing: -0.4,
+  },
+  countPill: {
+    backgroundColor: C.accentSoft,
+    borderWidth: 1,
+    borderColor: C.borderAccent,
+    borderRadius: R.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
   },
   count: {
-    color: C.textMuted,
-    fontSize: 13,
-    fontWeight: "600",
+    color: C.accent,
+    fontSize: 12,
+    fontWeight: "700",
+    fontFamily: "Outfit_700Bold",
   },
   imageWrap: {
     width: CARD_W,
@@ -248,6 +263,8 @@ const s = StyleSheet.create({
     borderRadius: R.lg,
     overflow: "hidden",
     backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
     ...ELEVATION_CARD,
   },
   image: {
@@ -270,12 +287,13 @@ const s = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
   },
   title: {
-    color: C.white,
-    fontSize: 13,
+    color: C.text,
+    fontSize: 12,
     fontWeight: "600",
-    lineHeight: 18,
+    lineHeight: 16,
     marginTop: 6,
     width: CARD_W,
+    fontFamily: "DMSans_600SemiBold",
   },
   sub: {
     color: C.textMuted,
@@ -283,6 +301,7 @@ const s = StyleSheet.create({
     lineHeight: 14,
     marginTop: 2,
     width: CARD_W,
+    fontFamily: "DMSans_500Medium",
   },
 
   // Episode action modal

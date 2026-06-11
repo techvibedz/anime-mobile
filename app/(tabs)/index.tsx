@@ -261,7 +261,10 @@ export default function HomeScreen() {
         {history.length > 0 && (
           <View style={ss.section}>
             <View style={ss.sectionHeader}>
-              <Text style={ss.sectionTitle}>{t.continueWatching}</Text>
+              <View style={ss.sectionTitleRow}>
+                <View style={ss.sectionTick} />
+                <Text style={ss.sectionTitle}>{t.continueWatching}</Text>
+              </View>
             </View>
             <ScrollView
               horizontal
@@ -289,7 +292,10 @@ export default function HomeScreen() {
           return (
             <View key={section.id} style={ss.section}>
               <View style={ss.sectionHeader}>
-                <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
+                <View style={ss.sectionTitleRow}>
+                  <View style={ss.sectionTick} />
+                  <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
+                </View>
                 <Pressable
                   style={ss.seeAllBtn}
                   onPress={() => {
@@ -335,7 +341,10 @@ export default function HomeScreen() {
         {/* ── Categories ──────────────────────── */}
         <View style={ss.section}>
           <View style={ss.sectionHeader}>
-            <Text style={ss.sectionTitle}>{t.categories}</Text>
+            <View style={ss.sectionTitleRow}>
+              <View style={ss.sectionTick} />
+              <Text style={ss.sectionTitle}>{t.categories}</Text>
+            </View>
           </View>
           <View style={ss.catGrid}>
             {CATEGORIES.map((cat) => (
@@ -716,6 +725,11 @@ const ss = StyleSheet.create({
   sectionHeader: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: PAD, marginBottom: 14,
+  },
+  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 9 },
+  sectionTick: {
+    width: 4, height: 18, borderRadius: 2, backgroundColor: C.accent,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 8,
   },
   sectionTitle: {
     color: C.text, fontSize: 20, fontWeight: "700", fontFamily: "Outfit_700Bold",

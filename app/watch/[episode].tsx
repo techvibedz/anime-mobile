@@ -167,10 +167,15 @@ export default function WatchScreen() {
   const [servers, setServers] = useState<ServerState[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [resumeMs, setResumeMs] = useState(0);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Self-heal bookkeeping: re-resolve attempts per server index, and a
+  // position (ms) to seek to once the re-resolved source starts playing.
+  const retryCountRef = useRef<Record<number, number>>({});
+  const pendingSeekRef = useRef(0);
 
   const active = servers[activeIdx];
   const videoUrl = active?.videoUrl ?? null;
@@ -214,6 +219,11 @@ export default function WatchScreen() {
       } else if (/mycdn\.me|okcdn|ok\.ru/.test(videoHost)) {
         referer = "https://ok.ru/";
         origin = "https://ok.ru";
+      } else if (/dailymotion|dmcdn/.test(videoHost)) {
+        // cdndirector/dmcdn manifests 403 without a dailymotion Referer;
+        // Origin is accepted (verified) so keep it for the CORS-y CDN.
+        referer = "https://www.dailymotion.com/";
+        origin = "https://www.dailymotion.com";
       } else if (/videa/.test(videoHost)) {
         referer = "https://videa.hu/";
         origin = "https://videa.hu";
@@ -275,7 +285,14 @@ export default function WatchScreen() {
   useEffect(() => {
     if (!videoUrl || !player) return;
     const tryPlay = () => {
-      try { player.play(); } catch {}
+      try {
+        // Resume after a self-heal re-resolve (fresh token, same episode).
+        if (pendingSeekRef.current > 0) {
+          player.currentTime = pendingSeekRef.current / 1000;
+          pendingSeekRef.current = 0;
+        }
+        player.play();
+      } catch {}
     };
     tryPlay();
     const t1 = setTimeout(tryPlay, 500);
@@ -293,17 +310,65 @@ export default function WatchScreen() {
     const idx = activeIdx;
     let hasStarted = false;
     let cancelled = false;
+    let lastPosMs = 0;
+    let healing = false;
+
+    // Tokenized CDNs (mp4upload especially) bind URLs to short-lived
+    // tokens, and an edge node occasionally 403s a token that was valid a
+    // minute earlier. ExoPlayer surfaces that as player.status === 'error'.
+    // Instead of dumping the user to the embed (ads), re-extract a FRESH
+    // URL from the embed page and resume where playback stopped.
+    const reResolve = () => {
+      if (healing || cancelled) return;
+      healing = true;
+      clearInterval(watchdog);
+      clearTimeout(failTimer);
+      const srv = servers[idx]?.server;
+      const embedUrl = getIframeUrl(srv);
+      const attempts = retryCountRef.current[idx] ?? 0;
+      if (!srv || !embedUrl || attempts >= 2) {
+        setServers((p) => p.map((s, i) =>
+          i === idx ? { ...s, status: "webview" as ServerStatus, videoUrl: null } : s));
+        return;
+      }
+      retryCountRef.current[idx] = attempts + 1;
+      pendingSeekRef.current = lastPosMs;
+      setServers((p) => p.map((s, i) =>
+        i === idx ? { ...s, status: "resolving" as ServerStatus, videoUrl: null } : s));
+      resolveVideo(embedUrl, srv.provider, true)
+        .then((r) => {
+          if (r.success && r.data?.videoUrl) {
+            setServers((p) => p.map((s, i) =>
+              i === idx ? { ...s, status: "playing" as ServerStatus, videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
+          } else {
+            setServers((p) => p.map((s, i) =>
+              i === idx ? { ...s, status: "webview" as ServerStatus } : s));
+          }
+        })
+        .catch(() => setServers((p) => p.map((s, i) =>
+          i === idx ? { ...s, status: "webview" as ServerStatus } : s)));
+    };
 
     // Poll for "started playing" every 250ms; once we see motion, lock in.
     const watchdog = setInterval(() => {
       try {
-        if (player.duration > 0 || player.currentTime > 0) hasStarted = true;
+        if (player.duration > 0 || player.currentTime > 0) {
+          hasStarted = true;
+          if (player.currentTime > 0) lastPosMs = Math.round(player.currentTime * 1000);
+        }
+      } catch {}
+      try {
+        if ((player.status as string) === "error") reResolve();
       } catch {}
     }, 250);
 
     // 14s ceiling: if currentTime is still exactly 0 AND duration is still
     // 0 AND we never saw any motion, the URL is truly unplayable. Fall back
     // to the embed quickly so the user isn't staring at a dead direct player.
+    // videa/okru CDNs are far away and routinely need >14s to first byte —
+    // bailing early there kicked perfectly good direct URLs to the embed.
+    const prov = servers[idx]?.server.provider;
+    const failMs = prov === "videa" || prov === "okru" ? 22000 : 14000;
     const failTimer = setTimeout(() => {
       if (cancelled) return;
       try {
@@ -313,7 +378,7 @@ export default function WatchScreen() {
           ));
         }
       } catch {}
-    }, 14000);
+    }, failMs);
 
     return () => {
       cancelled = true;
@@ -461,6 +526,8 @@ export default function WatchScreen() {
     setLoading(true);
     setError(null);
     setServers([]);
+    retryCountRef.current = {};
+    pendingSeekRef.current = 0;
     try {
       const url = decodeURIComponent(episode);
       const u4Param = url4up ? decodeURIComponent(url4up) : undefined;
@@ -628,7 +695,10 @@ export default function WatchScreen() {
         }
         if (curNum == null) return;
         const byNum = [...up4.episodes4up].sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
-        setCurrentUp4Href(byNum.find((e) => e.number === curNum)?.href ?? null);
+        // Only overwrite when we actually found a match — loadServers may
+        // have already set a harvested link that this lookup can't see.
+        const cur = byNum.find((e) => e.number === curNum)?.href ?? null;
+        if (cur) setCurrentUp4Href(cur);
         setNextUp4Href(byNum.find((e) => e.number === curNum! + 1)?.href ?? null);
         setPrevUp4Href(byNum.find((e) => e.number === curNum! - 1)?.href ?? null);
       } catch {}
@@ -643,31 +713,83 @@ export default function WatchScreen() {
   // URL, scrape its servers and append them — without disturbing the already
   // playing/selected witanime server.
   const appendedUp4Ref = useRef<string | null>(null);
+  // The url4up param normally merges in the initial combined fetch, but when
+  // the anime4up half of that fetch times out (CF challenge, slow page) the
+  // list comes back wit-only — so the param doubles as an append candidate
+  // here and gets retried until the anime4up servers actually show up.
+  const up4Candidate =
+    currentUp4Href || (url4up ? decodeURIComponent(url4up) : null);
   useEffect(() => {
-    if (!currentUp4Href || url4up) return; // url4up param path already merged them
+    if (!up4Candidate) return;
     if (servers.length === 0) return; // wait for the primary servers first
-    if (appendedUp4Ref.current === currentUp4Href) return; // already appended
     if (servers.some((s) => s.server.source === "anime4up")) return;
-    appendedUp4Ref.current = currentUp4Href;
+    if (appendedUp4Ref.current === up4Candidate) return; // attempt in flight
+    appendedUp4Ref.current = up4Candidate;
 
     let cancelled = false;
     (async () => {
-      const res = await fetchVideoServers(currentUp4Href, undefined).catch(() => null);
-      if (cancelled || !res?.success || !res.data.servers.length) return;
-      setServers((prev) => {
-        const seen = new Set(prev.map((s) => s.server.iframeUrl));
-        const additions: ServerState[] = res.data.servers
-          .filter((s) => s.iframeUrl && !seen.has(s.iframeUrl))
-          .map((s) => ({
-            server: { ...s, source: "anime4up" },
-            status: "idle" as ServerStatus,
-            videoUrl: null,
-          }));
-        return additions.length ? [...prev, ...additions] : prev;
-      });
+      for (let attempt = 0; attempt < 2 && !cancelled; attempt++) {
+        const res = await fetchVideoServers(up4Candidate, undefined).catch(() => null);
+        if (cancelled) return;
+        if (res?.success && res.data.servers.length) {
+          setServers((prev) => {
+            const seen = new Set(prev.map((s) => s.server.iframeUrl));
+            const additions: ServerState[] = res.data.servers
+              .filter((s) => s.iframeUrl && !seen.has(s.iframeUrl))
+              .map((s) => ({
+                server: { ...s, source: "anime4up" },
+                status: "idle" as ServerStatus,
+                videoUrl: null,
+              }));
+            return additions.length ? [...prev, ...additions] : prev;
+          });
+          return;
+        }
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+      }
+      // Both attempts failed — clear the marker so a later candidate change
+      // (or re-render after more state arrives) can try again.
+      if (!cancelled && appendedUp4Ref.current === up4Candidate) {
+        appendedUp4Ref.current = null;
+      }
     })();
     return () => { cancelled = true; };
-  }, [currentUp4Href, url4up, servers.length]);
+  }, [up4Candidate, servers.length]);
+
+  // ── MANUAL REFRESH ──
+  // Re-scrapes the server list with the cache bypassed and APPENDS whatever
+  // is new, without touching the already-resolved/playing servers. Covers
+  // the case where the cached list is partial (e.g. the anime4up scrape
+  // timed out once and its servers never showed up).
+  const refreshServers = useCallback(async () => {
+    if (refreshing || !episode) return;
+    setRefreshing(true);
+    try {
+      const url = decodeURIComponent(episode);
+      const res = await fetchVideoServers(url, up4Candidate || undefined, true).catch(() => null);
+      if (res?.success && res.data.servers.length) {
+        const sorted = [...res.data.servers].sort((a, b) => {
+          const pa = PROVIDER_RANK[a.provider] ?? 5;
+          const pb = PROVIDER_RANK[b.provider] ?? 5;
+          if (pa !== pb) return pa - pb;
+          return qualityScore(b.name) - qualityScore(a.name);
+        });
+        setServers((prev) => {
+          const seen = new Set(prev.map((s) => s.server.iframeUrl));
+          const additions: ServerState[] = sorted
+            .filter((s) => s.iframeUrl && !seen.has(s.iframeUrl))
+            .map((s) => ({ server: s, status: "idle" as ServerStatus, videoUrl: null }));
+          return additions.length ? [...prev, ...additions] : prev;
+        });
+      }
+      // Let the background anime4up append retry on the next candidate, and
+      // if the cross-source URL was never found, retry that lookup too.
+      appendedUp4Ref.current = null;
+      if (!up4Candidate) void resolveCurrentUp4Url(url).catch(() => null);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, episode, up4Candidate, resolveCurrentUp4Url]);
 
   // ── PRE-RESOLVE servers ──
   // Resolves fast providers (mp4upload) in parallel, streamwish serially (Chrome bottleneck).
@@ -1316,9 +1438,18 @@ export default function WatchScreen() {
                   </Text>
                 </View>
               </View>
-              <Pressable onPress={() => setPickerOpen(false)} style={ss.iconBtn} hitSlop={6}>
-                <Ionicons name="close" size={20} color={C.white} />
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <Pressable onPress={refreshServers} style={ss.iconBtn} hitSlop={6} disabled={refreshing}>
+                  {refreshing ? (
+                    <ActivityIndicator size="small" color={C.accent} />
+                  ) : (
+                    <Ionicons name="refresh" size={18} color={C.white} />
+                  )}
+                </Pressable>
+                <Pressable onPress={() => setPickerOpen(false)} style={ss.iconBtn} hitSlop={6}>
+                  <Ionicons name="close" size={20} color={C.white} />
+                </Pressable>
+              </View>
             </View>
             <ScrollView showsVerticalScrollIndicator={false} style={ss.pickerScroll} contentContainerStyle={ss.pickerContent}>
               {servers.map((item, index) => {

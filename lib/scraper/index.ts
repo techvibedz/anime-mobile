@@ -70,13 +70,26 @@ export async function scrapeEpisodesPage(animeUrl: string) {
 
 /* ── SEARCH ────────────────────────────────────── */
 
+export type RawSearchResult = { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: string | null };
+
 export async function scrapeSearch(query: string) {
   const url = `${WIT_BASE}/?s=${encodeURIComponent(query)}&search_param=animes`;
   return enqueue({
     url,
     injectAfter: EXTRACT_SEARCH,
     timeoutMs: 25000,
-  }) as Promise<{ results: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: string | null }[] }>;
+  }) as Promise<{ results: RawSearchResult[] }>;
+}
+
+// Same card grid, anime4up side. Run in parallel with scrapeSearch so the
+// search page can merge results from both sources.
+export async function scrapeSearchUp4(query: string) {
+  const url = `${UP4_BASE}/?search_param=animes&s=${encodeURIComponent(query)}`;
+  return enqueue({
+    url,
+    injectAfter: EXTRACT_SEARCH,
+    timeoutMs: 25000,
+  }) as Promise<{ results: RawSearchResult[] }>;
 }
 
 /* ── RECENT (episode archive paginated) ────────── */

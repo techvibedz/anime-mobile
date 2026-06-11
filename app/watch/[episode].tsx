@@ -11,7 +11,7 @@ import {
 import { VideoView, useVideoPlayer } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Ionicons } from "@expo/vector-icons";
@@ -258,6 +258,18 @@ export default function WatchScreen() {
     }
     if (videoUrl) p.play();
   });
+
+  // Kill audio the moment the user leaves this screen. expo-video releases
+  // the player on unmount, but not when another route is pushed on top —
+  // and release can lag behind navigation, leaving the episode audible on
+  // the main page. Pause explicitly on blur/unmount.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        try { player.pause(); } catch {}
+      };
+    }, [player]),
+  );
 
   // Force play on native player when source changes
   useEffect(() => {

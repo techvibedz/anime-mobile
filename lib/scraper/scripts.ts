@@ -688,13 +688,25 @@ export const HOOK_VIDEO_BEFORE = `
   window.__videoHookInstalled = true;
   window.__hookedUrls = [];
 
+  // Hidden-scrape playback must be SILENT. The embed player has to start
+  // (we capture the media URL from its requests) but the user may already
+  // be elsewhere in the app — never let embed audio escape the hidden
+  // WebView. Mute at play() time so even unmuted autoplays stay silent.
+  try {
+    var _origPlay = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () {
+      try { this.muted = true; this.volume = 0; } catch (e) {}
+      return _origPlay.apply(this, arguments);
+    };
+  } catch (e) {}
+
   function isVideoUrl(u) {
     if (typeof u !== 'string') return false;
     return /\\.(m3u8|mp4)(\\?|$)/i.test(u);
   }
   function isDecoy(u) {
     var lu = (u || '').toLowerCase();
-    return /test-videos\\.co\\.uk|bigbuckbunny|sample[-_.]|placeholder|tos\\.mp4|googleapis\\.com\\/.*oggtheora|\\/lol\\/file\\.mp4/.test(lu);
+    return /test-videos\\.co\\.uk|bigbuckbunny|sample[-_.]|placeholder|tos\\.mp4|googleapis\\.com\\/.*oggtheora|\\/lol\\/file\\.mp4|doubleclick|adserv|\\/vast|preroll|\\/ads\\//.test(lu);
   }
   function maybeReport(u) {
     if (!isVideoUrl(u) || isDecoy(u)) return;
@@ -717,7 +729,8 @@ export const HOOK_VIDEO_BEFORE = `
     return origOpen.apply(this, arguments);
   };
   setInterval(function () {
-    document.querySelectorAll('video').forEach(function (v) {
+    document.querySelectorAll('video,audio').forEach(function (v) {
+      try { v.muted = true; v.volume = 0; } catch (e) {}
       if (v.src) maybeReport(v.src);
       if (v.currentSrc) maybeReport(v.currentSrc);
       v.querySelectorAll('source').forEach(function (s) { if (s.src) maybeReport(s.src); });
@@ -761,7 +774,7 @@ export const COLLECT_VIDEO_AFTER = `
   function isDecoy(u) {
     var lu = (u || '').toLowerCase();
     if (!lu || lu.indexOf('http') !== 0) return true;
-    return /test-videos\\.co\\.uk|bigbuckbunny|sample[-_.]|placeholder|tos\\.mp4|googleapis\\.com\\/.*oggtheora|\\/lol\\/file\\.mp4/.test(lu);
+    return /test-videos\\.co\\.uk|bigbuckbunny|sample[-_.]|placeholder|tos\\.mp4|googleapis\\.com\\/.*oggtheora|\\/lol\\/file\\.mp4|doubleclick|adserv|\\/vast|preroll|\\/ads\\//.test(lu);
   }
   function isEmbedPage(u) {
     var lu = (u || '').toLowerCase();
@@ -921,9 +934,22 @@ export const COLLECT_VIDEO_AFTER = `
       return m2 ? m2[0] : null;
     } catch (e) { return null; }
   }
+  // Some "videa" servers are intermediary pages (vidvaita/vidit) that nest
+  // the real videa.hu player in an iframe. Android WebView can't inject JS
+  // into cross-origin subframes, so this page alone never yields a URL.
+  function findPlayerIframe() {
+    var fr = document.querySelectorAll('iframe');
+    for (var i = 0; i < fr.length; i++) {
+      var src = (fr[i].src || fr[i].getAttribute('data-src') || '').trim();
+      if (src.indexOf('http') !== 0) continue;
+      if (src === location.href) continue;
+      if (/videa\\.|videakid|mp4upload|streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|voe\\.|dood|ds2play|ds2video|vidply|all3do|doply|dsvplay|uqload|ok\\.ru|rubyvidhub|streamruby|share4max|megamax/i.test(src)) return src;
+    }
+    return null;
+  }
   function triggerPlay() {
     try {
-      var sels = ['.jw-icon-display', '.vjs-big-play-button', '.plyr__control--overlaid', '[class*="play"][class*="btn"]', 'button[aria-label*="lay" i]', '.play', 'button'];
+      var sels = ['.jw-icon-display', '.vjs-big-play-button', '.fp-ui', '.fp-play', '.plyr__control--overlaid', '[class*="play"][class*="btn"]', 'button[aria-label*="lay" i]', '.play', 'button'];
       for (var i = 0; i < sels.length; i++) {
         var el = document.querySelector(sels[i]);
         if (el) { try { el.click(); return; } catch (e) {} }
@@ -1009,6 +1035,15 @@ export const COLLECT_VIDEO_AFTER = `
         }
       }
       if (htmlUrl && Date.now() - start > 3500) return done(htmlUrl);
+
+      // Nested-player hop (Android can't reach subframes with injected JS):
+      // if this page produced nothing but embeds a known player iframe,
+      // navigate the whole WebView to it — RN re-injects both scripts on the
+      // new page and extraction restarts there with the time that's left.
+      if (isTop && !htmlUrl && Date.now() - start > 2500) {
+        var inner = findPlayerIframe();
+        if (inner) { sent = true; location.replace(inner); return; }
+      }
 
       if (Date.now() - lastTrigger > 1600) { triggerPlay(); lastTrigger = Date.now(); }
       await new Promise(function (r) { setTimeout(r, 250); });

@@ -328,12 +328,18 @@ export default function WatchScreen() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [videoUrl, player]);
 
-  // Self-heal / fallback ONLY if the native player never starts. DIRECT_ONLY
-  // providers re-extract a fresh URL (never the embed); others fall to WebView.
-  // Once playback begins (currentTime advances past 0 OR duration > 0), we
-  // never trigger the fallback again — otherwise transient buffering /
-  // seeking reports a 0 currentTime mid-watch and we'd kick the user out
-  // to the embed page with ads (which is what they wanted to avoid).
+  // Self-heal / fallback. DIRECT_ONLY providers never fall back to the embed;
+  // others fall to WebView when direct playback can't be recovered.
+  //
+  // Healing is done IN PLACE whenever possible: on flaky connections ExoPlayer
+  // surfaces transient network drops as player.status === 'error', and the old
+  // recovery (null the URL → "Connecting…" spinner → re-scrape the embed →
+  // rebuild the whole player) made the screen visibly "refresh" several times
+  // per episode. The signed URL is almost always still valid after a blip, so
+  // the first recovery is player.replaceAsync(sameSource) + seek back — the
+  // VideoView never unmounts and the user only sees a brief buffer. Only when
+  // that fails do we re-extract a fresh URL (real token expiry), and even then
+  // the video stays mounted until the fresh URL arrives.
   useEffect(() => {
     if (!videoUrl || !player) return;
     const idx = activeIdx;
@@ -341,45 +347,69 @@ export default function WatchScreen() {
     let cancelled = false;
     let lastPosMs = 0;
     let healing = false;
+    let loadingExtensions = 0;
 
-    // Tokenized CDNs (mp4upload especially) bind URLs to short-lived
-    // tokens, and an edge node occasionally 403s a token that was valid a
-    // minute earlier. ExoPlayer surfaces that as player.status === 'error'.
-    // Instead of dumping the user to the embed (ads), re-extract a FRESH
-    // URL from the embed page and resume where playback stopped.
-    const reResolve = () => {
+    const prov = servers[idx]?.server.provider;
+    // videa/okru CDNs are far away and routinely need >14s to first byte —
+    // bailing early there kicked perfectly good direct URLs to the embed.
+    const failMs = prov === "videa" || prov === "okru" ? 22000 : 14000;
+    let graceUntil = Date.now() + failMs;
+
+    const fail = () => {
+      if (cancelled) return;
+      setServers((p) => p.map((s, i) =>
+        i === idx ? { ...s, status: failStatus(p[idx]?.server.provider), videoUrl: null } : s));
+    };
+
+    const heal = async () => {
       if (healing || cancelled) return;
       healing = true;
-      clearInterval(watchdog);
-      clearTimeout(failTimer);
       const srv = servers[idx]?.server;
       const embedUrl = getIframeUrl(srv);
       const attempts = retryCountRef.current[idx] ?? 0;
-      if (!srv || !embedUrl || attempts >= 2) {
-        setServers((p) => p.map((s, i) =>
-          i === idx ? { ...s, status: failStatus(srv?.provider), videoUrl: null } : s));
-        return;
-      }
+      if (!srv || !embedUrl || attempts >= 3) { fail(); return; }
       retryCountRef.current[idx] = attempts + 1;
-      pendingSeekRef.current = lastPosMs;
-      setServers((p) => p.map((s, i) =>
-        i === idx ? { ...s, status: "resolving" as ServerStatus, videoUrl: null } : s));
-      resolveVideo(embedUrl, srv.provider, true)
-        .then((r) => {
-          if (r.success && r.data?.videoUrl) {
+      const seekTo = lastPosMs;
+      try {
+        if (attempts === 0 && hasStarted) {
+          // First mid-watch error: assume a transient network blip and reload
+          // the SAME source in place — no scrape, no player teardown.
+          await player.replaceAsync(videoSource as any);
+        } else {
+          // Never started, or the in-place reload already failed once:
+          // re-extract a fresh URL from the embed page (token expiry).
+          const r = await resolveVideo(embedUrl, srv.provider, true).catch(() => null);
+          if (cancelled) return;
+          if (!r?.success || !r.data?.videoUrl) { fail(); return; }
+          const fresh = getProxyUrl(r.data.videoUrl);
+          if (fresh !== videoUrl) {
+            // New URL — let the keyed useVideoPlayer recreation take over;
+            // this effect re-runs with the new videoUrl.
+            pendingSeekRef.current = seekTo;
             setServers((p) => p.map((s, i) =>
-              i === idx ? { ...s, status: "playing" as ServerStatus, videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
-          } else {
-            setServers((p) => p.map((s, i) =>
-              i === idx ? { ...s, status: failStatus(srv.provider) } : s));
+              i === idx ? { ...s, status: "playing" as ServerStatus, videoUrl: fresh } : s));
+            return;
           }
-        })
-        .catch(() => setServers((p) => p.map((s, i) =>
-          i === idx ? { ...s, status: failStatus(srv.provider) } : s)));
+          // Extractor returned the SAME url — it's still valid, the player
+          // just choked on the network. Reload it in place.
+          await player.replaceAsync(videoSource as any);
+        }
+        if (cancelled) return;
+        if (seekTo > 0) { try { player.currentTime = seekTo / 1000; } catch {} }
+        try { player.play(); } catch {}
+        // Re-arm the startup watch for the reloaded source.
+        hasStarted = false;
+        loadingExtensions = 0;
+        graceUntil = Date.now() + failMs;
+        healing = false;
+      } catch {
+        fail();
+      }
     };
 
     // Poll for "started playing" every 250ms; once we see motion, lock in.
     const watchdog = setInterval(() => {
+      if (cancelled || healing) return;
       try {
         if (player.duration > 0 || player.currentTime > 0) {
           hasStarted = true;
@@ -387,36 +417,35 @@ export default function WatchScreen() {
         }
       } catch {}
       try {
-        if ((player.status as string) === "error") reResolve();
+        if ((player.status as string) === "error") void heal();
       } catch {}
     }, 250);
 
-    // 14s ceiling: if currentTime is still exactly 0 AND duration is still
-    // 0 AND we never saw any motion, the URL is truly unplayable. Fall back
-    // to the embed quickly so the user isn't staring at a dead direct player.
-    // videa/okru CDNs are far away and routinely need >14s to first byte —
-    // bailing early there kicked perfectly good direct URLs to the embed.
-    const prov = servers[idx]?.server.provider;
-    const failMs = prov === "videa" || prov === "okru" ? 22000 : 14000;
-    const failTimer = setTimeout(() => {
-      if (cancelled) return;
+    // Startup deadline: if the player never produced a byte by the deadline,
+    // recover. But if it is STILL actively loading (slow connection, big
+    // manifest), extend the wait instead of restarting from scratch — killing
+    // a slow-but-progressing load was another source of visible refreshes.
+    const deadline = setInterval(() => {
+      if (cancelled || healing || hasStarted) return;
+      if (Date.now() < graceUntil) return;
       try {
-        if (!hasStarted && player.duration === 0 && player.currentTime === 0) {
-          // A direct URL that never produced a byte usually means an expired
-          // CDN token — re-extract a fresh one instead of falling back to the
-          // embed page (DIRECT_ONLY providers must stay in the custom player).
-          if (DIRECT_ONLY.has(prov || "")) { reResolve(); return; }
-          setServers((p) => p.map((srv, i) =>
-            i === idx ? { ...srv, status: "webview" as ServerStatus, videoUrl: null } : srv
-          ));
+        if ((player.status as string) === "loading" && loadingExtensions < 3) {
+          loadingExtensions += 1;
+          graceUntil = Date.now() + 8000;
+          return;
         }
+        if (DIRECT_ONLY.has(prov || "")) { void heal(); return; }
+        setServers((p) => p.map((srv, i) =>
+          i === idx ? { ...srv, status: "webview" as ServerStatus, videoUrl: null } : srv
+        ));
+        clearInterval(deadline);
       } catch {}
-    }, failMs);
+    }, 1000);
 
     return () => {
       cancelled = true;
       clearInterval(watchdog);
-      clearTimeout(failTimer);
+      clearInterval(deadline);
     };
   }, [videoUrl, player, activeIdx]);
 
@@ -921,8 +950,23 @@ export default function WatchScreen() {
     const idx = servers.findIndex((s) => s.server.source === "anime3rb");
     if (idx === -1) return;
     a3rbAutoSelectedRef.current = true;
+    // If another server already has video on screen (frames actually
+    // rendered, not just a resolved URL), switching now would restart
+    // playback — one of the "player keeps refreshing" reports. Keep
+    // whatever is playing; anime3rb stays available in the picker.
+    try {
+      const act = servers[activeIdx];
+      if (
+        idx !== activeIdx &&
+        act?.status === "playing" &&
+        player &&
+        (player.currentTime > 0 || player.duration > 0)
+      ) {
+        return;
+      }
+    } catch {}
     setActiveIdx(idx);
-  }, [servers]);
+  }, [servers, activeIdx, player]);
 
   // ── MANUAL REFRESH ──
   // Re-scrapes the server list with the cache bypassed and APPENDS whatever

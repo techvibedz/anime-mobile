@@ -57,6 +57,7 @@ const PROVIDER_RANK: Record<string, number> = {
 // that can never resolve a direct URL (mega/vk) or the rarely-working
 // low-rank ones (uqload/share4max/…).
 const DIRECT_ONLY = new Set([
+  "vid3rb",
   "dailymotion",
   "mp4upload",
   "streamwish",
@@ -820,12 +821,19 @@ export default function WatchScreen() {
   const a3rbInFlightRef = useRef(false);
   const a3rbRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [a3rbNonce, setA3rbNonce] = useState(0);
+  // anime3rb is the preferred first-play source. Once its server is appended
+  // we switch the active server to it — but only once per episode (so it can't
+  // fight the failure auto-advance) and never over a server the user picked.
+  const userPickedServerRef = useRef(false);
+  const a3rbAutoSelectedRef = useRef(false);
   const a3rbServerCount = servers.filter((s) => s.server.source === "anime3rb").length;
 
   useEffect(() => {
     a3rbAttemptsRef.current = 0;
     a3rbStartedAtRef.current = 0;
     a3rbInFlightRef.current = false;
+    userPickedServerRef.current = false;
+    a3rbAutoSelectedRef.current = false;
     if (a3rbRetryTimer.current) { clearTimeout(a3rbRetryTimer.current); a3rbRetryTimer.current = null; }
   }, [episode]);
   useEffect(() => () => { if (a3rbRetryTimer.current) clearTimeout(a3rbRetryTimer.current); }, []);
@@ -900,6 +908,21 @@ export default function WatchScreen() {
     // cancellation, so a dep-change re-fire can't discard a successful result.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [episode, servers.length, a3rbServerCount, animeTitle, title, a3rbNonce]);
+
+  // ── AUTO-SELECT anime3rb (preferred first play) ──
+  // When the anime3rb server gets appended, make it the active server so it is
+  // the one that plays first. One-shot per episode (a3rbAutoSelectedRef) so a
+  // later failure auto-advance can move on without this snapping back, and it
+  // never overrides a server the user manually selected.
+  useEffect(() => {
+    if (a3rbAutoSelectedRef.current) return;
+    if (userPickedServerRef.current) return;
+    if (servers.length === 0) return;
+    const idx = servers.findIndex((s) => s.server.source === "anime3rb");
+    if (idx === -1) return;
+    a3rbAutoSelectedRef.current = true;
+    setActiveIdx(idx);
+  }, [servers]);
 
   // ── MANUAL REFRESH ──
   // Re-scrapes the server list with the cache bypassed and APPENDS whatever
@@ -1100,6 +1123,9 @@ export default function WatchScreen() {
   }, [servers, activeIdx]);
 
   const selectServer = useCallback((idx: number) => {
+    // The user made an explicit choice — stop the anime3rb auto-select from
+    // ever yanking them away from it.
+    userPickedServerRef.current = true;
     // A failed server gets a fresh chance when the user explicitly taps it —
     // reset to idle so the resolve effect re-runs the extraction.
     retryCountRef.current[idx] = 0;

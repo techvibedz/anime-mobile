@@ -14,7 +14,17 @@ import {
   scrapeVideoServers,
   findCrossSourceUrl,
   extractVideoUrl as scrapeExtractVideoUrl,
+  type RawServer,
 } from "./scraper";
+import {
+  searchAnime4upDirect,
+  scrapeAnime4upEpisodePageDirect,
+  findUp4EpisodeAcrossPages,
+  searchAnime3rbDirect,
+  searchAnime3rbCatalog,
+  scrapeAnime3rbEpisodeServers,
+  extractVid3rb,
+} from "./scraper/direct";
 
 const HOME_CACHE_KEY = "@home_cache_v1";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -314,17 +324,52 @@ function saveXsourceCache() {
   } catch {}
 }
 
-// Progressively shorter title variants. The full title is most precise but
-// anime4up's search is fussy — dropping trailing season/format words and
-// parentheticals often turns a 0-result search into a hit.
+// Progressively cleaner / shorter title variants. The full title is most
+// precise but anime4up's search is fussy — it returns ZERO results when the
+// query carries a long subtitle after a colon or trailing punctuation.
 function searchVariants(title: string): string[] {
+  // Drop bracketed/parenthetical notes and collapse whitespace.
   const cleaned = title.replace(/[([][^)\]]*[)\]]/g, "").replace(/\s+/g, " ").trim();
-  const words = cleaned.split(/\s+/);
   const variants = new Set<string>();
-  if (cleaned) variants.add(cleaned);
-  if (words.length > 3) variants.add(words.slice(0, 3).join(" "));
-  if (words.length > 2) variants.add(words.slice(0, 2).join(" "));
-  if (words.length > 1) variants.add(words[0]);
+  const add = (s: string) => { const t = (s || "").replace(/\s+/g, " ").trim(); if (t) variants.add(t); };
+
+  // Full cleaned title first — when it matches it's the most precise.
+  add(cleaned);
+  // Emit cleaner — but still specific — variants BEFORE the crude word-count
+  // truncations so the FIRST hit is a precise, correctly-scored match instead
+  // of a lucky first-word result that can resolve to the wrong anime.
+  // Candidates are always scored against the FULL title by the caller, so a
+  // too-broad variant can't mis-match.
+  add(cleaned.split(/\s*[:：]\s*/)[0]);              // strip ": subtitle"
+  add(cleaned.split(/\s+[-–—]\s+/)[0]);             // strip " - subtitle"
+  add(cleaned.replace(/[^\p{L}\p{N} ]+/gu, " "));   // strip stray punctuation (!, ., …)
+
+  // Parenthesized alternative names: witanime often appends the romaji
+  // original in parens ("The Beginning After the End Season 2 (Saikyou no
+  // Ousama Nidome no Jinsei wa Nani wo Suru Season 2)") and anime4up indexes
+  // the anime ONLY under the romaji name — every English-title query returns
+  // zero results. Candidates are still scored against the FULL title, whose
+  // tokens include the parenthesized words, so this can't mis-match.
+  const reParen = /[([]([^)\]]+)[)\]]/g;
+  let pm: RegExpExecArray | null;
+  while ((pm = reParen.exec(title))) {
+    const inner = pm[1].trim();
+    if (!inner) continue;
+    add(inner);
+    add(inner.split(/\s*[:：]\s*/)[0]);
+    // The long-query-returns-zero quirk applies to the alt name too
+    // (the full "Saikyou no Ousama Nidome no Jinsei wa Nani wo Suru Season 2"
+    // finds nothing; "Saikyou no Ousama" finds it), so truncate it as well.
+    const iw = inner.split(/\s+/);
+    if (iw.length > 3) add(iw.slice(0, 3).join(" "));
+    if (iw.length > 2) add(iw.slice(0, 2).join(" "));
+  }
+
+  // Last-resort progressive head truncations.
+  const words = cleaned.split(/\s+/);
+  if (words.length > 3) add(words.slice(0, 3).join(" "));
+  if (words.length > 2) add(words.slice(0, 2).join(" "));
+  if (words.length > 1) add(words[0]);
   return Array.from(variants);
 }
 
@@ -338,6 +383,25 @@ async function getCrossSourceUrl(
   if (hit && Date.now() - hit.ts < XSOURCE_TTL) return hit.url;
 
   let url: string | null = null;
+  // Fast lane: when the target is anime4up, search its static HTML directly
+  // (plain fetch, no WebView). The WebView render trips anime4up's ad
+  // redirects / JS gates and often returns an empty result (so even
+  // "One Piece" got no cross-source match).
+  if (primary === "witanime") {
+    for (const v of searchVariants(title)) {
+      try {
+        // Search with the (possibly truncated) variant but score candidates
+        // against the full title so season disambiguation survives.
+        const direct = await searchAnime4upDirect(v, title);
+        if (direct) { url = direct; break; }
+      } catch { /* fall through to the WebView path */ }
+    }
+    if (url) {
+      xsourceCache.set(key, { url, ts: Date.now() });
+      saveXsourceCache();
+      return url;
+    }
+  }
   // Try each title variant; for each, retry a couple of times since
   // anime4up is intermittently unreachable and a single timeout shouldn't
   // kill the lookup. Stop at the first hit.
@@ -455,6 +519,93 @@ export async function fetchEpisodesUp4(
   return result;
 }
 
+// ── anime4up episode-level resolution (pagination-aware) ──
+// anime4up anime pages only list the newest ~40 episodes on page 1 (One Piece
+// spans 25 pages), so the episode-list match above can NEVER find an older
+// episode — which made anime4up servers permanently absent for catch-up
+// watching. This resolves a single episode by anime title + number, walking
+// the pagination toward the requested number. Only successful resolutions are
+// cached (anime4up is intermittently empty under its ad gates / rate limits;
+// caching a null for 24h would permanently block retries), and successes are
+// persisted so revisits after an app restart skip the search + list fetches.
+const up4EpUrlCache = new Map<string, { url: string; ts: number }>();
+const UP4_EP_URL_PREFIX = "@up4_ep_url_v1:";
+export async function resolveUp4EpisodeUrl(animeTitle: string, epNumber: number): Promise<string | null> {
+  if (!animeTitle || epNumber == null) return null;
+  const key = `${animeTitle.toLowerCase().trim()}#${epNumber}`;
+  const hit = up4EpUrlCache.get(key);
+  if (hit && Date.now() - hit.ts < UP4_CACHE_TTL) return hit.url;
+  const stored = await readCache<string>(UP4_EP_URL_PREFIX + key, UP4_CACHE_TTL);
+  if (stored) { up4EpUrlCache.set(key, { url: stored, ts: Date.now() }); return stored; }
+  let animeUrl: string | null = null;
+  for (const v of searchVariants(animeTitle)) {
+    try {
+      // Score against the full title so season disambiguation survives.
+      animeUrl = await searchAnime4upDirect(v, animeTitle);
+    } catch { animeUrl = null; }
+    if (animeUrl) break;
+  }
+  if (!animeUrl) return null;
+  let url: string | null = null;
+  try {
+    url = await findUp4EpisodeAcrossPages(animeUrl, epNumber);
+  } catch {}
+  if (url) {
+    up4EpUrlCache.set(key, { url, ts: Date.now() });
+    void writeCache(UP4_EP_URL_PREFIX + key, url);
+  }
+  return url;
+}
+
+// ── anime3rb (third server source) ──
+// anime3rb's episode URLs are constructible (/episode/<slug>/<number>), so
+// resolving an episode is just "find the title page once, then append the
+// number". The title resolution result is cached in memory AND persisted so
+// every later episode of the same anime resolves instantly. Mirrors the
+// anime4up lesson: only successful resolutions are cached — caching a miss
+// for 24h would permanently block retries while the site is briefly flaky.
+const a3rbTitleCache = new Map<string, { url: string; ts: number }>();
+const A3RB_TITLE_PREFIX = "@a3rb_title_v1:";
+
+async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | null> {
+  if (!animeTitle) return null;
+  const key = animeTitle.toLowerCase().trim();
+  const hit = a3rbTitleCache.get(key);
+  if (hit && Date.now() - hit.ts < UP4_CACHE_TTL) return hit.url;
+  const stored = await readCache<string>(A3RB_TITLE_PREFIX + key, UP4_CACHE_TTL);
+  if (stored) { a3rbTitleCache.set(key, { url: stored, ts: Date.now() }); return stored; }
+  // Slug guessing first: anime3rb's slugs derive cleanly from romaji titles,
+  // so this lands in one or two cheap GETs for the vast majority of anime.
+  let url = await searchAnime3rbDirect(animeTitle).catch(() => null);
+  if (!url) {
+    // Catalog matching second: anime3rb's daily titles sitemap (one plain
+    // GET, cached in-memory) covers anime whose slug can't be guessed —
+    // different romanization, alt-name-only indexing, shortened titles.
+    url = await searchAnime3rbCatalog(animeTitle).catch(() => null);
+  }
+  // NOTE: no /search fallback. anime3rb's /search sits behind a Cloudflare
+  // managed challenge, so failing fast here lets the watch screen's retry
+  // loop converge instead of pinning a doomed request.
+  if (url) {
+    a3rbTitleCache.set(key, { url, ts: Date.now() });
+    void writeCache(A3RB_TITLE_PREFIX + key, url);
+  }
+  return url;
+}
+
+// Servers for an episode by anime title + episode number. Returns [] on any
+// miss (unknown anime, episode not yet uploaded, transient fetch failure) —
+// the watch screen's retry loop decides whether to try again.
+export async function fetchAnime3rbServers(animeTitle: string, epNumber: number): Promise<RawServer[]> {
+  if (!animeTitle || epNumber == null) return [];
+  const titleUrl = await resolveAnime3rbTitleUrl(animeTitle);
+  if (!titleUrl) return [];
+  const slug = titleUrl.replace(/\/+$/, "").split("/").pop();
+  if (!slug) return [];
+  const episodeUrl = `https://anime3rb.com/episode/${slug}/${epNumber}`;
+  return scrapeAnime3rbEpisodeServers(episodeUrl).catch(() => [] as RawServer[]);
+}
+
 /* ── /recent ────────────────────────────────── */
 
 export async function fetchRecent(page = 1): Promise<{
@@ -517,29 +668,45 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string, for
   return swr(key, SERVERS_CACHE_TTL, () => fetchVideoServersFresh(episodeUrl, url4up), valid);
 }
 
+// anime4up's server list lives in the static HTML, so a single plain GET
+// returns it in well under a second — the WebView render takes many seconds
+// and often trips anime4up's ad gates. Fall back to the WebView scrape only
+// when the direct parse yields nothing.
+async function scrapeUp4ServersFast(episodeUrl: string) {
+  try {
+    const direct = await scrapeAnime4upEpisodePageDirect(episodeUrl);
+    if (direct) {
+      return { source: "anime4up", servers: direct.servers, episodeTitle: direct.episodeTitle, animeTitle: direct.animeTitle, up4EpisodeUrl: null as string | null };
+    }
+  } catch { /* fall through to the WebView scrape */ }
+  return scrapeVideoServers(episodeUrl)
+    .then((r) => ({ source: "anime4up", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle, up4EpisodeUrl: null as string | null }))
+    .catch(() => null);
+}
+
 async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Promise<VideoServersPayload> {
   const primaryIsUp4 = /anime4up/i.test(episodeUrl);
   // If we have a url4up AND the primary isn't already anime4up, scrape both
   // sources' servers in parallel (uses 2 WebView slots simultaneously).
   const tasks: Promise<{ source: string; servers: any[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null } | null>[] = [];
 
-  tasks.push(
-    scrapeVideoServers(episodeUrl)
-      .then((r) => ({
-        source: primaryIsUp4 ? "anime4up" : "witanime",
-        servers: r.servers,
-        episodeTitle: r.episodeTitle,
-        animeTitle: r.animeTitle,
-        up4EpisodeUrl: r.up4EpisodeUrl ?? null,
-      }))
-      .catch(() => null),
-  );
-  if (url4up && !primaryIsUp4) {
+  if (primaryIsUp4) {
+    tasks.push(scrapeUp4ServersFast(episodeUrl));
+  } else {
     tasks.push(
-      scrapeVideoServers(url4up)
-        .then((r) => ({ source: "anime4up", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle }))
+      scrapeVideoServers(episodeUrl)
+        .then((r) => ({
+          source: "witanime",
+          servers: r.servers,
+          episodeTitle: r.episodeTitle,
+          animeTitle: r.animeTitle,
+          up4EpisodeUrl: r.up4EpisodeUrl ?? null,
+        }))
         .catch(() => null),
     );
+  }
+  if (url4up && !primaryIsUp4) {
+    tasks.push(scrapeUp4ServersFast(url4up));
   }
 
   const results = (await Promise.all(tasks)).filter((x): x is NonNullable<typeof x> => !!x);
@@ -695,11 +862,18 @@ export async function fetchAllAnime(page = 1): Promise<{
 
 /* ── /resolve-video ─────────────────────────── */
 
-export async function resolveVideo(iframeUrl: string, _provider: string, priority = false): Promise<{
+export async function resolveVideo(iframeUrl: string, provider: string, priority = false): Promise<{
   success: boolean;
   data?: { videoUrl: string; type: string };
   error?: string;
 }> {
+  // anime3rb's first-party host: one static GET on the player page yields
+  // direct tokenized .mp4 qualities — near-instant, no WebView slot needed.
+  if (provider === "vid3rb") {
+    const r = await extractVid3rb(iframeUrl).catch(() => null);
+    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+    return { success: false, error: "Could not extract vid3rb video URL" };
+  }
   try {
     const r = await scrapeExtractVideoUrl(iframeUrl, priority);
     return {

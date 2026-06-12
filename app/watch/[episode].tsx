@@ -15,7 +15,7 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchVideoServers, resolveVideo, getProxyUrl } from "../../lib/api";
+import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
 import { C } from "../../lib/theme";
@@ -32,6 +32,7 @@ interface ServerState {
 // Lower = tried first. Providers proven to resolve to direct .m3u8/.mp4 URLs (so they
 // play in the native expo-video player) are ranked above providers that fall back to WebView.
 const PROVIDER_RANK: Record<string, number> = {
+  vid3rb: 0,        // anime3rb first-party host — direct MP4 from one static GET
   dailymotion: 0,   // HLS via metadata API — reliable
   mp4upload: 1,     // direct MP4 via packed JS — reliable
   streamwish: 2,    // HLS via packed JS — reliable
@@ -247,6 +248,12 @@ export default function WatchScreen() {
       } else if (/videa/.test(videoHost)) {
         referer = "https://videa.hu/";
         origin = "https://videa.hu";
+        sendOrigin = false;
+      } else if (/vid3rb|anime3rb/.test(videoHost) || /vid3rb|anime3rb/.test(iframeUrl)) {
+        // anime3rb's CDN URLs are signed (noip=yes) and need no Referer/Origin;
+        // sending the site root as Referer is accepted and keeps things uniform.
+        referer = "https://anime3rb.com/";
+        origin = "";
         sendOrigin = false;
       } else if (iframeUrl) {
         const iframeOrigin = new URL(iframeUrl).origin;
@@ -525,7 +532,7 @@ export default function WatchScreen() {
       // fetchEpisodesUp4 derives the title from the anime slug when passed
       // null, and is cached 24h — so this is usually a fast AsyncStorage hit.
       const up4 = await fetchEpisodesUp4(resolvedAnime, null).catch(() => null);
-      if (!up4 || !up4.episodes4up.length) return null;
+      if (!up4?.merged?.anime4up) return null;
 
       // Only fall back to the slower fetchEpisodes scrape if the number
       // wasn't in the URL (rare).
@@ -537,7 +544,15 @@ export default function WatchScreen() {
         }
       }
       if (curNum == null) return null;
-      const found = up4.episodes4up.find((e) => e.number === curNum)?.href ?? null;
+      let found = up4.episodes4up.find((e) => e.number === curNum)?.href ?? null;
+      if (!found) {
+        // anime4up PAGINATES its episode list (the rendered page only shows
+        // the newest ~40), so older episodes never appear in episodes4up —
+        // walk the pagination toward the wanted number instead. Without this,
+        // anime4up servers were permanently missing for catch-up watching.
+        const { findUp4EpisodeAcrossPages } = await import("../../lib/scraper/direct");
+        found = await findUp4EpisodeAcrossPages(up4.merged.anime4up, curNum).catch(() => null);
+      }
       if (found) setCurrentUp4Href(found);
       return found;
     } catch {
@@ -709,7 +724,7 @@ export default function WatchScreen() {
         const { fetchEpisodes, fetchEpisodesUp4 } = await import("../../lib/api");
         const det = await fetchEpisodes(resolvedAnime!).catch(() => null);
         const up4 = await fetchEpisodesUp4(resolvedAnime!, det?.data?.title ?? null).catch(() => null);
-        if (cancelled || !up4 || !up4.episodes4up.length) return;
+        if (cancelled || !up4?.merged?.anime4up) return;
         // Determine current episode number.
         let curNum: number | null = null;
         const m = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
@@ -722,7 +737,14 @@ export default function WatchScreen() {
         const byNum = [...up4.episodes4up].sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
         // Only overwrite when we actually found a match — loadServers may
         // have already set a harvested link that this lookup can't see.
-        const cur = byNum.find((e) => e.number === curNum)?.href ?? null;
+        let cur = byNum.find((e) => e.number === curNum)?.href ?? null;
+        if (!cur) {
+          // Pagination-aware fallback: the rendered anime4up page only lists
+          // the newest ~40 episodes, so older ones never show in episodes4up.
+          const { findUp4EpisodeAcrossPages } = await import("../../lib/scraper/direct");
+          cur = await findUp4EpisodeAcrossPages(up4.merged.anime4up, curNum).catch(() => null);
+        }
+        if (cancelled) return;
         if (cur) setCurrentUp4Href(cur);
         setNextUp4Href(byNum.find((e) => e.number === curNum! + 1)?.href ?? null);
         setPrevUp4Href(byNum.find((e) => e.number === curNum! - 1)?.href ?? null);
@@ -781,6 +803,104 @@ export default function WatchScreen() {
     return () => { cancelled = true; };
   }, [up4Candidate, servers.length]);
 
+  // ── APPEND anime3rb servers ──
+  // Third server source, fully independent of the witanime/anime4up chains:
+  // anime3rb episode URLs are constructible from the anime title + episode
+  // number alone (/episode/<slug>/<n>), so there is no sibling-matching or
+  // harvested-link machinery — just resolve + fetch on a retry-with-backoff
+  // loop until a deadline. The title resolution is cached in api.ts, so
+  // retries and later episodes are cheap.
+  const A3RB_RETRY_DEADLINE_MS = 2 * 60 * 1000;
+  // Current episode param, readable from settled async handlers (the closure's
+  // own `episode` is frozen per effect run, so comparing against it is useless).
+  const episodeParamRef = useRef(episode);
+  useEffect(() => { episodeParamRef.current = episode; }, [episode]);
+  const a3rbAttemptsRef = useRef(0);
+  const a3rbStartedAtRef = useRef(0);
+  const a3rbInFlightRef = useRef(false);
+  const a3rbRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [a3rbNonce, setA3rbNonce] = useState(0);
+  const a3rbServerCount = servers.filter((s) => s.server.source === "anime3rb").length;
+
+  useEffect(() => {
+    a3rbAttemptsRef.current = 0;
+    a3rbStartedAtRef.current = 0;
+    a3rbInFlightRef.current = false;
+    if (a3rbRetryTimer.current) { clearTimeout(a3rbRetryTimer.current); a3rbRetryTimer.current = null; }
+  }, [episode]);
+  useEffect(() => () => { if (a3rbRetryTimer.current) clearTimeout(a3rbRetryTimer.current); }, []);
+
+  useEffect(() => {
+    if (!episode) return;
+    if (servers.length === 0) return;      // wait for the primary servers first
+    if (a3rbServerCount > 0) return;       // already enriched successfully
+    if (a3rbInFlightRef.current) return;   // a run is already going
+    if (a3rbStartedAtRef.current && Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) return;
+
+    const currentHref = decodeURIComponent(episode);
+    // Episode number: from the witanime/anime4up URL (…الحلقة-N) or the
+    // scraped episode title.
+    let epNum: number | null = null;
+    const um = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+    if (um) epNum = parseInt(um[1], 10);
+    if (epNum == null && title) {
+      const tm = title.match(/الحلقة\s*(\d+)/) || title.match(/\bepisode\s*(\d+)/i);
+      if (tm) epNum = parseInt(tm[1], 10);
+    }
+    if (epNum == null) return;
+    // Anime title: prefer the scraped one; fall back to the slug-derived name
+    // so the lookup can fire before (or without) the scrape reporting it.
+    let lookupTitle = animeTitle;
+    if (!lookupTitle) {
+      try {
+        const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
+        const animeUrl = animeParam || toAnimeUrl(currentHref);
+        if (animeUrl) {
+          const slug = decodeURIComponent(new URL(animeUrl).pathname.replace(/\/+$/, "").split("/").pop() || "");
+          lookupTitle = slug.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+        }
+      } catch {}
+    }
+    if (!lookupTitle) return;
+
+    const epAtStart = episode;
+    a3rbInFlightRef.current = true;
+    if (!a3rbStartedAtRef.current) a3rbStartedAtRef.current = Date.now();
+    a3rbAttemptsRef.current += 1;
+    const attempt = a3rbAttemptsRef.current;
+    const scheduleRetry = () => {
+      if (Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) return;
+      const delay = Math.min(4000 * attempt, 15000);
+      if (a3rbRetryTimer.current) clearTimeout(a3rbRetryTimer.current);
+      a3rbRetryTimer.current = setTimeout(() => setA3rbNonce((n) => n + 1), delay);
+    };
+    fetchAnime3rbServers(lookupTitle, epNum)
+      .then((found) => {
+        a3rbInFlightRef.current = false;
+        if (epAtStart !== episodeParamRef.current) return;
+        if (found.length === 0) { scheduleRetry(); return; }
+        setServers((prev) => {
+          const have = new Set(prev.map((s) => s.server.iframeUrl));
+          const additions: ServerState[] = found
+            .filter((s) => s.iframeUrl && !have.has(s.iframeUrl))
+            .map((s, i) => ({
+              server: { ...s, id: `a3rb_${prev.length + i}`, source: "anime3rb" },
+              status: "idle" as ServerStatus,
+              videoUrl: null,
+            }));
+          return additions.length ? [...prev, ...additions] : prev;
+        });
+      })
+      .catch(() => {
+        a3rbInFlightRef.current = false;
+        if (epAtStart !== episodeParamRef.current) return;
+        scheduleRetry();
+      });
+    // The settled handlers above decide staleness via epAtStart; no cleanup
+    // cancellation, so a dep-change re-fire can't discard a successful result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [episode, servers.length, a3rbServerCount, animeTitle, title, a3rbNonce]);
+
   // ── MANUAL REFRESH ──
   // Re-scrapes the server list with the cache bypassed and APPENDS whatever
   // is new, without touching the already-resolved/playing servers. Covers
@@ -811,6 +931,10 @@ export default function WatchScreen() {
       // if the cross-source URL was never found, retry that lookup too.
       appendedUp4Ref.current = null;
       if (!up4Candidate) void resolveCurrentUp4Url(url).catch(() => null);
+      // Re-arm the anime3rb loop too (fresh deadline + immediate re-fire).
+      a3rbAttemptsRef.current = 0;
+      a3rbStartedAtRef.current = 0;
+      setA3rbNonce((n) => n + 1);
     } finally {
       setRefreshing(false);
     }

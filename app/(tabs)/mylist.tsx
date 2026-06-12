@@ -5,6 +5,7 @@ import {
   Pressable,
   FlatList,
   StyleSheet,
+  Dimensions,
 } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -18,6 +19,12 @@ import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
 type ListFilter = "all" | FavoriteList;
+
+const { width: SCREEN_W } = Dimensions.get("window");
+const PAD = S.paddingContent;
+const GAP = S.gapRelaxed;
+const NUM_COLS = 2;
+const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
 export default function MyListScreen() {
   const insets = useSafeAreaInsets();
@@ -91,52 +98,70 @@ export default function MyListScreen() {
       ) : (
         <FlatList
           data={visible}
+          numColumns={NUM_COLS}
           keyExtractor={(item) => item.href}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: S.paddingContent, paddingBottom: insets.bottom + 100 }}
-          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-              onLongPress={() => handleRemove(item.href)}
-              style={({ pressed }) => [ss.listRow, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
-            >
-              {/* Poster thumbnail */}
-              <View style={ss.poster}>
-                {item.image ? (
-                  <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                ) : (
-                  <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
-                    <Ionicons name="image-outline" size={20} color={C.textMuted} />
-                  </View>
-                )}
-              </View>
-              {/* Info */}
-              <View style={ss.rowInfo}>
-                <Text style={ss.rowTitle} numberOfLines={2}>{item.title}</Text>
-                <View style={ss.rowMeta}>
-                  <View style={[ss.listTag, { backgroundColor: item.list === "watching" ? "rgba(0,230,118,0.12)" : C.accentSoft }]}>
-                    <Ionicons
-                      name={item.list === "watching" ? "play-circle" : "bookmark"}
-                      size={11}
-                      color={item.list === "watching" ? C.success : C.accent}
+          removeClippedSubviews
+          contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100 }}
+          columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
+          renderItem={({ item }) => {
+            const watching = item.list === "watching";
+            return (
+              <Pressable
+                onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+                onLongPress={() => handleRemove(item.href)}
+                style={({ pressed }) => [{ width: CARD_W }, pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] }]}
+              >
+                {/* Poster */}
+                <View style={ss.imageWrap}>
+                  {item.image ? (
+                    <Image
+                      source={{ uri: item.image }}
+                      style={ss.image}
+                      contentFit="cover"
+                      recyclingKey={item.href}
+                      transition={200}
                     />
-                    <Text style={[ss.rowMetaText, { color: item.list === "watching" ? C.success : C.accent }]}>
-                      {item.list === "watching" ? t.currentlyWatching : t.planToWatch}
+                  ) : (
+                    <View style={[ss.image, { alignItems: "center", justifyContent: "center" }]}>
+                      <Ionicons name="image-outline" size={26} color={C.textMuted} />
+                    </View>
+                  )}
+
+                  {/* Bottom gradient + play hint */}
+                  <View style={ss.posterFooter} pointerEvents="none">
+                    <LinearGradient
+                      colors={["transparent", "rgba(0,0,0,0.85)"]}
+                      style={StyleSheet.absoluteFill}
+                    />
+                    <View style={ss.playCircle}>
+                      <Ionicons name="play" size={14} color="#fff" />
+                    </View>
+                  </View>
+
+                  {/* Status badge (top-left) */}
+                  <View style={[ss.statusBadge, { backgroundColor: watching ? "rgba(0,230,118,0.92)" : "rgba(255,45,85,0.92)" }]}>
+                    <Ionicons
+                      name={watching ? "play-circle" : "bookmark"}
+                      size={11}
+                      color="#fff"
+                    />
+                    <Text style={ss.statusBadgeText}>
+                      {watching ? t.currentlyWatching : t.planToWatch}
                     </Text>
                   </View>
+
+                  {/* Remove (top-right) */}
+                  <Pressable onPress={() => handleRemove(item.href)} hitSlop={8} style={ss.removeBtn}>
+                    <Ionicons name="close" size={15} color="#fff" />
+                  </Pressable>
                 </View>
-              </View>
-              {/* Remove */}
-              <Pressable onPress={() => handleRemove(item.href)} hitSlop={8} style={ss.removeBtn}>
-                <Ionicons name="trash-outline" size={15} color={C.textMuted} />
+
+                {/* Title */}
+                <Text style={ss.cardTitle} numberOfLines={2}>{item.title}</Text>
               </Pressable>
-              {/* Play button */}
-              <View style={ss.playCircle}>
-                <Ionicons name="play" size={14} color={C.accent} />
-              </View>
-            </Pressable>
-          )}
+            );
+          }}
         />
       )}
     </View>
@@ -197,36 +222,47 @@ const ss = StyleSheet.create({
     fontFamily: "DMSans_500Medium",
   },
 
-  // List rows
-  listRow: {
-    flexDirection: "row", alignItems: "center", gap: 14, padding: 10,
-    borderRadius: R.xl, backgroundColor: C.surfaceCard,
-    borderWidth: 1, borderColor: C.border,
-  },
-  poster: {
-    width: 56, height: 80, borderRadius: R.default, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+  // Grid cards
+  imageWrap: {
+    width: CARD_W,
+    aspectRatio: 2 / 3,
+    borderRadius: R.xl,
+    overflow: "hidden",
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
     ...ELEVATION_CARD,
   },
-  rowInfo: { flex: 1, gap: 6 },
-  rowTitle: {
-    color: C.text, fontSize: 15, fontWeight: "600", lineHeight: 20,
-    fontFamily: "Outfit_600SemiBold",
+  image: {
+    width: CARD_W,
+    aspectRatio: 2 / 3,
+    borderRadius: R.xl,
+    backgroundColor: C.surface,
   },
-  rowMeta: { flexDirection: "row", alignItems: "center", gap: 4 },
-  listTag: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 3,
-  },
-  rowMetaText: { color: C.textMuted, fontSize: 10, fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
-  removeBtn: {
-    width: 32, height: 32, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    alignItems: "center", justifyContent: "center",
+  posterFooter: {
+    position: "absolute", left: 0, right: 0, bottom: 0,
+    height: 64, justifyContent: "flex-end", alignItems: "flex-end", padding: 8,
   },
   playCircle: {
-    width: 36, height: 36, borderRadius: R.circle,
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+    width: 32, height: 32, borderRadius: R.circle,
+    backgroundColor: "rgba(255,45,85,0.95)",
     alignItems: "center", justifyContent: "center",
+  },
+  statusBadge: {
+    position: "absolute", top: 8, left: 8,
+    flexDirection: "row", alignItems: "center", gap: 4,
+    borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 4,
+  },
+  statusBadgeText: { color: "#fff", fontSize: 10, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  removeBtn: {
+    position: "absolute", top: 8, right: 8,
+    width: 28, height: 28, borderRadius: R.circle,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center", justifyContent: "center",
+  },
+  cardTitle: {
+    color: C.text, fontSize: 13, fontWeight: "600", lineHeight: 17,
+    marginTop: 8, width: CARD_W,
+    fontFamily: "Outfit_600SemiBold",
   },
 });

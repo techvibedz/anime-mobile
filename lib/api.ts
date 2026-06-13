@@ -24,6 +24,7 @@ import {
   searchAnime3rbCatalog,
   scrapeAnime3rbEpisodeServers,
   extractVid3rb,
+  extractMp4upload,
 } from "./scraper/direct";
 
 const HOME_CACHE_KEY = "@home_cache_v1";
@@ -873,6 +874,14 @@ export async function resolveVideo(iframeUrl: string, provider: string, priority
     const r = await extractVid3rb(iframeUrl).catch(() => null);
     if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
     return { success: false, error: "Could not extract vid3rb video URL" };
+  }
+  // mp4upload now inlines the direct .mp4 URL in the embed page's static
+  // HTML (no more packed JS), so a plain GET resolves it instantly and
+  // reliably — the WebView scrape below stays as the fallback for the rare
+  // mirror that still serves the packed player.
+  if (provider === "mp4upload") {
+    const r = await extractMp4upload(iframeUrl).catch(() => null);
+    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
   }
   try {
     const r = await scrapeExtractVideoUrl(iframeUrl, priority);

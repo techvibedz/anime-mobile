@@ -291,6 +291,20 @@ export default function WatchScreen() {
   })();
 
   const player = useVideoPlayer(videoSource as any, (p) => {
+    // Buffer FAR ahead of Android's 20s default. vid3rb (anime3rb) throttles
+    // free streams to ~2.5× the file's bitrate (signed speed= param on the
+    // CDN URL) and its edge host intermittently drops connections — with only
+    // 20s of cushion every blip surfaced as a mid-watch rebuffer. A few
+    // minutes of forward buffer accumulates surplus during the throttled
+    // download and rides out both bitrate peaks and CDN reconnects. Time
+    // must win over ExoPlayer's byte budget or the 1080p cushion gets
+    // capped long before 300s.
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 300,
+      minBufferForPlayback: 2,
+      maxBufferBytes: 0,
+      prioritizeTimeOverSizeThreshold: true,
+    };
     if (videoUrl && resumeMs > 0) {
       p.currentTime = resumeMs / 1000;
     }

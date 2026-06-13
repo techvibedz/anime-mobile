@@ -653,6 +653,40 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
 // noip=yes). Premium-gated qualities ship with an empty src and are skipped.
 // Tokens expire in ~40 minutes, which is why extraction happens at play time
 // rather than when the server list is built.
+// mp4upload's embed page no longer ships its player config in Dean-Edwards
+// packed JS — it now inlines `player.src({ type: "video/mp4", src: "…" })`
+// in the initial static HTML (verified live 2026-06). The WebView extractor
+// frequently times out on this page, so pull the URL with one plain GET the
+// same way vid3rb/anime3rb is handled. The token in the .mp4 URL is bound to
+// the UA that fetched the embed page — fetchHtml's BROWSER_UA matches the
+// native player's playback UA, so the extracted URL stays valid.
+export async function extractMp4upload(iframeUrl: string): Promise<{ url: string; type: "mp4" } | null> {
+  // Canonical www embed form — watch-page / bare-host URLs render a
+  // download page or redirect instead of the player.
+  const embedUrl = normalizeEmbedUrl(iframeUrl);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));
+    const html = await fetchHtml(embedUrl, "https://www.mp4upload.com/");
+    if (!html) continue;
+    // Older mirrors may still serve the packed-JS player — the caller falls
+    // back to the WebView path (which carries the unpacker) for those.
+    if (/eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)/.test(html)) return null;
+    const patterns = [
+      /player\.src\(\s*["']([^"']+\.mp4[^"']*)["']/i,
+      /(?:file|src)\s*:\s*["']([^"']+\.mp4[^"']*)["']/i,
+      /<source[^>]+src\s*=\s*["']([^"']+\.mp4[^"']*)["']/i,
+      /(https?:\/\/[^"'\s\\]+mp4upload\.com[^"'\s\\]*\.mp4[^"'\s\\]*)/i,
+    ];
+    for (const re of patterns) {
+      const url = html.match(re)?.[1];
+      if (url && /^https?:\/\//.test(url) && !/sample[-_.]|placeholder|bigbuckbunny|tos\.mp4/i.test(url)) {
+        return { url, type: "mp4" };
+      }
+    }
+  }
+  return null;
+}
+
 export async function extractVid3rb(playerUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));

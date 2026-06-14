@@ -1,6 +1,6 @@
 {
     "force_update":  false,
-    "version":  "1.0.4",
-    "release_notes":  "Custom video player with seek bar, play/pause, skip 10s/90s, prev/next episode nav, video resize, fix next/prev episode param decoding, nativeControls=false",
-    "apk_url":  "https://expo.dev/artifacts/eas/nqR9BkZyjiNWzmGAGyzLEP.apk"
+    "version":  "1.1.0",
+    "release_notes":  "Fix servers not loading on some WiFi networks. Some ISPs block the source sites at the DNS layer (so they only worked on mobile data) — the app now resolves them over DNS-over-HTTPS, so all servers load on any network.",
+    "apk_url":  "https://expo.dev/artifacts/eas/x6rivAy5odUcTg0OBuGL4dKLURSaeOueRZehVzWxHF4.apk"
 }

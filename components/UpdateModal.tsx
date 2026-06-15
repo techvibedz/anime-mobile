@@ -1,10 +1,11 @@
-import { Modal, View, Text, Pressable, StyleSheet, Linking } from "react-native";
+import { useState } from "react";
+import { Modal, View, Text, Pressable, StyleSheet } from "react-native";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { C, R, ELEVATION_GLOW } from "../lib/theme";
 import type { UpdateInfo } from "../lib/updater";
-import { applyOtaUpdate, openApkDownload } from "../lib/updater";
+import { applyOtaUpdate, downloadAndInstallApk } from "../lib/updater";
 
 interface Props {
   info: UpdateInfo | null;
@@ -12,6 +13,9 @@ interface Props {
 }
 
 export function UpdateModal({ info, onClose }: Props) {
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
   if (!info) return null;
 
   const isOta = info.type === "ota";
@@ -20,13 +24,29 @@ export function UpdateModal({ info, onClose }: Props) {
     ? "لقد قمنا بإصدار تحديث جديد لتحسين تجربتك. هل ترغب في إعادة التشغيل وتطبيقه الآن؟"
     : `الإصدار ${info.version} متوفر الآن للتحميل. يرجى التحديث للحصول على أفضل تجربة.`;
 
-  const handleAction = () => {
+  const handleAction = async () => {
     if (isOta) {
       applyOtaUpdate();
-    } else if (info.apkUrl) {
-      openApkDownload(info.apkUrl);
+      return;
+    }
+    if (!info.apkUrl || downloading) return;
+    setDownloading(true);
+    setProgress(0);
+    try {
+      await downloadAndInstallApk(info.apkUrl, setProgress);
+    } finally {
+      // The installer prompt is now in front; reset so the button is usable
+      // again if the user backs out of the install.
+      setDownloading(false);
     }
   };
+
+  const pct = Math.round(progress * 100);
+  const actionLabel = isOta
+    ? "إعادة التشغيل الآن"
+    : downloading
+    ? `جاري التحميل… ${pct}%`
+    : "تحديث الآن";
 
   return (
     <Modal transparent animationType="fade" visible onRequestClose={info.isForce ? undefined : onClose}>
@@ -54,19 +74,24 @@ export function UpdateModal({ info, onClose }: Props) {
           ) : null}
 
           <View style={ss.buttons}>
-            <Pressable style={ss.btnPrimary} onPress={handleAction}>
+            <Pressable style={ss.btnPrimary} onPress={handleAction} disabled={downloading}>
               <LinearGradient
                 colors={[C.accent, C.violet]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={ss.btnGrad}
               >
-                <Ionicons name="refresh" size={20} color="#fff" />
-                <Text style={ss.btnPrimaryText}>{isOta ? "إعادة التشغيل الآن" : "تحديث الآن"}</Text>
+                <Ionicons name={downloading ? "cloud-download" : "refresh"} size={20} color="#fff" />
+                <Text style={ss.btnPrimaryText}>{actionLabel}</Text>
               </LinearGradient>
+              {downloading && (
+                <View style={ss.progressTrack}>
+                  <View style={[ss.progressFill, { width: `${pct}%` }]} />
+                </View>
+              )}
             </Pressable>
 
-            {!info.isForce && (
+            {!info.isForce && !downloading && (
               <Pressable style={ss.btnSecondary} onPress={onClose}>
                 <Text style={ss.btnSecondaryText}>لاحقاً</Text>
               </Pressable>
@@ -159,6 +184,15 @@ const ss = StyleSheet.create({
     width: "100%",
     borderRadius: R.pill,
     overflow: "hidden",
+  },
+  progressTrack: {
+    height: 4,
+    width: "100%",
+    backgroundColor: "rgba(255,255,255,0.15)",
+  },
+  progressFill: {
+    height: 4,
+    backgroundColor: "#fff",
   },
   btnGrad: {
     flexDirection: "row",

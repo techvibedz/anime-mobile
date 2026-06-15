@@ -2,6 +2,8 @@ import { Alert, Linking, Platform } from "react-native";
 import * as Updates from "expo-updates";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
+import * as FileSystem from "expo-file-system/legacy";
+import * as IntentLauncher from "expo-intent-launcher";
 
 export interface UpdateInfo {
   type: "apk" | "ota" | null;
@@ -74,12 +76,67 @@ export function applyOtaUpdate() {
 }
 
 /**
- * Opens the APK download URL in browser.
+ * Opens the APK download URL in browser. Used as a fallback (non-Android, or
+ * if the in-app download/install fails).
  */
 export async function openApkDownload(url: string) {
   const supported = await Linking.canOpenURL(url);
   if (supported) {
     await Linking.openURL(url);
+  }
+}
+
+/**
+ * Downloads the APK inside the app (with progress) and launches the Android
+ * package installer directly — no browser. On non-Android platforms, or if
+ * anything fails, it falls back to opening the URL in the browser.
+ *
+ * Requires the REQUEST_INSTALL_PACKAGES permission (declared in app.json).
+ * The installer prompt itself is shown by Android and asks the user to confirm.
+ */
+export async function downloadAndInstallApk(
+  url: string,
+  onProgress?: (fraction: number) => void
+): Promise<void> {
+  if (Platform.OS !== "android") {
+    await openApkDownload(url);
+    return;
+  }
+
+  const fileUri = `${FileSystem.cacheDirectory}pantoufa-update.apk`;
+
+  try {
+    // Remove any stale download so a partial file can't corrupt the install.
+    await FileSystem.deleteAsync(fileUri, { idempotent: true });
+
+    const download = FileSystem.createDownloadResumable(
+      url,
+      fileUri,
+      {},
+      (p) => {
+        if (p.totalBytesExpectedToWrite > 0) {
+          onProgress?.(p.totalBytesWritten / p.totalBytesExpectedToWrite);
+        }
+      }
+    );
+
+    const result = await download.downloadAsync();
+    if (!result?.uri) throw new Error("APK download returned no file");
+
+    // file:// can't be handed to the installer on modern Android — convert to a
+    // content:// URI backed by expo-file-system's FileProvider.
+    const contentUri = await FileSystem.getContentUriAsync(result.uri);
+
+    await IntentLauncher.startActivityAsync(
+      "android.intent.action.INSTALL_PACKAGE",
+      {
+        data: contentUri,
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      }
+    );
+  } catch {
+    // Anything goes wrong (no permission, download error, OEM quirk) → browser.
+    await openApkDownload(url);
   }
 }
 

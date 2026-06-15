@@ -20,7 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchHome } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
 import { addFavorite, isFavorite, toAnimeUrl } from "../../lib/favorites";
-import { getHistory, progressPercent, removeFromHistory } from "../../lib/history";
+import { getContinueWatching, progressPercent, removeFromHistory } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
 import { Shimmer } from "../../components/Shimmer";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
@@ -71,7 +71,7 @@ export default function HomeScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [res, hist] = await Promise.all([fetchHome(), getHistory()]);
+      const [res, hist] = await Promise.all([fetchHome(), getContinueWatching()]);
       if (res.success) {
         setFeatured(res.data.featured ?? []);
         setSections(res.data.sections ?? []);
@@ -89,7 +89,7 @@ export default function HomeScreen() {
 
   // Refresh history when tab regains focus
   useFocusEffect(useCallback(() => {
-    getHistory().then(setHistory);
+    getContinueWatching().then(setHistory);
   }, []));
 
   useEffect(() => {
@@ -276,7 +276,7 @@ export default function HomeScreen() {
                   key={entry.episodeHref}
                   entry={entry}
                   onRemove={(href) => {
-                    removeFromHistory(href).then(() => getHistory().then(setHistory));
+                    removeFromHistory(href).then(() => getContinueWatching().then(setHistory));
                   }}
                 />
               ))}

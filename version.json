@@ -1,6 +1,6 @@
 {
-    "force_update":  false,
-    "version":  "1.1.0",
-    "release_notes":  "Fix servers not loading on some WiFi networks. Some ISPs block the source sites at the DNS layer (so they only worked on mobile data) — the app now resolves them over DNS-over-HTTPS, so all servers load on any network.",
-    "apk_url":  "https://github.com/techvibedz/anime-mobile/releases/download/v1.1.0/pantoufa-1.1.0.apk"
+    "force_update": false,
+    "version": "1.2.0",
+    "release_notes": "تصميم جديد لأيقونة التطبيق وشاشة البداية. التحديثات الآن تُحمّل داخل التطبيق مباشرة مع شريط تقدّم — بدون فتح المتصفح.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.2.0/pantoufa-1.2.0.apk"
 }

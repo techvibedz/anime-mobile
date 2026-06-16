@@ -1,22 +1,28 @@
-// In-app new-episode notifications.
+// New-episode notifications (in-app center + native push fan-out).
 //
-// The app is backend-free and ships updates over-the-air (JS only), so we can't
-// use a native push module (expo-notifications) — that would require a fresh
-// APK build. Instead this is an in-app notification center: every time the home
-// feed loads we diff the "recently updated" episodes against the user's saved
-// anime (favorites) and record a notification whenever a followed show drops a
-// new episode. The bell on the home screen surfaces an unread badge, and the
-// /notifications screen lists them. 100% JS → OTA-safe.
+// Every time the home feed loads we diff the "recently updated" episodes feed
+// against either ALL anime or just the user's saved list (controlled by the
+// notification-scope setting) and record a notification whenever a new episode
+// drops. The bell on the home screen surfaces an unread badge, the
+// /notifications screen lists them, and lib/push fires a real OS notification.
+//
+// Flood guard: the seen-episode set is seeded silently on the first sync and
+// whenever the scope changes, so switching to "all" (or first launch) never
+// dumps the entire current backlog on the user — only episodes that appear
+// AFTER that point notify.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchRecent } from "./api";
-import { getFavorites, toAnimeUrl } from "./favorites";
+import { getFavorites, toAnimeUrl, type FavoriteAnime } from "./favorites";
 import { presentNewEpisodeNotification } from "./push";
+import { getNotificationScope, type NotificationScope } from "./settings";
 import { t } from "./i18n";
 
 const LIST_KEY = "@notifications_v1";
-const SEEN_KEY = "@notif_seen_v1"; // { [animeHref]: highestEpisodeNumberSeen }
+const SEEN_KEYS_KEY = "@notif_seen_keys_v2"; // { scope, keys: string[] } — dedup of notified episodes
 const MAX_STORED = 60;
+const MAX_SEEN_KEYS = 1000; // cap the dedup set (recent feed ages old keys out anyway)
+const MAX_PUSH_PER_SYNC = 10; // OS-notification storm guard (in-app list still keeps all)
 
 export interface AppNotification {
   /** Stable id: `${animeHref}#${episodeNumber}` so the same episode never duplicates. */
@@ -77,18 +83,28 @@ async function writeList(list: AppNotification[]) {
   } catch {}
 }
 
-async function readSeen(): Promise<Record<string, number>> {
+interface SeenState {
+  scope: NotificationScope | null; // which scope the set was last seeded under
+  keys: Set<string>;
+}
+
+async function readSeenKeys(): Promise<SeenState> {
   try {
-    const raw = await AsyncStorage.getItem(SEEN_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    const raw = await AsyncStorage.getItem(SEEN_KEYS_KEY);
+    if (!raw) return { scope: null, keys: new Set() };
+    const parsed = JSON.parse(raw) as { scope: NotificationScope | null; keys: string[] };
+    return { scope: parsed.scope ?? null, keys: new Set(parsed.keys || []) };
   } catch {
-    return {};
+    return { scope: null, keys: new Set() };
   }
 }
 
-async function writeSeen(seen: Record<string, number>) {
+async function writeSeenKeys(scope: NotificationScope, keys: Set<string>) {
   try {
-    await AsyncStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+    // Keep only the most-recently-added keys (Set preserves insertion order).
+    const arr = [...keys];
+    const trimmed = arr.length > MAX_SEEN_KEYS ? arr.slice(arr.length - MAX_SEEN_KEYS) : arr;
+    await AsyncStorage.setItem(SEEN_KEYS_KEY, JSON.stringify({ scope, keys: trimmed }));
   } catch {}
 }
 
@@ -120,34 +136,47 @@ export async function clearNotifications() {
   await writeList([]);
 }
 
+type RawEpisode = { title: string; href: string; image: string; animeTitle: string; animeHref: string };
+
+/** Resolve a stable per-anime key for an episode (anime URL, else normalized title). */
+function animeKeyFor(ep: RawEpisode): string {
+  const url = ep.animeHref?.includes("/anime/") ? ep.animeHref : toAnimeUrl(ep.animeHref || ep.href);
+  return url || norm(ep.animeTitle) || ep.href;
+}
+
 /**
- * Diff the latest "recently updated" episodes against the user's saved anime
- * and append a notification for every followed show that has a newer episode
- * than we last recorded.
+ * Diff the latest "recently updated" episodes against either all anime or the
+ * user's saved list (per the notification-scope setting) and append a
+ * notification for each genuinely new episode.
  *
- * First contact with a given anime only seeds a baseline (silently) so we never
- * flood the user with a backlog the moment they add a favorite — only episodes
- * that land *after* they're following the show produce notifications.
+ * The seen-episode set is seeded silently on first run and on any scope change,
+ * so the current backlog never floods the user — only episodes appearing after
+ * that point notify.
  *
  * Returns the number of NEW notifications created (0 on any failure).
  */
 export async function syncEpisodeNotifications(): Promise<number> {
   try {
-    const favorites = await getFavorites();
-    if (favorites.length === 0) return 0;
+    const scope = await getNotificationScope();
 
-    // Index favorites by both normalized title and anime URL for robust matching
-    // (sources spell hrefs differently, so title is the reliable bridge).
-    const byTitle = new Map<string, (typeof favorites)[number]>();
-    const byHref = new Map<string, (typeof favorites)[number]>();
-    for (const f of favorites) {
-      const nt = norm(f.title);
-      if (nt) byTitle.set(nt, f);
-      byHref.set(f.href, f);
+    // When scoped to the user's list, build favorite indexes up front; bail if
+    // the list is empty (nothing to match against).
+    let byTitle: Map<string, FavoriteAnime> | null = null;
+    let byHref: Map<string, FavoriteAnime> | null = null;
+    if (scope === "mylist") {
+      const favorites = await getFavorites();
+      if (favorites.length === 0) return 0;
+      byTitle = new Map();
+      byHref = new Map();
+      for (const f of favorites) {
+        const nt = norm(f.title);
+        if (nt) byTitle.set(nt, f);
+        byHref.set(f.href, f);
+      }
     }
 
     // Pull a couple of pages of recent episodes (newest first).
-    const episodes: Array<{ title: string; href: string; image: string; animeTitle: string; animeHref: string }> = [];
+    const episodes: RawEpisode[] = [];
     for (const page of [1, 2]) {
       try {
         const r = await fetchRecent(page);
@@ -159,70 +188,74 @@ export async function syncEpisodeNotifications(): Promise<number> {
     }
     if (episodes.length === 0) return 0;
 
-    const seen = await readSeen();
-    const list = await readList();
-    const existingIds = new Set(list.map((n) => n.id));
-    const created: AppNotification[] = [];
-
-    // Track the best (highest) episode number we see per favorite this run, so
-    // a favorite that has many recent episodes only advances the baseline once.
-    const runMax = new Map<string, number>();
-
+    // Build the candidate set for this scope, deduped by `${animeKey}#${epNum}`.
+    const candidates = new Map<string, AppNotification>();
     for (const ep of episodes) {
-      // Resolve which favorite (if any) this episode belongs to.
-      const epAnimeUrl = ep.animeHref?.includes("/anime/")
-        ? ep.animeHref
-        : toAnimeUrl(ep.animeHref || ep.href);
-      let fav = (epAnimeUrl && byHref.get(epAnimeUrl)) || byTitle.get(norm(ep.animeTitle));
-      if (!fav) continue;
-
       const epNum = extractEpisodeNumber(ep.title);
       if (epNum == null) continue;
 
-      const baseline = seen[fav.href];
+      let animeTitle = ep.animeTitle;
+      let animeHref = ep.animeHref?.includes("/anime/") ? ep.animeHref : (toAnimeUrl(ep.animeHref || ep.href) || ep.animeHref || "");
+      let image = ep.image || "";
 
-      if (baseline === undefined) {
-        // First time we encounter this favorite in the recent feed — seed
-        // silently with the highest number observed this run.
-        runMax.set(fav.href, Math.max(runMax.get(fav.href) ?? 0, epNum));
-        continue;
+      if (scope === "mylist") {
+        const epAnimeUrl = ep.animeHref?.includes("/anime/") ? ep.animeHref : toAnimeUrl(ep.animeHref || ep.href);
+        const fav = (epAnimeUrl && byHref!.get(epAnimeUrl)) || byTitle!.get(norm(ep.animeTitle));
+        if (!fav) continue; // not in the user's list → skip
+        animeTitle = fav.title;
+        animeHref = fav.href;
+        image = ep.image || fav.image || "";
       }
 
-      if (epNum > baseline) {
-        const id = `${fav.href}#${epNum}`;
-        if (!existingIds.has(id)) {
-          existingIds.add(id);
-          created.push({
-            id,
-            animeTitle: fav.title,
-            animeHref: fav.href,
-            episodeTitle: ep.title,
-            episodeHref: ep.href,
-            episodeNumber: epNum,
-            image: ep.image || fav.image || "",
-            createdAt: Date.now(),
-            read: false,
-          });
-        }
-        runMax.set(fav.href, Math.max(runMax.get(fav.href) ?? baseline, epNum));
-      }
+      const key = `${animeKeyFor(ep)}#${epNum}`;
+      if (candidates.has(key)) continue;
+      candidates.set(key, {
+        id: key,
+        animeTitle,
+        animeHref,
+        episodeTitle: ep.title,
+        episodeHref: ep.href,
+        episodeNumber: epNum,
+        image,
+        createdAt: Date.now(),
+        read: false,
+      });
+    }
+    if (candidates.size === 0) return 0;
+
+    const state = await readSeenKeys();
+
+    // First run, or the scope changed since last sync → seed silently.
+    if (state.scope !== scope) {
+      const merged = new Set(state.keys);
+      for (const k of candidates.keys()) merged.add(k);
+      await writeSeenKeys(scope, merged);
+      return 0;
     }
 
-    // Advance baselines (seed first-seen favorites, bump notified ones).
-    let seenChanged = false;
-    for (const [href, max] of runMax) {
-      if (seen[href] === undefined || max > seen[href]) {
-        seen[href] = max;
-        seenChanged = true;
-      }
+    const list = await readList();
+    const existingIds = new Set(list.map((n) => n.id));
+    const seenSet = state.keys;
+    const created: AppNotification[] = [];
+
+    for (const [key, notif] of candidates) {
+      if (seenSet.has(key)) continue;
+      seenSet.add(key);
+      if (existingIds.has(key)) continue;
+      existingIds.add(key);
+      created.push(notif);
     }
-    if (seenChanged) await writeSeen(seen);
+
+    await writeSeenKeys(scope, seenSet);
 
     if (created.length > 0) {
+      // Newest first in the stored list.
+      created.sort((a, b) => (b.episodeNumber ?? 0) - (a.episodeNumber ?? 0));
       await writeList([...created, ...list]);
-      // Fire a real OS notification for each new episode (no-op on older
-      // builds without the native module, or when disabled/denied).
-      for (const n of created) {
+      // Fire OS notifications (capped to avoid a storm in "all" scope); the
+      // in-app list above keeps every item regardless. No-op on older builds
+      // without the native module, or when disabled/denied.
+      for (const n of created.slice(0, MAX_PUSH_PER_SYNC)) {
         void presentNewEpisodeNotification({
           title: t.notifNewEpisodeTitle,
           body:

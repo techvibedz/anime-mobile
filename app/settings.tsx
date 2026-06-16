@@ -20,7 +20,10 @@ import {
   setNotificationsEnabled,
   getAutoplayNext,
   setAutoplayNext,
+  getNotificationScope,
+  setNotificationScope,
   clearContentCache,
+  type NotificationScope,
 } from "../lib/settings";
 import {
   requestNotificationPermission,
@@ -37,6 +40,7 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const [notifs, setNotifs] = useState(true);
   const [autoplay, setAutoplay] = useState(true);
+  const [scope, setScope] = useState<NotificationScope>("all");
   const [permGranted, setPermGranted] = useState(false);
   const [checking, setChecking] = useState(false);
 
@@ -44,9 +48,15 @@ export default function SettingsScreen() {
     useCallback(() => {
       getNotificationsEnabled().then(setNotifs);
       getAutoplayNext().then(setAutoplay);
+      getNotificationScope().then(setScope);
       hasNotificationPermission().then(setPermGranted);
     }, []),
   );
+
+  const changeScope = useCallback(async (value: NotificationScope) => {
+    setScope(value);
+    await setNotificationScope(value);
+  }, []);
 
   const toggleNotifs = useCallback(async (value: boolean) => {
     if (value && notificationsModuleAvailable()) {
@@ -141,6 +151,12 @@ export default function SettingsScreen() {
             value={notifs}
             onChange={toggleNotifs}
           />
+          {notifs && (
+            <>
+              <Divider />
+              <ScopeRow scope={scope} onChange={changeScope} />
+            </>
+          )}
           <Divider />
           <ToggleRow
             icon="play-forward-outline"
@@ -211,6 +227,42 @@ function ToggleRow({
   );
 }
 
+function ScopeRow({
+  scope, onChange,
+}: {
+  scope: NotificationScope;
+  onChange: (v: NotificationScope) => void;
+}) {
+  const options: { key: NotificationScope; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+    { key: "all", label: t.scopeAll, icon: "earth" },
+    { key: "mylist", label: t.scopeMyList, icon: "heart" },
+  ];
+  return (
+    <View style={s.scopeRow}>
+      <View style={s.rowIcon}><Ionicons name="funnel-outline" size={19} color={C.text} /></View>
+      <View style={{ flex: 1 }}>
+        <Text style={s.rowTitle}>{t.settingsNotifScope}</Text>
+        <Text style={s.rowDesc} numberOfLines={2}>{t.settingsNotifScopeDesc}</Text>
+        <View style={s.segment}>
+          {options.map((opt) => {
+            const active = scope === opt.key;
+            return (
+              <Pressable
+                key={opt.key}
+                onPress={() => onChange(opt.key)}
+                style={[s.segmentBtn, active && s.segmentBtnActive]}
+              >
+                <Ionicons name={opt.icon} size={14} color={active ? C.textOnAccent : C.textSecondary} />
+                <Text style={[s.segmentText, active && s.segmentTextActive]}>{opt.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function ActionRow({
   icon, title, desc, onPress, danger, right,
 }: {
@@ -273,6 +325,20 @@ const s = StyleSheet.create({
   rowTitle: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "left" },
   rowDesc: { color: C.textMuted, fontSize: 11, marginTop: 3, lineHeight: 15, fontFamily: "DMSans_500Medium", textAlign: "left" },
   divider: { height: 1, backgroundColor: C.border, marginLeft: 66 },
+
+  scopeRow: { flexDirection: "row", gap: 14, paddingVertical: 14, paddingHorizontal: 14 },
+  segment: {
+    flexDirection: "row", gap: 6, marginTop: 12,
+    padding: 4, borderRadius: R.pill,
+    backgroundColor: C.bgDeep, borderWidth: 1, borderColor: C.glassBorder,
+  },
+  segmentBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 9, borderRadius: R.pill,
+  },
+  segmentBtnActive: { backgroundColor: C.accent },
+  segmentText: { color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  segmentTextActive: { color: C.textOnAccent },
 
   brandFooter: { alignItems: "center", marginTop: 36, gap: 3 },
   brandName: { color: C.accent, fontSize: 20, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },

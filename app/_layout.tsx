@@ -14,6 +14,10 @@ import type { UpdateInfo } from "../lib/updater";
 import { UpdateModal } from "../components/UpdateModal";
 import { ScraperHost } from "../lib/scraper";
 import { initAds } from "../lib/ads";
+import { SidebarProvider } from "../components/Sidebar";
+import { setupNotifications, requestNotificationPermission, addNotificationTapListener } from "../lib/push";
+import { getNotificationsEnabled } from "../lib/settings";
+import { toAnimeUrl } from "../lib/favorites";
 import "../global.css";
 
 function AuthGate() {
@@ -42,6 +46,30 @@ function AuthGate() {
       pullHistoryFromCloud().catch(() => {});
     }
   }, [user?.id]);
+
+  // Notifications: configure channel + request permission once at startup
+  // (only if the user hasn't disabled them), and route taps to the episode.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      await setupNotifications();
+      if (await getNotificationsEnabled()) {
+        await requestNotificationPermission();
+      }
+    })().catch(() => {});
+
+    const sub = addNotificationTapListener((data) => {
+      if (!data?.episodeHref) return;
+      const params: Record<string, string> = {};
+      if (data.image) params.img = encodeURIComponent(data.image);
+      const animeUrl = data.animeHref?.includes("/anime/")
+        ? data.animeHref
+        : toAnimeUrl(data.episodeHref) ?? data.animeHref;
+      if (animeUrl) params.anime = animeUrl;
+      router.push({ pathname: `/watch/${encodeURIComponent(data.episodeHref)}`, params });
+    });
+    return () => sub.remove();
+  }, [ready]);
 
   // Update checks (APK first, then OTA)
   const [updateChecked, setUpdateChecked] = useState(false);
@@ -96,6 +124,9 @@ function AuthGate() {
           }}
         />
         <Stack.Screen name="see-all/[section]" />
+        <Stack.Screen name="notifications" />
+        <Stack.Screen name="profile" />
+        <Stack.Screen name="settings" />
         <Stack.Screen name="scraper-debug" />
         <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
       </Stack>
@@ -143,7 +174,9 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <StatusBar style="light" translucent backgroundColor="transparent" />
       <AuthProvider>
-        <AuthGate />
+        <SidebarProvider>
+          <AuthGate />
+        </SidebarProvider>
       </AuthProvider>
       <ScraperHost />
     </SafeAreaProvider>

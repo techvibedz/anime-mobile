@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fetchAnime3rbServersByUrl } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
+import { getAutoplayNext } from "../../lib/settings";
 import { maybeShowInterstitial } from "../../lib/ads";
 import { C } from "../../lib/theme";
 import { t } from "../../lib/i18n";
@@ -212,6 +213,26 @@ export default function WatchScreen() {
   // position (ms) to seek to once the re-resolved source starts playing.
   const retryCountRef = useRef<Record<number, number>>({});
   const pendingSeekRef = useRef(0);
+  // Autoplay-next bookkeeping (gated by the Settings preference). goNextRef is
+  // filled in after goNextEpisode is defined; autoAdvancedRef de-dupes the
+  // single advance per episode once playback crosses the near-end threshold.
+  const autoplayRef = useRef(true);
+  const goNextRef = useRef<() => void>(() => {});
+  const autoAdvancedRef = useRef(false);
+
+  // Load the autoplay preference once; reset the per-episode guard on change.
+  useEffect(() => { getAutoplayNext().then((v) => { autoplayRef.current = v; }); }, []);
+  useEffect(() => { autoAdvancedRef.current = false; }, [episode]);
+
+  // Fire auto-advance when playback nears the end (≥97%) and a next episode
+  // exists. Shared by the native + WebView progress timers.
+  const maybeAutoAdvance = useCallback((pos: number, dur: number) => {
+    if (!autoplayRef.current || autoAdvancedRef.current) return;
+    if (dur > 0 && pos / dur >= 0.97) {
+      autoAdvancedRef.current = true;
+      goNextRef.current?.();
+    }
+  }, []);
 
   // Keep serversRef in sync so timers/async handlers can read the live count.
   useEffect(() => { serversRef.current = servers; }, [servers]);
@@ -538,6 +559,7 @@ export default function WatchScreen() {
             durationMs: Math.round(dur),
             url4up: url4up ? decodeURIComponent(url4up) : undefined,
           });
+          maybeAutoAdvance(pos, dur);
         }
       } catch {}
     }, 5000);
@@ -562,6 +584,7 @@ export default function WatchScreen() {
           durationMs: Math.round(dur),
           url4up: url4up ? decodeURIComponent(url4up) : undefined,
         });
+        maybeAutoAdvance(pos, dur);
       }
     }, 5000);
     return () => { if (progressTimer.current) clearInterval(progressTimer.current); };
@@ -1339,6 +1362,10 @@ export default function WatchScreen() {
       },
     });
   }, [nextEpisodeHref, nextUp4Href, animeParam, imgParam, animeTitleParam, paramEpNum]);
+
+  // Expose the latest goNextEpisode to the progress timers (which are defined
+  // earlier and can't reference it directly without a TDZ error).
+  useEffect(() => { goNextRef.current = goNextEpisode; }, [goNextEpisode]);
 
   // Previous episode
   const goPrevEpisode = useCallback(() => {

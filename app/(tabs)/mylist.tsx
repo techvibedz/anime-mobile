@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, memo } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { getFavorites, removeFavorite } from "../../lib/favorites";
 import type { FavoriteAnime, FavoriteList } from "../../lib/favorites";
+import { MalCardBadge } from "../../components/MalRating";
 import { useAuth } from "../../lib/auth";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
@@ -38,10 +39,10 @@ export default function MyListScreen() {
     }, []),
   );
 
-  async function handleRemove(href: string) {
+  const handleRemove = useCallback(async (href: string) => {
     await removeFavorite(href);
     setFavorites((prev) => prev.filter((f) => f.href !== href));
-  }
+  }, []);
 
   const watchingCount = favorites.filter((f) => f.list === "watching").length;
   const plannedCount = favorites.filter((f) => f.list === "planned").length;
@@ -102,71 +103,89 @@ export default function MyListScreen() {
           keyExtractor={(item) => item.href}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
+          initialNumToRender={8}
+          maxToRenderPerBatch={6}
+          windowSize={7}
+          updateCellsBatchingPeriod={50}
           contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100 }}
           columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
-          renderItem={({ item }) => {
-            const watching = item.list === "watching";
-            return (
-              <Pressable
-                onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-                onLongPress={() => handleRemove(item.href)}
-                style={({ pressed }) => [{ width: CARD_W }, pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] }]}
-              >
-                {/* Poster */}
-                <View style={ss.imageWrap}>
-                  {item.image ? (
-                    <Image
-                      source={{ uri: item.image }}
-                      style={ss.image}
-                      contentFit="cover"
-                      recyclingKey={item.href}
-                      transition={200}
-                    />
-                  ) : (
-                    <View style={[ss.image, { alignItems: "center", justifyContent: "center" }]}>
-                      <Ionicons name="image-outline" size={26} color={C.textMuted} />
-                    </View>
-                  )}
-
-                  {/* Bottom gradient + play hint */}
-                  <View style={ss.posterFooter} pointerEvents="none">
-                    <LinearGradient
-                      colors={["transparent", "rgba(0,0,0,0.85)"]}
-                      style={StyleSheet.absoluteFill}
-                    />
-                    <View style={ss.playCircle}>
-                      <Ionicons name="play" size={14} color="#fff" />
-                    </View>
-                  </View>
-
-                  {/* Status badge (top-left) */}
-                  <View style={[ss.statusBadge, { backgroundColor: watching ? "rgba(0,230,118,0.92)" : "rgba(255,45,85,0.92)" }]}>
-                    <Ionicons
-                      name={watching ? "play-circle" : "bookmark"}
-                      size={11}
-                      color="#fff"
-                    />
-                    <Text style={ss.statusBadgeText}>
-                      {watching ? t.currentlyWatching : t.planToWatch}
-                    </Text>
-                  </View>
-
-                  {/* Remove (top-right) */}
-                  <Pressable onPress={() => handleRemove(item.href)} hitSlop={8} style={ss.removeBtn}>
-                    <Ionicons name="close" size={15} color="#fff" />
-                  </Pressable>
-                </View>
-
-                {/* Title */}
-                <Text style={ss.cardTitle} numberOfLines={2}>{item.title}</Text>
-              </Pressable>
-            );
-          }}
+          renderItem={({ item }) => <MyListCard item={item} onRemove={handleRemove} />}
         />
       )}
     </View>
   );
 }
+
+/* Memoized poster card — keeps the grid from re-rendering every visible row
+ * when an unrelated piece of screen state (filter, header count) changes. */
+const MyListCard = memo(function MyListCard({
+  item,
+  onRemove,
+}: {
+  item: FavoriteAnime;
+  onRemove: (href: string) => void;
+}) {
+  const watching = item.list === "watching";
+  return (
+    <Pressable
+      onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+      onLongPress={() => onRemove(item.href)}
+      style={({ pressed }) => [{ width: CARD_W }, pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] }]}
+    >
+      {/* Poster */}
+      <View style={ss.imageWrap}>
+        {item.image ? (
+          <Image
+            source={{ uri: item.image }}
+            style={ss.image}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={item.href}
+            transition={200}
+          />
+        ) : (
+          <View style={[ss.image, { alignItems: "center", justifyContent: "center" }]}>
+            <Ionicons name="image-outline" size={26} color={C.textMuted} />
+          </View>
+        )}
+
+        {/* Bottom gradient + play hint */}
+        <View style={ss.posterFooter} pointerEvents="none">
+          <LinearGradient
+            colors={["transparent", "rgba(0,0,0,0.85)"]}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={ss.playCircle}>
+            <Ionicons name="play" size={14} color="#fff" />
+          </View>
+        </View>
+
+        {/* Status badge (top-left) */}
+        <View style={[ss.statusBadge, { backgroundColor: watching ? "rgba(0,230,118,0.92)" : "rgba(255,45,85,0.92)" }]}>
+          <Ionicons
+            name={watching ? "play-circle" : "bookmark"}
+            size={11}
+            color="#fff"
+          />
+          <Text style={ss.statusBadgeText}>
+            {watching ? t.currentlyWatching : t.planToWatch}
+          </Text>
+        </View>
+
+        {/* Remove (top-right) */}
+        <Pressable onPress={() => onRemove(item.href)} hitSlop={8} style={ss.removeBtn}>
+          <Ionicons name="close" size={15} color="#fff" />
+        </Pressable>
+
+        {/* MAL rating (bottom-left, clear of the status/remove/play controls) */}
+        <MalCardBadge title={item.title} style={{ top: undefined as any, right: undefined as any, bottom: 8, left: 8 }} />
+      </View>
+
+      {/* Title */}
+      <Text style={ss.cardTitle} numberOfLines={2}>{item.title}</Text>
+    </Pressable>
+  );
+});
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },

@@ -2,6 +2,7 @@ import { Tabs } from "expo-router";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, R, ELEVATION_NAV } from "../../lib/theme";
 
 const TABS = [
@@ -24,8 +25,12 @@ export default function TabLayout() {
 }
 
 function FloatingNav({ state, navigation }: any) {
+  const insets = useSafeAreaInsets();
+  // Lift the pill above the phone's on-screen system navigation bar (gesture
+  // pill / 3-button) so it isn't overlapped/hidden by it. Falls back to the
+  // fixed 16px gap on devices with no inset.
   return (
-    <View style={ss.navWrap} pointerEvents="box-none">
+    <View style={[ss.navWrap, { bottom: 16 + insets.bottom }]} pointerEvents="box-none">
       <View style={ss.navPill}>
         <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill}>
           <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surfaceGlass }]} />
@@ -57,7 +62,6 @@ function FloatingNav({ state, navigation }: any) {
 const ss = StyleSheet.create({
   navWrap: {
     position: "absolute",
-    bottom: 16,
     left: 0,
     right: 0,
     alignItems: "center",

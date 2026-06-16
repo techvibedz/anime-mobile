@@ -83,6 +83,8 @@ export const ar = {
   showLess: "عرض أقل",
   noEpisodes: "لا توجد حلقات متاحة",
   noRelated: "لا توجد أنميات مشابهة",
+  noInfo: "لا توجد تفاصيل متاحة",
+  loadingInfo: "جارٍ تحميل التفاصيل…",
   bothSourcesMerged: "تمّ دمج المصدرين",
   sortNewest: "الأحدث",
   sortOldest: "الأقدم",
@@ -93,6 +95,15 @@ export const ar = {
   unmarkedAsWatched: "أُلغي تحديد المشاهدة",
   watchedBadge: "مُشاهَدة",
   tapToToggleWatched: "اضغط مطوّلًا لتبديل حالة المشاهدة",
+  titleCopied: "تم نسخ العنوان",
+
+  // Next-episode countdown
+  nextEpIn: (n: number) => `الحلقة ${n} بعد`,
+  airingNow: (n: number) => `الحلقة ${n} متوفّرة الآن`,
+  cdDays: "ي",
+  cdHours: "س",
+  cdMins: "د",
+  cdSecs: "ث",
 
   // My List (favorites)
   myListTitle: "قائمتي",

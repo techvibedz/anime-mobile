@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, memo } from "react";
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchHome, fetchRecent } from "../../lib/api";
 import type { AnimeItem, EpisodeItem, HomeSection } from "../../lib/api";
+import { MalCardBadge } from "../../components/MalRating";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { LinearGradient } from "expo-linear-gradient";
 import { t } from "../../lib/i18n";
@@ -46,6 +47,61 @@ const PAD = S.paddingContent;
 const GAP = S.gapRelaxed;
 const NUM_COLS = 3;
 const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
+
+/* Memoized grid cell — keeps the whole grid from re-rendering its visible
+ * rows every time the parent's pagination state (loadingMore/hasNext) flips. */
+const GridCard = memo(function GridCard({
+  item,
+  isEpisodeType,
+  onPressEpisode,
+}: {
+  item: AnimeItem | EpisodeItem;
+  isEpisodeType: boolean;
+  onPressEpisode: (ep: EpisodeItem) => void;
+}) {
+  const epNum = isEpisodeType ? episodeNumberFrom(item as EpisodeItem) : null;
+  return (
+    <Pressable
+      onPress={() => {
+        if (isEpisodeType) onPressEpisode(item as EpisodeItem);
+        else router.push(`/anime/${encodeURIComponent(item.href)}`);
+      }}
+      style={{ width: CARD_W }}
+    >
+      <View style={s.imageWrap}>
+        {item.image ? (
+          <Image
+            source={{ uri: item.image }}
+            style={s.image}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={item.href}
+            transition={200}
+          />
+        ) : (
+          <View style={[s.image, { alignItems: "center", justifyContent: "center" }]}>
+            <Ionicons name="image-outline" size={24} color={C.textMuted} />
+          </View>
+        )}
+        {isEpisodeType && epNum != null && (
+          <View style={s.epBadgeWrap} pointerEvents="none">
+            <LinearGradient
+              colors={["transparent", "rgba(0,0,0,0.85)"]}
+              style={s.epBadgeGradient}
+            />
+            <View style={s.epBadge}>
+              <Text style={s.epBadgeText}>{t.episode} {epNum}</Text>
+            </View>
+          </View>
+        )}
+        {!isEpisodeType && <MalCardBadge title={item.title} />}
+      </View>
+      <Text style={s.title} numberOfLines={2}>
+        {isEpisodeType ? (item as EpisodeItem).animeTitle || item.title : item.title}
+      </Text>
+    </Pressable>
+  );
+});
 
 export default function SeeAllScreen() {
   const { section: sectionId, title, type } = useLocalSearchParams<{
@@ -116,56 +172,18 @@ export default function SeeAllScreen() {
         keyExtractor={(item, i) => item.href + i}
         showsVerticalScrollIndicator={false}
         removeClippedSubviews
+        initialNumToRender={12}
+        maxToRenderPerBatch={9}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
         contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 20 }}
         columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
         ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
-        renderItem={({ item }) => {
-          const epNum = isEpisodeType ? episodeNumberFrom(item as EpisodeItem) : null;
-          return (
-            <Pressable
-              onPress={() => {
-                if (isEpisodeType) {
-                  setEpisodePopup(item as EpisodeItem);
-                } else {
-                  router.push(`/anime/${encodeURIComponent(item.href)}`);
-                }
-              }}
-              style={{ width: CARD_W }}
-            >
-              <View style={s.imageWrap}>
-                {item.image ? (
-                  <Image
-                    source={{ uri: item.image }}
-                    style={s.image}
-                    contentFit="cover"
-                    recyclingKey={item.href}
-                    transition={200}
-                  />
-                ) : (
-                  <View style={[s.image, { alignItems: "center", justifyContent: "center" }]}>
-                    <Ionicons name="image-outline" size={24} color={C.textMuted} />
-                  </View>
-                )}
-                {isEpisodeType && epNum != null && (
-                  <View style={s.epBadgeWrap} pointerEvents="none">
-                    <LinearGradient
-                      colors={["transparent", "rgba(0,0,0,0.85)"]}
-                      style={s.epBadgeGradient}
-                    />
-                    <View style={s.epBadge}>
-                      <Text style={s.epBadgeText}>{t.episode} {epNum}</Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-              <Text style={s.title} numberOfLines={2}>
-                {isEpisodeType ? (item as EpisodeItem).animeTitle || item.title : item.title}
-              </Text>
-            </Pressable>
-          );
-        }}
+        renderItem={({ item }) => (
+          <GridCard item={item} isEpisodeType={isEpisodeType} onPressEpisode={setEpisodePopup} />
+        )}
       />
 
       {/* Episode tap popup */}

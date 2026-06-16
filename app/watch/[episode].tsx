@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -15,9 +15,10 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers } from "../../lib/api";
+import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fetchAnime3rbServersByUrl } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
+import { maybeShowInterstitial } from "../../lib/ads";
 import { C } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -166,10 +167,15 @@ true;
 `;
 
 export default function WatchScreen() {
-  const { episode, url4up, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam } = useLocalSearchParams<{
-    episode: string; url4up?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string;
+  const { episode, url4up, url3rb, epNum: epNumParam, animeTitle: animeTitleParam, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam } = useLocalSearchParams<{
+    episode: string; url4up?: string; url3rb?: string; epNum?: string; animeTitle?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string;
   }>();
   const insets = useSafeAreaInsets();
+
+  // Episode number passed explicitly from the detail page (works for any
+  // source's URL shape, unlike the الحلقة-N regex which only matches
+  // witanime/anime4up URLs). The enrichment effects prefer this.
+  const paramEpNum = epNumParam && /^\d+$/.test(epNumParam) ? parseInt(epNumParam, 10) : null;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -190,6 +196,14 @@ export default function WatchScreen() {
   const [activeIdx, setActiveIdx] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Primary (witanime/anime4up) scrape finished — gates the anime3rb/anime4up
+  // enrichment effects so they fire even when the primary had ZERO servers.
+  const [primaryDone, setPrimaryDone] = useState(false);
+  // The fallback sources were also exhausted with nothing — only then do we
+  // surface the "no servers" error instead of the still-searching spinner.
+  const [noServersFinal, setNoServersFinal] = useState(false);
+  // Live mirror of `servers` readable from settled async handlers / timers.
+  const serversRef = useRef<ServerState[]>([]);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [resumeMs, setResumeMs] = useState(0);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,6 +212,9 @@ export default function WatchScreen() {
   // position (ms) to seek to once the re-resolved source starts playing.
   const retryCountRef = useRef<Record<number, number>>({});
   const pendingSeekRef = useRef(0);
+
+  // Keep serversRef in sync so timers/async handlers can read the live count.
+  useEffect(() => { serversRef.current = servers; }, [servers]);
 
   const active = servers[activeIdx];
   const videoUrl = active?.videoUrl ?? null;
@@ -209,7 +226,12 @@ export default function WatchScreen() {
   // canonical embed origin (mp4upload's CDN wants www.mp4upload.com, not
   // mp4upload.com or s14.mp4upload.com). Derive the right one from the
   // video URL's host first; fall back to the iframe origin.
-  const videoSource = (() => {
+  // Rebuilding this on every render (the player-state poll re-renders the
+  // screen up to twice a second) re-parsed the URL + ran every provider regex
+  // and handed useVideoPlayer a brand-new source object each time — which can
+  // trigger redundant player.replace() churn. Memoize on the only inputs it
+  // actually depends on.
+  const videoSource = useMemo(() => {
     if (!videoUrl) return "";
     try {
       const videoHost = new URL(videoUrl).hostname.toLowerCase();
@@ -288,7 +310,7 @@ export default function WatchScreen() {
     } catch {
       return videoUrl;
     }
-  })();
+  }, [videoUrl, iframeUrl]);
 
   const player = useVideoPlayer(videoSource as any, (p) => {
     // Buffer FAR ahead of Android's 20s default. vid3rb (anime3rb) throttles
@@ -489,6 +511,14 @@ export default function WatchScreen() {
     };
   }, []);
 
+  // Show a (frequency-capped) interstitial when an episode is opened. Opening
+  // an episode is a natural break; the 3-min cap in lib/ads.ts keeps fast
+  // next/prev hopping from spamming ads. No-op until ad IDs are configured.
+  useEffect(() => {
+    if (!episode) return;
+    maybeShowInterstitial("before_episode");
+  }, [episode]);
+
   // Save progress (native player)
   useEffect(() => {
     if (!isPlaying || !player || !episode) return;
@@ -569,9 +599,11 @@ export default function WatchScreen() {
       // Episode number is almost always in the witanime URL (...الحلقة-N).
       // Grab it from there so we can SKIP the extra fetchEpisodes page-scrape
       // entirely — that scrape was the main thing slowing server loading.
-      let curNum: number | null = null;
-      const m = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
-      if (m) curNum = parseInt(m[1], 10);
+      let curNum: number | null = paramEpNum;
+      if (curNum == null) {
+        const m = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+        if (m) curNum = parseInt(m[1], 10);
+      }
 
       // fetchEpisodesUp4 derives the title from the anime slug when passed
       // null, and is cached 24h — so this is usually a fast AsyncStorage hit.
@@ -610,15 +642,40 @@ export default function WatchScreen() {
     setLoading(true);
     setError(null);
     setServers([]);
+    setPrimaryDone(false);
+    setNoServersFinal(false);
     retryCountRef.current = {};
     pendingSeekRef.current = 0;
     try {
       const url = decodeURIComponent(episode);
       const u4Param = url4up ? decodeURIComponent(url4up) : undefined;
       const isUp4 = /anime4up/i.test(url);
+      const isA3rb = /anime3rb\.com\/episode\//i.test(url);
 
       let res: any = null;
-      if (u4Param || isUp4) {
+      if (isA3rb) {
+        // anime3rb is the primary source (episode only exists there, or the
+        // user opened an anime3rb-only anime). Its player comes straight from
+        // the episode URL — no title/number resolution needed. The anime4up
+        // enrichment effect can still layer its servers on top via title+number.
+        let a3rbServers: any[] = [];
+        for (let attempt = 0; attempt < 2 && a3rbServers.length === 0; attempt++) {
+          a3rbServers = await fetchAnime3rbServersByUrl(url).catch(() => []);
+          if (a3rbServers.length === 0 && attempt === 0) await new Promise((r) => setTimeout(r, 1200));
+        }
+        const epLabel = paramEpNum != null ? `${t.episode} ${paramEpNum}` : "";
+        res = {
+          success: a3rbServers.length > 0,
+          data: {
+            episodeTitle: epLabel,
+            animeTitle: animeTitleParam ? decodeURIComponent(animeTitleParam) : "",
+            animeHref: animeParam ? decodeURIComponent(animeParam) : "",
+            serverCount: a3rbServers.length,
+            servers: a3rbServers.map((s, i) => ({ ...s, id: `a3rb_${i}`, source: "anime3rb" })),
+            navigation: { prev: null, next: null },
+          },
+        };
+      } else if (u4Param || isUp4) {
         // url4up already known (or the episode is itself an anime4up one):
         // one combined fetch scrapes both sources in parallel internally.
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -653,7 +710,23 @@ export default function WatchScreen() {
       }
 
       if (!res?.success || !res.data.servers.length) {
-        setError(t.noServersFound);
+        // The primary source (witanime/anime4up) had no servers for this
+        // episode — but the anime3rb / anime4up enrichment effects can still
+        // find some (Ousama Game etc. are on anime3rb even when witanime's
+        // episode page carries no embeds). Don't error out: surface whatever
+        // title we got and let the append effects populate the list. The
+        // render shows a "still searching" loader until they succeed or the
+        // anime3rb retry loop hits its deadline (noServersFinal).
+        if (res?.data?.episodeTitle) setTitle(res.data.episodeTitle);
+        if (res?.data?.animeTitle) setAnimeTitle(res.data.animeTitle);
+        // Safety net: if NOTHING lands within the window (e.g. the episode
+        // number / title couldn't be derived to even start anime3rb), fall
+        // through to the error screen instead of spinning forever.
+        const epAtStart = episode;
+        setTimeout(() => {
+          if (episodeParamRef.current !== epAtStart) return;
+          if (serversRef.current.length === 0) setNoServersFinal(true);
+        }, 45000);
         return;
       }
 
@@ -680,6 +753,9 @@ export default function WatchScreen() {
       setError(e.message || "Failed to load");
     } finally {
       setLoading(false);
+      // Unblock the enrichment effects regardless of whether the primary had
+      // servers, so anime3rb/anime4up can fill an empty list.
+      setPrimaryDone(true);
     }
   }, [episode, url4up, resolveCurrentUp4Url]);
 
@@ -769,10 +845,12 @@ export default function WatchScreen() {
         const det = await fetchEpisodes(resolvedAnime!).catch(() => null);
         const up4 = await fetchEpisodesUp4(resolvedAnime!, det?.data?.title ?? null).catch(() => null);
         if (cancelled || !up4?.merged?.anime4up) return;
-        // Determine current episode number.
-        let curNum: number | null = null;
-        const m = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
-        if (m) curNum = parseInt(m[1], 10);
+        // Determine current episode number (param first — any URL shape).
+        let curNum: number | null = paramEpNum;
+        if (curNum == null) {
+          const m = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+          if (m) curNum = parseInt(m[1], 10);
+        }
         if (curNum == null && det?.data?.episodes) {
           const norm = (u: string) => { try { return decodeURIComponent(u).replace(/\/+$/, ""); } catch { return u.replace(/\/+$/, ""); } };
           curNum = det.data.episodes.find((e) => norm(e.href || "") === norm(currentHref))?.number ?? null;
@@ -812,7 +890,7 @@ export default function WatchScreen() {
     currentUp4Href || (url4up ? decodeURIComponent(url4up) : null);
   useEffect(() => {
     if (!up4Candidate) return;
-    if (servers.length === 0) return; // wait for the primary servers first
+    if (!primaryDone) return; // wait for the primary scrape (even if it was empty)
     if (servers.some((s) => s.server.source === "anime4up")) return;
     if (appendedUp4Ref.current === up4Candidate) return; // attempt in flight
     appendedUp4Ref.current = up4Candidate;
@@ -845,7 +923,7 @@ export default function WatchScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [up4Candidate, servers.length]);
+  }, [up4Candidate, servers.length, primaryDone]);
 
   // ── APPEND anime3rb servers ──
   // Third server source, fully independent of the witanime/anime4up chains:
@@ -883,25 +961,38 @@ export default function WatchScreen() {
 
   useEffect(() => {
     if (!episode) return;
-    if (servers.length === 0) return;      // wait for the primary servers first
+    if (!primaryDone) return;              // wait for the primary scrape (even if it was empty)
     if (a3rbServerCount > 0) return;       // already enriched successfully
     if (a3rbInFlightRef.current) return;   // a run is already going
-    if (a3rbStartedAtRef.current && Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) return;
+    if (a3rbStartedAtRef.current && Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) {
+      // Retry budget spent. If the primary was empty too, nothing is coming —
+      // let the render fall through from the spinner to the error screen.
+      if (serversRef.current.length === 0) setNoServersFinal(true);
+      return;
+    }
 
     const currentHref = decodeURIComponent(episode);
-    // Episode number: from the witanime/anime4up URL (…الحلقة-N) or the
-    // scraped episode title.
-    let epNum: number | null = null;
-    const um = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
-    if (um) epNum = parseInt(um[1], 10);
+    // Episode number: prefer the explicit param (works for any source's URL),
+    // then the witanime/anime4up URL (…الحلقة-N), then the anime3rb URL
+    // (/episode/<slug>/<n>), then the scraped episode title.
+    let epNum: number | null = paramEpNum;
+    if (epNum == null) {
+      const um = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+      if (um) epNum = parseInt(um[1], 10);
+    }
+    if (epNum == null) {
+      const am = currentHref.match(/\/episode\/[^/]+\/(\d+)/);
+      if (am) epNum = parseInt(am[1], 10);
+    }
     if (epNum == null && title) {
       const tm = title.match(/الحلقة\s*(\d+)/) || title.match(/\bepisode\s*(\d+)/i);
       if (tm) epNum = parseInt(tm[1], 10);
     }
     if (epNum == null) return;
-    // Anime title: prefer the scraped one; fall back to the slug-derived name
-    // so the lookup can fire before (or without) the scrape reporting it.
-    let lookupTitle = animeTitle;
+    // Anime title: prefer the explicit param, then the scraped one; fall back to
+    // the slug-derived name so the lookup can fire before (or without) the
+    // scrape reporting it.
+    let lookupTitle = (animeTitleParam ? decodeURIComponent(animeTitleParam) : "") || animeTitle;
     if (!lookupTitle) {
       try {
         const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
@@ -920,7 +1011,10 @@ export default function WatchScreen() {
     a3rbAttemptsRef.current += 1;
     const attempt = a3rbAttemptsRef.current;
     const scheduleRetry = () => {
-      if (Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) return;
+      if (Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) {
+        if (serversRef.current.length === 0) setNoServersFinal(true);
+        return;
+      }
       const delay = Math.min(4000 * attempt, 15000);
       if (a3rbRetryTimer.current) clearTimeout(a3rbRetryTimer.current);
       a3rbRetryTimer.current = setTimeout(() => setA3rbNonce((n) => n + 1), delay);
@@ -950,7 +1044,7 @@ export default function WatchScreen() {
     // The settled handlers above decide staleness via epAtStart; no cleanup
     // cancellation, so a dep-change re-fire can't discard a successful result.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [episode, servers.length, a3rbServerCount, animeTitle, title, a3rbNonce]);
+  }, [episode, primaryDone, servers.length, a3rbServerCount, animeTitle, title, a3rbNonce]);
 
   // ── AUTO-SELECT anime3rb (preferred first play) ──
   // When the anime3rb server gets appended, make it the active server so it is
@@ -1240,9 +1334,11 @@ export default function WatchScreen() {
         url4up: nextUp4Href || "",
         anime: animeParam || "",
         img: imgParam || "",
+        animeTitle: animeTitleParam || "",
+        epNum: paramEpNum != null ? String(paramEpNum + 1) : "",
       },
     });
-  }, [nextEpisodeHref, nextUp4Href, animeParam, imgParam]);
+  }, [nextEpisodeHref, nextUp4Href, animeParam, imgParam, animeTitleParam, paramEpNum]);
 
   // Previous episode
   const goPrevEpisode = useCallback(() => {
@@ -1253,9 +1349,11 @@ export default function WatchScreen() {
         url4up: prevUp4Href || "",
         anime: animeParam || "",
         img: imgParam || "",
+        animeTitle: animeTitleParam || "",
+        epNum: paramEpNum != null ? String(paramEpNum - 1) : "",
       },
     });
-  }, [prevEpisodeHref, prevUp4Href, animeParam, imgParam]);
+  }, [prevEpisodeHref, prevUp4Href, animeParam, imgParam, animeTitleParam, paramEpNum]);
 
   // Resize mode toggle
   // contain: fits whole video (may have black bars on non-16:9 sources)
@@ -1272,10 +1370,14 @@ export default function WatchScreen() {
   const [isBuffering, setIsBuffering] = useState(false);
   const [speedIdx, setSpeedIdx] = useState(0);
 
-  // Poll player state every 500ms
+  // Poll player state every 500ms — ONLY while the controls are on screen.
+  // The seek bar / time labels these values drive aren't rendered when the
+  // chrome is hidden, so polling then just re-rendered the whole player twice
+  // a second for nothing. Gating on controlsVisible means the common case
+  // (watching with controls hidden) does no per-frame work here.
   useEffect(() => {
-    if (!isPlaying || !player) return;
-    const iv = setInterval(() => {
+    if (!isPlaying || !player || !controlsVisible) return;
+    const tick = () => {
       try {
         const ct = player.currentTime;
         const d = player.duration;
@@ -1286,9 +1388,23 @@ export default function WatchScreen() {
         }
         setIsBuffering(player.status === "loading");
       } catch {}
-    }, 500);
+    };
+    tick(); // refresh the seek bar the instant controls reappear
+    const iv = setInterval(tick, 500);
     return () => clearInterval(iv);
-  }, [isPlaying, player, isSeeking, seekValue]);
+  }, [isPlaying, player, isSeeking, seekValue, controlsVisible]);
+
+  // Lightweight buffering watch while controls are hidden — the buffer spinner
+  // still needs to appear mid-watch. setIsBuffering(false) on a steady stream
+  // is a no-op (React bails on identical state), so this stays render-free
+  // unless buffering actually flips.
+  useEffect(() => {
+    if (!isPlaying || !player || controlsVisible) return;
+    const iv = setInterval(() => {
+      try { setIsBuffering(player.status === "loading"); } catch {}
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [isPlaying, player, controlsVisible]);
 
   // Playback speed
   const cycleSpeed = useCallback(() => {
@@ -1356,6 +1472,20 @@ export default function WatchScreen() {
   // ── RENDER ──
 
   if (loading) {
+    return (
+      <View style={ss.root}>
+        <StatusBar hidden />
+        <View style={ss.centered}>
+          <ActivityIndicator size="large" color={C.green} />
+          <Text style={ss.statusText}>{t.loadingServers}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Primary source had no servers yet, but the anime3rb / anime4up fallbacks
+  // are still being tried — keep the loader up instead of flashing the error.
+  if (servers.length === 0 && !error && !noServersFinal) {
     return (
       <View style={ss.root}>
         <StatusBar hidden />

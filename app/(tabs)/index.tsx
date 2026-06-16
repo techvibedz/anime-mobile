@@ -23,6 +23,8 @@ import { addFavorite, isFavorite, toAnimeUrl } from "../../lib/favorites";
 import { getContinueWatching, progressPercent, removeFromHistory } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
 import { Shimmer } from "../../components/Shimmer";
+import { AdBanner } from "../../components/AdBanner";
+import { MalCardBadge } from "../../components/MalRating";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -188,7 +190,7 @@ export default function HomeScreen() {
                     />
                   </View>
                   {item.image && (
-                    <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                    <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
                   )}
                   {/* Protection gradient */}
                   <LinearGradient
@@ -367,6 +369,9 @@ export default function HomeScreen() {
           </View>
         </View>
 
+        {/* Banner ad at the end of the feed (no-op until configured) */}
+        <AdBanner style={{ marginTop: S.xxl }} />
+
         <View style={{ height: insets.bottom + 100 }} />
       </ScrollView>
 
@@ -451,7 +456,7 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
     >
       <View style={ss.card}>
         {item.image ? (
-          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
+          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
         ) : (
           <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
             <Ionicons name="image-outline" size={28} color={C.textMuted} />
@@ -462,12 +467,7 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
             <Text style={ss.badgeText}>{t.newBadge}</Text>
           </View>
         )}
-        {item.rating && (
-          <View style={ss.ratingBadge}>
-            <Ionicons name="star" size={10} color={C.gold} />
-            <Text style={ss.ratingText}>{item.rating}</Text>
-          </View>
-        )}
+        <MalCardBadge title={item.title} />
         <LinearGradient colors={["transparent", "rgba(6,7,26,0.95)"]} style={ss.cardGrad} />
         {/* Rank number with accent stroke effect */}
         <Text style={ss.cardRank}>{index + 1}</Text>
@@ -488,7 +488,7 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
     >
       <View style={ss.epCard}>
         {item.image ? (
-          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
+          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
         ) : (
           <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
             <Ionicons name="film-outline" size={24} color={C.textMuted} />
@@ -565,7 +565,7 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
     >
       <View style={ss.epCard}>
         {entry.image ? (
-          <Image source={{ uri: entry.image }} style={StyleSheet.absoluteFill} contentFit="cover" />
+          <Image source={{ uri: entry.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={entry.episodeHref} transition={200} />
         ) : (
           <LinearGradient
             colors={[C.surface, C.surfaceLight]}

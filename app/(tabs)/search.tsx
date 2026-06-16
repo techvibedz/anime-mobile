@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, memo } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { searchAnime, fetchAllAnime, fetchGenre } from "../../lib/api";
 import type { SearchResult } from "../../lib/api";
+import { MalCardBadge } from "../../components/MalRating";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -75,6 +76,40 @@ function SkeletonGrid() {
     </View>
   );
 }
+
+/* Memoized result card — without this, every visible poster re-rendered on
+ * each keystroke (the search-progress strip toggles parent state) and on every
+ * pagination append. */
+const ResultCard = memo(function ResultCard({ item }: { item: SearchResult }) {
+  return (
+    <Pressable
+      onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+      style={({ pressed }) => ({ width: CARD_W, opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] })}
+    >
+      <View style={ss.resultCard}>
+        {item.image ? (
+          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
+        ) : (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
+            <Ionicons name="image-outline" size={24} color={C.textMuted} />
+          </View>
+        )}
+        <LinearGradient
+          colors={["transparent", "rgba(6,7,26,0.55)"]}
+          style={ss.resultGrad}
+          pointerEvents="none"
+        />
+        <MalCardBadge title={item.title} />
+        {item.type ? (
+          <View style={ss.typeBadge}>
+            <Text style={ss.typeBadgeText}>{item.type}</Text>
+          </View>
+        ) : null}
+      </View>
+      <Text style={ss.resultTitle} numberOfLines={2}>{item.title}</Text>
+    </Pressable>
+  );
+});
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
@@ -337,6 +372,10 @@ export default function SearchScreen() {
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
           keyboardShouldPersistTaps="handled"
+          initialNumToRender={12}
+          maxToRenderPerBatch={9}
+          windowSize={7}
+          updateCellsBatchingPeriod={50}
           contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100 }}
           columnWrapperStyle={{ gap: GAP, marginBottom: GAP + 8 }}
           onEndReached={loadMoreGenre}
@@ -345,33 +384,7 @@ export default function SearchScreen() {
             <Text style={ss.resultsLabel}>{`نتائج البحث عن "${query.trim()}"`}</Text>
           ) : null}
           ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-              style={({ pressed }) => ({ width: CARD_W, opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] })}
-            >
-              <View style={ss.resultCard}>
-                {item.image ? (
-                  <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" recyclingKey={item.href} transition={200} />
-                ) : (
-                  <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
-                    <Ionicons name="image-outline" size={24} color={C.textMuted} />
-                  </View>
-                )}
-                <LinearGradient
-                  colors={["transparent", "rgba(6,7,26,0.55)"]}
-                  style={ss.resultGrad}
-                  pointerEvents="none"
-                />
-                {item.type ? (
-                  <View style={ss.typeBadge}>
-                    <Text style={ss.typeBadgeText}>{item.type}</Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text style={ss.resultTitle} numberOfLines={2}>{item.title}</Text>
-            </Pressable>
-          )}
+          renderItem={({ item }) => <ResultCard item={item} />}
         />
       ) : (
         <View style={ss.center}>

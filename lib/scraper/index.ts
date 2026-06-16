@@ -1,5 +1,10 @@
 import { enqueue } from "./bus";
 import {
+  fetchWitListingDirect,
+  searchWitanimeDirect,
+  type WitCard,
+} from "./direct";
+import {
   EXTRACT_HOME_WIT,
   EXTRACT_HOME_4UP,
   EXTRACT_EPISODES_WIT,
@@ -105,10 +110,34 @@ export async function scrapeRecent(page = 1) {
 
 /* ── GENRE / ALL-ANIME (paginated card grid) ───── */
 
-export async function scrapeGenre(arabicSlug: string, page = 1) {
+// witanime indexes genres under Arabic slugs only — an English name like
+// "Action" 404s. Map the app's English genre keys to the exact slugs the
+// site uses (verified against witanime.you/anime-genre/<slug>/). Anything not
+// in the map is passed through encoded, so an already-Arabic value still works.
+const GENRE_SLUG_MAP: Record<string, string> = {
+  Action: "أكشن",
+  Adventure: "مغامرات",
+  Comedy: "كوميدي",
+  Drama: "دراما",
+  Fantasy: "خيال",
+  Horror: "رعب",
+  Mystery: "غموض",
+  Romance: "رومانسي",
+  "Sci-Fi": "خيال-علمي",
+  "Slice of Life": "شريحة-من-الحياة",
+  Sports: "رياضي",
+  Supernatural: "خارق-للطبيعة",
+  Thriller: "إثارة",
+  Mecha: "ميكا",
+  Shounen: "شونين",
+  Seinen: "سينين",
+};
+
+export async function scrapeGenre(genre: string, page = 1) {
+  const slug = encodeURIComponent(GENRE_SLUG_MAP[genre] || genre);
   const url = page === 1
-    ? `${WIT_BASE}/anime-genre/${arabicSlug}/`
-    : `${WIT_BASE}/anime-genre/${arabicSlug}/page/${page}/`;
+    ? `${WIT_BASE}/anime-genre/${slug}/`
+    : `${WIT_BASE}/anime-genre/${slug}/page/${page}/`;
   return enqueue({
     url,
     injectAfter: EXTRACT_LISTING,
@@ -125,6 +154,49 @@ export async function scrapeAllAnime(page = 1) {
     injectAfter: EXTRACT_LISTING,
     timeoutMs: 30000,
   }) as Promise<{ items: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: null }[] }>;
+}
+
+/* ── DIRECT (no-WebView) listing/search fast paths ──────────────
+ * witanime serves these pages as static HTML, so a plain GET + regex parse is
+ * far faster and more reliable than rendering them in the hidden WebView.
+ * Each returns null on failure so callers can fall back to the WebView scrape. */
+
+const LISTING_PAGE_SIZE = 30;
+
+// Genre pages aren't server-paginated — one page lists EVERY title in the genre.
+// Fetch it once, cache the full parsed list briefly, and paginate client-side so
+// "load more" and quick revisits don't re-download the multi-MB page.
+const _genreFullCache = new Map<string, { items: WitCard[]; ts: number }>();
+const GENRE_FULL_TTL = 30 * 60 * 1000;
+
+export async function scrapeGenreDirect(genre: string, page = 1) {
+  const slug = encodeURIComponent(GENRE_SLUG_MAP[genre] || genre);
+  const url = `${WIT_BASE}/anime-genre/${slug}/`;
+  let full = _genreFullCache.get(genre);
+  if (!full || Date.now() - full.ts > GENRE_FULL_TTL) {
+    const items = await fetchWitListingDirect(url);
+    if (!items || items.length === 0) return null;
+    full = { items, ts: Date.now() };
+    _genreFullCache.set(genre, full);
+  }
+  const start = (page - 1) * LISTING_PAGE_SIZE;
+  const slice = full.items.slice(start, start + LISTING_PAGE_SIZE);
+  return { items: slice, hasNext: start + LISTING_PAGE_SIZE < full.items.length };
+}
+
+export async function scrapeAllAnimeDirect(page = 1) {
+  const url = page === 1
+    ? `${WIT_BASE}/${ALL_ANIME_PATH}/`
+    : `${WIT_BASE}/${ALL_ANIME_PATH}/page/${page}/`;
+  const items = await fetchWitListingDirect(url);
+  if (!items) return null;
+  return { items, hasNext: items.length > 0 };
+}
+
+export async function searchWitanimeDirectList(query: string) {
+  const results = await searchWitanimeDirect(query);
+  if (!results) return null;
+  return { results };
 }
 
 /* ── CROSS-SOURCE TITLE MATCH ─────────────────── */

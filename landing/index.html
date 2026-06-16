@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>بانتوفة — Pantoufa | تطبيق الأنمي</title>
+  <meta name="description" content="بانتوفة — شاهد آلاف حلقات الأنمي المترجمة مجانًا، بدون إعلانات، مع مزامنة سحابية ومتابعة للمشاهدة. حمّل التطبيق الآن." />
+  <meta name="theme-color" content="#06071A" />
+  <link rel="icon" href="./assets/favicon.png" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="بانتوفة — تطبيق الأنمي" />
+  <meta property="og:description" content="شاهد الأنمي المفضّل لديك مجانًا وبدون إعلانات. حمّل التطبيق الآن." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="./assets/hero.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- animated background layers -->
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-blobs" aria-hidden="true">
+    <span class="blob blob--violet"></span>
+    <span class="blob blob--cyan"></span>
+    <span class="blob blob--magenta"></span>
+  </div>
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <!-- NAV -->
+  <header class="nav" id="nav">
+    <a class="nav__brand" href="#top" aria-label="بانتوفة">
+      <img src="./assets/logo.png" alt="" class="nav__logo" />
+      <span class="nav__name">بانتوفة</span>
+    </a>
+    <nav class="nav__links">
+      <a href="#features">المميّزات</a>
+      <a href="#install">طريقة التثبيت</a>
+      <a href="#download" class="nav__cta">تحميل</a>
+    </nav>
+  </header>
+
+  <!-- HERO -->
+  <main id="top">
+    <section class="hero">
+      <div class="hero__content reveal">
+        <span class="hero__badge">
+          <span class="dot"></span> تطبيق أنمي مجاني بالكامل
+        </span>
+        <h1 class="hero__title">
+          عالم الأنمي
+          <span class="grad-text">بين يديك</span>
+        </h1>
+        <p class="hero__sub">
+          شاهد آلاف الحلقات والأفلام المترجمة بجودة عالية —
+          بدون إعلانات، مع مزامنة سحابية لمفضّلتك وسِجل مشاهدتك عبر كل أجهزتك.
+        </p>
+
+        <div class="hero__actions" id="download">
+          <a class="btn btn--primary" id="downloadBtn" href="#" download>
+            <svg viewBox="0 0 24 24" class="btn__icon" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 15a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>
+            <span>تحميل التطبيق</span>
+            <em class="btn__meta" id="downloadMeta">APK · أندرويد</em>
+          </a>
+          <a class="btn btn--ghost" href="#features">اكتشف المميّزات</a>
+        </div>
+
+        <div class="hero__meta">
+          <span class="chip" id="versionChip">
+            <span class="chip__pulse"></span> الإصدار الأحدث
+          </span>
+          <span class="chip chip--muted">يعمل على أندرويد 7+</span>
+          <span class="chip chip--muted">تحديثات تلقائية داخل التطبيق</span>
+        </div>
+      </div>
+
+      <div class="hero__art reveal" data-tilt>
+        <div class="hero__glow"></div>
+
+        <!-- Live phone mockup of the real app (home screen) -->
+        <div class="device device--hero">
+          <span class="device__notch"></span>
+          <div class="device__screen">
+            <div class="app app--scroll">
+              <!-- top bar -->
+              <div class="app-top">
+                <div class="app-logo"><span class="app-logo__dot"></span>Pantoufa</div>
+                <div class="app-glassbtn">🔔</div>
+              </div>
+
+              <!-- hero carousel -->
+              <div class="app-hero" style="background-image:url('./assets/posters/demon-slayer.jpg')">
+                <div class="app-hero__mesh"></div>
+                <div class="app-hero__shade"></div>
+                <div class="app-hero__body">
+                  <div class="app-chips">
+                    <span class="app-chip">أكشن</span><span class="app-chip">خارق</span><span class="app-chip">شونين</span>
+                  </div>
+                  <h3 class="app-hero__title">قاتل الشياطين</h3>
+                  <p class="app-hero__desc">رحلة تانجيرو لإنقاذ أخته والقضاء على الشياطين.</p>
+                  <div class="app-hero__btns">
+                    <span class="app-btn app-btn--accent">▶ شاهد الآن</span>
+                    <span class="app-btn app-btn--glass">♡ قائمتي</span>
+                  </div>
+                </div>
+                <div class="app-dots"><i class="on"></i><i></i><i></i></div>
+              </div>
+
+              <!-- continue watching -->
+              <div class="app-sec">
+                <div class="app-sec__head"><span class="app-tick"></span>تابع المشاهدة</div>
+                <div class="app-row">
+                  <div class="app-ep" style="background-image:url('./assets/posters/jujutsu-kaisen.jpg')">
+                    <span class="app-ep__play">▶</span><span class="app-ep__time">١٢ د</span>
+                    <span class="app-prog"><i style="width:64%"></i></span>
+                  </div>
+                  <div class="app-ep" style="background-image:url('./assets/posters/attack-on-titan.jpg')">
+                    <span class="app-ep__play">▶</span><span class="app-ep__time">٤ د</span>
+                    <span class="app-prog"><i style="width:88%"></i></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- trending (rank cards) -->
+              <div class="app-sec">
+                <div class="app-sec__head"><span class="app-tick"></span>الأكثر رواجًا<span class="app-seeall">عرض الكل ‹</span></div>
+                <div class="app-row">
+                  <div class="app-card" style="background-image:url('./assets/posters/jujutsu-kaisen.jpg')"><span class="app-rate">★ 8.5</span><b class="app-rank">1</b></div>
+                  <div class="app-card" style="background-image:url('./assets/posters/hunter-x-hunter.jpg')"><span class="app-rate">★ 9.0</span><b class="app-rank">2</b></div>
+                  <div class="app-card" style="background-image:url('./assets/posters/one-punch-man.jpg')"><span class="app-rate">★ 8.5</span><b class="app-rank">3</b></div>
+                </div>
+              </div>
+
+              <!-- recently updated -->
+              <div class="app-sec">
+                <div class="app-sec__head"><span class="app-tick"></span>حلقات جديدة<span class="app-seeall">عرض الكل ‹</span></div>
+                <div class="app-row">
+                  <div class="app-ep" style="background-image:url('./assets/posters/tokyo-ghoul.jpg')"><span class="app-badge">جديد</span><span class="app-ep__play">▶</span></div>
+                  <div class="app-ep" style="background-image:url('./assets/posters/steins-gate.jpg')"><span class="app-ep__play">▶</span></div>
+                </div>
+              </div>
+
+              <!-- categories -->
+              <div class="app-sec">
+                <div class="app-sec__head"><span class="app-tick"></span>التصنيفات</div>
+                <div class="app-cats">
+                  <span class="app-cat" style="--a:#FF2D55;--b:#FF6B3D">⚡ أكشن</span>
+                  <span class="app-cat" style="--a:#FF6B9D;--b:#FF2D55">♥ رومانسي</span>
+                  <span class="app-cat" style="--a:#7C5CFC;--b:#9B6BFF">✦ خيال</span>
+                  <span class="app-cat" style="--a:#00C6FF;--b:#7C5CFC">🪐 خيال علمي</span>
+                </div>
+              </div>
+              <div style="height:46px"></div>
+            </div>
+
+            <!-- floating glass nav -->
+            <div class="app-nav">
+              <span class="app-nav__item on">⌂ الرئيسية</span>
+              <span class="app-nav__item">⌕</span>
+              <span class="app-nav__item">♡</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="float-card float-card--1"><strong>+1000</strong><span>أنمي</span></div>
+        <div class="float-card float-card--3"><strong>0</strong><span>إعلانات</span></div>
+      </div>
+    </section>
+
+    <!-- MARQUEE -->
+    <section class="marquee" aria-hidden="true">
+      <div class="marquee__track">
+        <span>أكشن</span><span>•</span><span>مغامرة</span><span>•</span><span>رومانسي</span><span>•</span>
+        <span>خيال</span><span>•</span><span>كوميدي</span><span>•</span><span>إثارة</span><span>•</span>
+        <span>شونين</span><span>•</span><span>إيسيكاي</span><span>•</span><span>رعب</span><span>•</span>
+        <span>دراما</span><span>•</span><span>رياضة</span><span>•</span>
+        <span>أكشن</span><span>•</span><span>مغامرة</span><span>•</span><span>رومانسي</span><span>•</span>
+        <span>خيال</span><span>•</span><span>كوميدي</span><span>•</span><span>إثارة</span><span>•</span>
+        <span>شونين</span><span>•</span><span>إيسيكاي</span><span>•</span><span>رعب</span><span>•</span>
+        <span>دراما</span><span>•</span><span>رياضة</span><span>•</span>
+      </div>
+    </section>
+
+    <!-- SHOWCASE -->
+    <section class="showcase" id="showcase">
+      <div class="section-head reveal">
+        <span class="kicker">شاشات من داخل التطبيق</span>
+        <h2>هكذا يبدو بانتوفة</h2>
+        <p>واجهة سينمائية بالوضع الداكن، سريعة وسلسة — صُمّمت لعشّاق الأنمي.</p>
+      </div>
+
+      <div class="phones">
+        <!-- Discover -->
+        <div class="device device--mini reveal" style="--i:0">
+          <span class="device__notch"></span>
+          <div class="device__screen">
+            <div class="app">
+              <div class="app-disc__head">
+                <span class="app-disc__title">اكتشف</span>
+                <span class="app-count">٢٤٨</span>
+              </div>
+              <div class="app-search"><span>⌕</span> ابحث عن أنمي…</div>
+              <div class="app-gchips">
+                <span class="app-gchip on">الكل</span><span class="app-gchip">أكشن</span><span class="app-gchip">مغامرة</span><span class="app-gchip">رومانسي</span><span class="app-gchip">خيال</span>
+              </div>
+              <div class="app-glow"></div>
+              <div class="app-grid">
+                <span style="background-image:url('./assets/posters/jujutsu-kaisen.jpg')"></span>
+                <span style="background-image:url('./assets/posters/demon-slayer.jpg')"></span>
+                <span style="background-image:url('./assets/posters/attack-on-titan.jpg')"></span>
+                <span style="background-image:url('./assets/posters/one-punch-man.jpg')"></span>
+                <span style="background-image:url('./assets/posters/hunter-x-hunter.jpg')"></span>
+                <span style="background-image:url('./assets/posters/fma-brotherhood.jpg')"></span>
+                <span style="background-image:url('./assets/posters/my-hero-academia.jpg')"></span>
+                <span style="background-image:url('./assets/posters/tokyo-ghoul.jpg')"></span>
+                <span style="background-image:url('./assets/posters/your-name.jpg')"></span>
+              </div>
+            </div>
+            <div class="app-nav"><span class="app-nav__item">⌂</span><span class="app-nav__item on">⌕ اكتشف</span><span class="app-nav__item">♡</span></div>
+          </div>
+        </div>
+
+        <!-- Anime detail (center, elevated) -->
+        <div class="device device--center reveal" style="--i:1">
+          <span class="device__notch"></span>
+          <div class="device__screen">
+            <div class="app">
+              <div class="app-det__hero" style="background-image:url('./assets/posters/jujutsu-kaisen.jpg')">
+                <div class="app-det__top"><span class="app-glassbtn sm">‹</span><span class="app-glassbtn sm">♡</span></div>
+                <div class="app-det__shade"></div>
+              </div>
+              <div class="app-det__body">
+                <h3 class="app-det__title">جوجوتسو كايسن</h3>
+                <div class="app-det__meta"><span class="app-rate">★ 8.5</span><span>2023</span><span>•</span><span>TV</span><span>•</span><span>24 حلقة</span></div>
+                <div class="app-chips">
+                  <span class="app-chip">أكشن</span><span class="app-chip">خارق</span><span class="app-chip">مدرسي</span>
+                </div>
+                <span class="app-btn app-btn--accent wide">▶ شاهد الحلقة 1</span>
+                <div class="app-sec__head sm"><span class="app-tick"></span>الحلقات</div>
+                <div class="app-eplist">
+                  <div class="app-eprow"><b>24</b><span>الحلقة الأخيرة</span><i>▶</i></div>
+                  <div class="app-eprow"><b>23</b><span>المعركة الكبرى</span><i>▶</i></div>
+                  <div class="app-eprow"><b>22</b><span>القرار</span><i>▶</i></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- My list -->
+        <div class="device device--mini reveal" style="--i:2">
+          <span class="device__notch"></span>
+          <div class="device__screen">
+            <div class="app">
+              <div class="app-disc__head">
+                <span class="app-disc__title">قائمتي</span>
+                <span class="app-count">١٢</span>
+              </div>
+              <div class="app-gchips">
+                <span class="app-gchip on">المفضّلة</span><span class="app-gchip">السجل</span>
+              </div>
+              <div class="app-glow"></div>
+              <div class="app-grid">
+                <span style="background-image:url('./assets/posters/steins-gate.jpg')"></span>
+                <span style="background-image:url('./assets/posters/your-name.jpg')"></span>
+                <span style="background-image:url('./assets/posters/fma-brotherhood.jpg')"></span>
+                <span style="background-image:url('./assets/posters/demon-slayer.jpg')"></span>
+                <span style="background-image:url('./assets/posters/hunter-x-hunter.jpg')"></span>
+                <span style="background-image:url('./assets/posters/one-punch-man.jpg')"></span>
+              </div>
+            </div>
+            <div class="app-nav"><span class="app-nav__item">⌂</span><span class="app-nav__item">⌕</span><span class="app-nav__item on">♡ قائمتي</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="features" id="features">
+      <div class="section-head reveal">
+        <span class="kicker">لماذا بانتوفة؟</span>
+        <h2>كل ما تحتاجه لمشاهدة الأنمي</h2>
+        <p>تجربة مصمّمة بعناية، سريعة، وخالية من الإزعاج.</p>
+      </div>
+
+      <div class="grid">
+        <article class="card reveal" style="--i:0">
+          <div class="card__icon">☁️</div>
+          <h3>مزامنة سحابية</h3>
+          <p>مفضّلتك وسجل مشاهدتك محفوظان في حسابك ويظهران على أي جهاز تسجّل الدخول منه.</p>
+        </article>
+        <article class="card reveal" style="--i:1">
+          <div class="card__icon">🚫</div>
+          <h3>بدون إعلانات</h3>
+          <p>مشاهدة سلسة بلا نوافذ منبثقة ولا انقطاع — فقط أنت والأنمي.</p>
+        </article>
+        <article class="card reveal" style="--i:2">
+          <div class="card__icon">▶️</div>
+          <h3>متابعة المشاهدة</h3>
+          <p>أكمل من حيث توقّفت تمامًا — يتذكّر التطبيق آخر حلقة شاهدتها لكل أنمي.</p>
+        </article>
+        <article class="card reveal" style="--i:3">
+          <div class="card__icon">📚</div>
+          <h3>مكتبة ضخمة</h3>
+          <p>آلاف الأنميات والحلقات المترجمة، تُحدّث أولًا بأول مع كل موسم جديد.</p>
+        </article>
+        <article class="card reveal" style="--i:4">
+          <div class="card__icon">🔄</div>
+          <h3>تحديثات تلقائية</h3>
+          <p>التحديثات تُحمّل وتُثبّت داخل التطبيق مباشرة مع شريط تقدّم — بدون متجر.</p>
+        </article>
+        <article class="card reveal" style="--i:5">
+          <div class="card__icon">⚡</div>
+          <h3>سريع وخفيف</h3>
+          <p>أداء سلس وواجهة أنيقة بالوضع الداكن، مصمّمة لراحة عينيك ليلًا.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- INSTALL -->
+    <section class="install" id="install">
+      <div class="section-head reveal">
+        <span class="kicker">ثلاث خطوات فقط</span>
+        <h2>كيف تثبّت التطبيق</h2>
+      </div>
+      <div class="steps">
+        <div class="step reveal" style="--i:0">
+          <span class="step__num">١</span>
+          <h3>حمّل ملف APK</h3>
+          <p>اضغط زر «تحميل التطبيق» في الأعلى، وانتظر اكتمال التنزيل.</p>
+        </div>
+        <div class="step reveal" style="--i:1">
+          <span class="step__num">٢</span>
+          <h3>اسمح بالتثبيت</h3>
+          <p>عند الفتح قد يطلب أندرويد السماح بالتثبيت من «مصادر غير معروفة» — فعّله.</p>
+        </div>
+        <div class="step reveal" style="--i:2">
+          <span class="step__num">٣</span>
+          <h3>ثبّت واستمتع</h3>
+          <p>افتح بانتوفة، أنشئ حسابك، وابدأ المشاهدة فورًا. التحديثات بعدها تلقائية.</p>
+        </div>
+      </div>
+
+      <div class="download-banner reveal">
+        <div>
+          <h3>جاهز للبدء؟</h3>
+          <p id="releaseNotes">حمّل أحدث إصدار من بانتوفة الآن مجانًا.</p>
+        </div>
+        <a class="btn btn--primary btn--lg" id="downloadBtn2" href="#" download>
+          <svg viewBox="0 0 24 24" class="btn__icon" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v9.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1Zm-7 15a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z"/></svg>
+          <span id="downloadBtn2Label">تحميل التطبيق</span>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <img src="./assets/logo.png" alt="" class="footer__logo" />
+    <p class="footer__name">بانتوفة <span>Pantoufa</span></p>
+    <p class="footer__copy">© <span id="year"></span> — جميع الحقوق محفوظة. تطبيق غير رسمي لعشّاق الأنمي.</p>
+  </footer>
+
+  <script src="./app.js"></script>
+</body>
+</html>

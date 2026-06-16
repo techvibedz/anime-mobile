@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, memo } from "react";
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Modal,
   I18nManager,
+  ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
@@ -15,14 +16,24 @@ import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes, fetchEpisodesUp4 } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes } from "../../lib/api";
 import type { AnimeDetail, RelatedAnime, Episode } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
 import { getWatchedHrefsForAnime, toggleWatched } from "../../lib/history";
+import { fetchAnimeInfo, fetchAnimeMal } from "../../lib/animeInfo";
+import type { AnimeInfoField } from "../../lib/animeInfo";
+import { MalBadge, MalCardBadge } from "../../components/MalRating";
+import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
 import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+
+// Core React Native bundles a Clipboard native module (no extra dependency), so
+// copying works over OTA on the existing build. Deep-import since the top-level
+// `Clipboard` export was removed from react-native.
+const Clipboard = require("react-native/Libraries/Components/Clipboard/Clipboard")
+  .default as { setString(s: string): void };
 
 const { width: SW } = Dimensions.get("window");
 const BANNER_H = 360;
@@ -36,6 +47,7 @@ export default function AnimeDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<AnimeDetail | null>(null);
   const [episodes4up, setEpisodes4up] = useState<Episode[]>([]);
+  const [episodes3rb, setEpisodes3rb] = useState<Episode[]>([]);
   const [merged, setMerged] = useState<{ anime4up: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [synopsisOpen, setSynopsisOpen] = useState(false);
@@ -43,6 +55,8 @@ export default function AnimeDetailScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("episodes");
   const [watchedHrefs, setWatchedHrefs] = useState<Set<string>>(new Set());
+  const [malScore, setMalScore] = useState<number | null>(null);
+  const [titleCopied, setTitleCopied] = useState(false);
   const bookmarked = bookmarkList !== null;
   const animeHref = id ? decodeURIComponent(id) : "";
 
@@ -81,6 +95,30 @@ export default function AnimeDetailScreen() {
     })();
     return () => { cancelled = true; };
   }, [id]);
+
+  // Resolve the MyAnimeList score for the header badge once the title is known.
+  // This also warms the shared cache the Info tab reads, so opening it is instant.
+  useEffect(() => {
+    if (!data?.title) return;
+    let cancelled = false;
+    fetchAnimeMal(data.title).then((m) => { if (!cancelled) setMalScore(m.score); });
+    return () => { cancelled = true; };
+  }, [data?.title]);
+
+  // Background: pull anime3rb's full episode list (a third source for the
+  // cross-source union). witanime is often a week behind and anime4up paginates,
+  // so anime3rb frequently carries the newest episode the others are missing.
+  // Skip when the page itself is already an anime3rb page (its episodes are the
+  // primary list). Runs after the UI is showing, so it never blocks render.
+  useEffect(() => {
+    if (!data?.title) return;
+    if (/anime3rb\.com/i.test(animeHref)) return;
+    let cancelled = false;
+    fetchAnime3rbEpisodes(data.title)
+      .then((eps) => { if (!cancelled && eps.length > 0) setEpisodes3rb(eps); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [data?.title, animeHref]);
 
   // Refresh watched flags when the screen regains focus (e.g. after watching).
   useFocusEffect(useCallback(() => {
@@ -123,6 +161,14 @@ export default function AnimeDetailScreen() {
     if (ok) setBookmarkList(list);
     setPickerOpen(false);
   }, [data, id]);
+
+  // Long-press the title to copy it instantly — no manual text selection.
+  const copyTitle = useCallback(() => {
+    if (!data?.title) return;
+    Clipboard.setString(data.title);
+    setTitleCopied(true);
+    setTimeout(() => setTitleCopied(false), 1500);
+  }, [data?.title]);
 
   if (loading) return <DetailSkeleton />;
 
@@ -171,6 +217,8 @@ export default function AnimeDetailScreen() {
               source={{ uri: data.banner || data.poster }}
               style={{ width: SW, height: BANNER_H }}
               contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={200}
             />
           ) : null}
           <LinearGradient
@@ -182,22 +230,31 @@ export default function AnimeDetailScreen() {
 
         {/* ── Info Section ──────────────────── */}
         <View style={ss.infoSection}>
-          <Text style={ss.title}>{data.title}</Text>
+          <Pressable onLongPress={copyTitle} delayLongPress={350}>
+            <Text style={ss.title}>{data.title}</Text>
+          </Pressable>
+          {titleCopied && (
+            <View style={ss.copiedPill}>
+              <Ionicons name="checkmark-circle" size={13} color={C.green} />
+              <Text style={ss.copiedText}>{t.titleCopied}</Text>
+            </View>
+          )}
 
-          {/* Quick meta */}
-          <View style={ss.quickMeta}>
-            {data.rating && (
-              <View style={ss.ratingPill}>
-                <Ionicons name="star" size={12} color={C.gold} />
-                <Text style={ss.ratingText}>{data.rating}</Text>
-              </View>
-            )}
-            {data.genres.slice(0, 3).map((g, i) => (
-              <View key={i} style={ss.chip}>
-                <Text style={ss.chipText}>{g}</Text>
-              </View>
-            ))}
-          </View>
+          {/* Quick meta — MAL rating badge; full genre list lives below the synopsis */}
+          {(malScore != null || data.rating) && (
+            <View style={ss.quickMeta}>
+              <MalBadge score={malScore} />
+              {data.rating && (
+                <View style={ss.ratingPill}>
+                  <Ionicons name="star" size={12} color={C.gold} />
+                  <Text style={ss.ratingText}>{data.rating}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Next-episode countdown — only shows for currently-airing anime */}
+          <AiringCountdown title={data.title} />
 
           {/* Action buttons */}
           <View style={ss.actions}>
@@ -267,11 +324,13 @@ export default function AnimeDetailScreen() {
             <EpisodesTab
               episodes={data.episodes}
               episodes4up={episodes4up}
+              episodes3rb={episodes3rb}
               merged={merged}
               poster={data.poster}
               watchedHrefs={watchedHrefs}
               onToggleWatched={handleToggleWatched}
               animeHref={animeHref}
+              animeTitle={data.title}
             />
           )}
           {activeTab === "related" && <RelatedTab items={data.relatedAnime} />}
@@ -349,19 +408,23 @@ function GlassCircleBtn({ icon, color = C.text, onPress }: { icon: string; color
 function EpisodesTab({
   episodes,
   episodes4up,
+  episodes3rb,
   merged,
   poster,
   watchedHrefs,
   onToggleWatched,
   animeHref,
+  animeTitle,
 }: {
   episodes: AnimeDetail["episodes"];
   episodes4up: Episode[];
+  episodes3rb: Episode[];
   merged: { anime4up: string } | null;
   poster: string;
   watchedHrefs: Set<string>;
   onToggleWatched: (ep: Episode) => void;
   animeHref: string;
+  animeTitle: string;
 }) {
   const [sortDesc, setSortDesc] = useState(true); // true = newest first
   // Render in chunks so anime with 500+ episodes don't freeze the JS thread.
@@ -369,16 +432,63 @@ function EpisodesTab({
   const PAGE = 80;
   const [visibleCount, setVisibleCount] = useState(PAGE);
 
-  const mergedEps = useMemo(() => episodes.map((ep) => {
-    const match = episodes4up.find((e) => e.number === ep.number);
-    return { ...ep, href4up: match?.href || null };
-  }), [episodes, episodes4up]);
+  // Union the episode lists across ALL THREE sources, keyed by episode number,
+  // so the grid is as complete as the *most up-to-date* source — not just
+  // witanime. witanime frequently lags a week behind and anime4up paginates, so
+  // an episode that only exists on anime4up or anime3rb still shows up and stays
+  // playable (the watch screen layers each source's servers on the href). For
+  // an episode present in several sources, witanime's data wins (richer
+  // hrefs/screenshots); the others fill the gaps and contribute newer episodes.
+  const mergedEps = useMemo(() => {
+    const byNum = new Map<number, GridEpisode>();
+    const ensure = (num: number, seed: Partial<GridEpisode>): GridEpisode => {
+      let g = byNum.get(num);
+      if (!g) {
+        g = {
+          title: seed.title || `${t.episode} ${num}`,
+          number: num,
+          type: seed.type || "",
+          screenshot: seed.screenshot || "",
+          href: null,
+          href4up: null,
+          href3rb: null,
+        };
+        byNum.set(num, g);
+      }
+      return g;
+    };
+    for (const ep of episodes) {
+      const g = ensure(ep.number, ep);
+      g.href = ep.href ?? g.href;
+      g.title = ep.title || g.title;
+      if (ep.type) g.type = ep.type;
+      if (ep.screenshot) g.screenshot = ep.screenshot;
+    }
+    for (const e of episodes4up) {
+      const g = ensure(e.number, e);
+      g.href4up = e.href || g.href4up;
+      if (!g.screenshot && e.screenshot) g.screenshot = e.screenshot;
+    }
+    for (const e of episodes3rb) {
+      const g = ensure(e.number, e);
+      g.href3rb = e.href || g.href3rb;
+      if (!g.screenshot && e.screenshot) g.screenshot = e.screenshot;
+    }
+    return Array.from(byNum.values());
+  }, [episodes, episodes4up, episodes3rb]);
 
   const sorted = useMemo(() => [...mergedEps].sort((a, b) => {
     const an = a.number ?? 0;
     const bn = b.number ?? 0;
     return sortDesc ? bn - an : an - bn;
   }), [mergedEps, sortDesc]);
+
+  // Ascending order, computed once — used to derive prev/next for the watch
+  // screen. Previously re-sorted inside every card's onPress handler.
+  const byNum = useMemo(
+    () => [...mergedEps].sort((a, b) => (a.number ?? 0) - (b.number ?? 0)),
+    [mergedEps],
+  );
 
   // Reset window when sort flips so user always sees the FIRST page of the
   // new order (not a weird middle chunk).
@@ -430,72 +540,18 @@ function EpisodesTab({
 
       {/* Episode grid: 2 columns for thumbnail cards */}
       <View style={ss.epGrid}>
-        {visible.map((ep, i) => {
-          const watched = ep.href ? watchedHrefs.has(ep.href) : false;
-          return (
-            <Pressable
-              key={`${ep.number}-${i}`}
-              disabled={!ep.href && !ep.href4up}
-              onPress={() => {
-                if (ep.href) {
-                  // Derive next/prev by EPISODE NUMBER, not array index.
-                  // When the user sorts descending, sorted[i+1] is the
-                  // PREVIOUS episode — that's why the buttons looked broken.
-                  const byNum = [...mergedEps].sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
-                  const myIdx = byNum.findIndex((e) => e.href === ep.href);
-                  const nextE = myIdx >= 0 ? (byNum[myIdx + 1]?.href || '') : '';
-                  const prevE = myIdx >= 0 ? (byNum[myIdx - 1]?.href || '') : '';
-                  router.push({
-                    pathname: `/watch/${encodeURIComponent(ep.href)}`,
-                    params: {
-                      url4up: ep.href4up || '',
-                      img: poster || '',
-                      nextEp: nextE,
-                      prevEp: prevE,
-                      anime: animeHref,
-                    },
-                  });
-                }
-              }}
-              onLongPress={() => onToggleWatched(ep as Episode)}
-              delayLongPress={300}
-              style={({ pressed }) => [ss.epCard, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-            >
-              <View style={[ss.epCardThumb, watched && ss.epCardThumbWatched]}>
-                {ep.screenshot ? (
-                  <Image source={{ uri: ep.screenshot }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                ) : poster ? (
-                  <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} contentFit="cover" />
-                ) : null}
-                {watched && <View style={ss.watchedDim} />}
-                <LinearGradient
-                  colors={["transparent", "rgba(0,0,0,0.85)"]}
-                  style={ss.epCardGradient}
-                />
-                <View style={ss.epCardPlayBtn}>
-                  <Ionicons name={watched ? "checkmark" : "play"} size={14} color="#fff" />
-                </View>
-                <View style={ss.epCardNumBadge}>
-                  <Text style={ss.epCardNumText}>{String(ep.number ?? '?').padStart(2, '0')}</Text>
-                </View>
-                {watched && (
-                  <View style={ss.watchedBadge}>
-                    <Ionicons name="checkmark-circle" size={11} color="#fff" />
-                    <Text style={ss.watchedBadgeText}>{t.watchedBadge}</Text>
-                  </View>
-                )}
-                {ep.href4up && !watched && (
-                  <View style={ss.epCardSourceBadge}>
-                    <Text style={ss.epCardSourceText}>2X</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={[ss.epCardTitle, watched && { color: C.textMuted }]} numberOfLines={1}>
-                {`${t.episode} ${ep.number ?? ''}`.trim()}
-              </Text>
-            </Pressable>
-          );
-        })}
+        {visible.map((ep, i) => (
+          <EpisodeGridCard
+            key={`${ep.number}-${i}`}
+            ep={ep}
+            watched={ep.href ? watchedHrefs.has(ep.href) : false}
+            poster={poster}
+            animeHref={animeHref}
+            animeTitle={animeTitle}
+            byNum={byNum}
+            onToggleWatched={onToggleWatched}
+          />
+        ))}
       </View>
       {hasMore && (
         <Pressable
@@ -521,6 +577,101 @@ function EpisodesTab({
   );
 }
 
+/* ── Episode grid card (memoized) ───────────── */
+// Memoized so toggling a "watched" flag (or the focus refetch of watched
+// hrefs) only re-renders the single card whose state changed — not all 80
+// cards in a long series. byNum is a stable reference from the parent.
+type GridEpisode = Episode & { href4up: string | null; href3rb: string | null };
+
+const EpisodeGridCard = memo(function EpisodeGridCard({
+  ep,
+  watched,
+  poster,
+  animeHref,
+  animeTitle,
+  byNum,
+  onToggleWatched,
+}: {
+  ep: GridEpisode;
+  watched: boolean;
+  poster: string;
+  animeHref: string;
+  animeTitle: string;
+  byNum: GridEpisode[];
+  onToggleWatched: (ep: Episode) => void;
+}) {
+  return (
+    <Pressable
+      disabled={!ep.href && !ep.href4up && !ep.href3rb}
+      onPress={() => {
+        // Pick the primary source: witanime first (richest page), then anime4up,
+        // then anime3rb — so an episode missing from witanime still plays from
+        // whichever source has it. Every source href + the episode number and
+        // anime title ride along so the watch screen can layer the OTHER
+        // sources' servers on top regardless of which one is primary.
+        const primary = ep.href || ep.href4up || ep.href3rb;
+        if (!primary) return;
+        const up4IsPrimary = !ep.href && !!ep.href4up;
+        // Derive next/prev by EPISODE NUMBER, not array index, so the
+        // buttons stay correct regardless of the visible sort order.
+        const sib = (e?: GridEpisode) => (e ? (e.href || e.href4up || e.href3rb || '') : '');
+        const myIdx = byNum.findIndex((e) => (e.href || e.href4up || e.href3rb) === primary);
+        const nextE = myIdx >= 0 ? sib(byNum[myIdx + 1]) : '';
+        const prevE = myIdx >= 0 ? sib(byNum[myIdx - 1]) : '';
+        router.push({
+          pathname: `/watch/${encodeURIComponent(primary)}`,
+          params: {
+            url4up: up4IsPrimary ? '' : (ep.href4up || ''),
+            url3rb: ep.href3rb || '',
+            epNum: ep.number != null ? String(ep.number) : '',
+            animeTitle: animeTitle || '',
+            img: poster || '',
+            nextEp: nextE,
+            prevEp: prevE,
+            anime: animeHref,
+          },
+        });
+      }}
+      onLongPress={() => onToggleWatched(ep as Episode)}
+      delayLongPress={300}
+      style={({ pressed }) => [ss.epCard, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+    >
+      <View style={[ss.epCardThumb, watched && ss.epCardThumbWatched]}>
+        {ep.screenshot ? (
+          <Image source={{ uri: ep.screenshot }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+        ) : poster ? (
+          <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+        ) : null}
+        {watched && <View style={ss.watchedDim} />}
+        <LinearGradient
+          colors={["transparent", "rgba(0,0,0,0.85)"]}
+          style={ss.epCardGradient}
+        />
+        <View style={ss.epCardPlayBtn}>
+          <Ionicons name={watched ? "checkmark" : "play"} size={14} color="#fff" />
+        </View>
+        <View style={ss.epCardNumBadge}>
+          <Text style={ss.epCardNumText}>{String(ep.number ?? '?').padStart(2, '0')}</Text>
+        </View>
+        {watched && (
+          <View style={ss.watchedBadge}>
+            <Ionicons name="checkmark-circle" size={11} color="#fff" />
+            <Text style={ss.watchedBadgeText}>{t.watchedBadge}</Text>
+          </View>
+        )}
+        {ep.href4up && !watched && (
+          <View style={ss.epCardSourceBadge}>
+            <Text style={ss.epCardSourceText}>2X</Text>
+          </View>
+        )}
+      </View>
+      <Text style={[ss.epCardTitle, watched && { color: C.textMuted }]} numberOfLines={1}>
+        {`${t.episode} ${ep.number ?? ''}`.trim()}
+      </Text>
+    </Pressable>
+  );
+});
+
 /* ── Tab: Related ───────────────────────────── */
 
 function RelatedTab({ items }: { items: RelatedAnime[] }) {
@@ -541,12 +692,13 @@ function RelatedTab({ items }: { items: RelatedAnime[] }) {
           style={({ pressed }) => [ss.relatedCard, { opacity: pressed ? 0.85 : 1 }]}
         >
           {item.image ? (
-            <Image source={{ uri: item.image }} style={ss.relatedImage} contentFit="cover" />
+            <Image source={{ uri: item.image }} style={ss.relatedImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
           ) : (
             <View style={[ss.relatedImage, { alignItems: "center", justifyContent: "center" }]}>
               <Ionicons name="image-outline" size={24} color={C.textMuted} />
             </View>
           )}
+          <MalCardBadge title={item.title} />
           <Text style={ss.relatedTitle} numberOfLines={2}>{item.title}</Text>
           {item.type && <Text style={ss.relatedType}>{item.type}</Text>}
         </Pressable>
@@ -558,12 +710,46 @@ function RelatedTab({ items }: { items: RelatedAnime[] }) {
 /* ── Tab: Info ───────────────────────────────── */
 
 function InfoTab({ data }: { data: AnimeDetail }) {
+  const [fields, setFields] = useState<AnimeInfoField[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchAnimeInfo(data.title)
+      .then((f) => { if (!cancelled) setFields(f); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [data.title]);
+
+  // Prefer the API-enriched facts; fall back to whatever the scrape provided.
+  const scraped = Object.entries(data.metadata).map(([label, value]) => ({ label, value }));
+  const rows: AnimeInfoField[] = fields && fields.length > 0 ? fields : scraped;
+
+  if (loading && rows.length === 0) {
+    return (
+      <View style={ss.emptyTab}>
+        <ActivityIndicator color={C.accent} />
+        <Text style={ss.emptyTabText}>{t.loadingInfo}</Text>
+      </View>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <View style={ss.emptyTab}>
+        <Ionicons name="information-circle-outline" size={40} color={C.textMuted} />
+        <Text style={ss.emptyTabText}>{t.noInfo}</Text>
+      </View>
+    );
+  }
+
   return (
     <View>
-      {Object.entries(data.metadata).map(([label, value], i) => (
+      {rows.map((row, i) => (
         <View key={i} style={ss.infoRow}>
-          <Text style={ss.infoLabel}>{label}</Text>
-          <Text style={ss.infoValue}>{value}</Text>
+          <Text style={ss.infoLabel}>{row.label}</Text>
+          <Text style={ss.infoValue}>{row.value}</Text>
         </View>
       ))}
     </View>
@@ -604,9 +790,16 @@ const ss = StyleSheet.create({
   // Info
   infoSection: { marginTop: -48, paddingHorizontal: PAD },
   title: {
-    color: C.text, fontSize: 32, fontWeight: "800", lineHeight: 36, letterSpacing: -0.6,
+    color: C.text, fontSize: 24, fontWeight: "800", lineHeight: 30, letterSpacing: -0.4,
     textAlign: "center", fontFamily: "Outfit_800ExtraBold",
   },
+  copiedPill: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    alignSelf: "center", marginTop: 8,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
+    backgroundColor: C.green + "1F",
+  },
+  copiedText: { color: C.green, fontSize: 11, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
   quickMeta: {
     flexDirection: "row", flexWrap: "wrap", justifyContent: "center",
     gap: 6, marginTop: 14,
@@ -758,9 +951,9 @@ const ss = StyleSheet.create({
   relatedType: { color: C.textMuted, fontSize: 10, marginTop: 2, fontFamily: "DMSans_500Medium" },
 
   // Info
-  infoRow: { flexDirection: "row", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.borderSoft },
-  infoLabel: { color: C.textMuted, fontSize: 13, fontWeight: "500", width: 110, fontFamily: "DMSans_500Medium" },
-  infoValue: { color: C.textSecondary, fontSize: 13, flex: 1, fontFamily: "DMSans_500Medium" },
+  infoRow: { flexDirection: "row-reverse", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft },
+  infoLabel: { color: C.textMuted, fontSize: 13, fontWeight: "500", width: 110, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  infoValue: { color: C.textSecondary, fontSize: 13, flex: 1, fontFamily: "DMSans_500Medium", textAlign: "left", writingDirection: "rtl" },
 
   // Empty
   emptyTab: { alignItems: "center", paddingVertical: 48, gap: 12 },

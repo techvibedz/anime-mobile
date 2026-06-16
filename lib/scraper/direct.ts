@@ -14,6 +14,7 @@ import type { RawServer } from "./index";
 
 const UP4_BASE = "https://w1.anime4up.rest";
 const A3RB_BASE = "https://anime3rb.com";
+const WIT_BASE = "https://witanime.you";
 
 // Must match the scraper WebView / native player UA (see ScraperHost.tsx and
 // the watch screen's videoSource headers) — some CDNs bind tokens to the UA
@@ -54,6 +55,99 @@ export async function fetchHtml(url: string, referer?: string): Promise<string |
     await new Promise((r) => setTimeout(r, 600 * attempt));
   }
   return null;
+}
+
+/* ── witanime: direct static-HTML listings & search ──
+ *
+ * witanime serves its genre / all-anime / search pages as plain static HTML
+ * (the anime cards are in the initial response — no JS gate, no CF challenge on
+ * a residential IP). A genre page in particular is ONE huge page that lists
+ * EVERY title in the genre (Action ≈ 900 cards, ~1.7 MB) with no server
+ * pagination, so rendering it in the hidden WebView (which also tries to load
+ * ~900 poster images) is slow and frequently times out — categories "never
+ * showed". A plain GET + regex parse reads the same cards in one cheap request
+ * with no rendering, so this is the fast path for those screens; the WebView
+ * scrape stays as the fallback. */
+
+export type WitCard = {
+  title: string;
+  href: string;
+  image: string | null;
+  type: string | null;
+  status: string | null;
+  synopsis: string | null;
+};
+
+function htmlDecode(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Strip WordPress' resize suffix (…-323x470.jpg → ….jpg) and CDN resize query
+// params so the card shows a full-resolution poster (mirrors _upgradeImg in
+// scripts.ts).
+function witUpgradeImg(u: string | null): string | null {
+  if (!u) return null;
+  return String(u)
+    .replace(/-\d+x\d+(\.\w+)$/, "$1")
+    .replace(/\?resize=\d+,\d+/, "")
+    .replace(/\?w=\d+/, "");
+}
+
+// Parse every .anime-card-container in a witanime listing/search page. Splitting
+// on the container class keeps each card's image/title/type/status in scope
+// without a brittle single mega-regex.
+function parseWitCards(html: string): WitCard[] {
+  const out: WitCard[] = [];
+  const seen = new Set<string>();
+  const blocks = html.split("anime-card-container");
+  for (let i = 1; i < blocks.length; i++) {
+    const b = blocks[i];
+    const tm = b.match(
+      /anime-card-title[^>]*>\s*<h3[^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i,
+    );
+    if (!tm) continue;
+    const href = (tm[1] || "").trim();
+    if (href.indexOf("/anime/") < 0 || seen.has(href)) continue;
+    const title = htmlDecode((tm[2] || "").replace(/<[^>]+>/g, ""));
+    if (!title) continue;
+    seen.add(href);
+    const im = b.match(/<img[^>]*\b(?:data-src|data-original|data-image|src)=["']([^"']+)["']/i);
+    const ty = b.match(/anime-card-type[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i);
+    const st = b.match(/anime-card-status[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i);
+    out.push({
+      title,
+      href,
+      image: im ? witUpgradeImg(im[1]) : null,
+      type: ty ? htmlDecode(ty[1].replace(/<[^>]+>/g, "")) : null,
+      status: st ? htmlDecode(st[1].replace(/<[^>]+>/g, "")) : null,
+      synopsis: null,
+    });
+  }
+  return out;
+}
+
+// Fetch + parse a witanime listing page (genre or all-anime). Returns null on a
+// fetch failure so the caller can fall back to the WebView scrape.
+export async function fetchWitListingDirect(url: string): Promise<WitCard[] | null> {
+  const html = await fetchHtml(url, WIT_BASE + "/");
+  if (!html) return null;
+  return parseWitCards(html);
+}
+
+// Search witanime via its static-HTML results page.
+export async function searchWitanimeDirect(query: string): Promise<WitCard[] | null> {
+  if (!query) return null;
+  const url = `${WIT_BASE}/?search_param=animes&s=${encodeURIComponent(query)}`;
+  const html = await fetchHtml(url, WIT_BASE + "/");
+  if (!html) return null;
+  return parseWitCards(html);
 }
 
 /* ── Title matching (mirrors EXTRACT_TITLE_MATCH in scripts.ts) ── */
@@ -618,6 +712,107 @@ export async function searchAnime3rbCatalog(title: string): Promise<string | nul
   if (!slug) return null;
   // Confirm against the real page's own title before trusting the match.
   return probeA3rbTitlePage(slug, title);
+}
+
+/* ── anime3rb: anime (title) page → detail + full episode list ──
+ * anime3rb `/titles/<slug>` pages are server-rendered, so a single GET carries
+ * the poster (og:image), synopsis (og:description), and — crucially — every
+ * episode as a predictable `/episode/<slug>/<n>` link. We parse those links to
+ * build a complete, numbered, directly-playable episode list. Used both to add
+ * anime3rb's episodes into the detail page's cross-source union (so episodes
+ * missing from witanime/anime4up still show) and to open anime3rb-only anime
+ * as a first-class detail page. */
+
+export type A3rbEpisode = { title: string; number: number; type: string; screenshot: string; href: string };
+export type A3rbDetail = {
+  title: string;
+  poster: string;
+  synopsis: string;
+  genres: string[];
+  episodes: A3rbEpisode[];
+};
+
+function a3rbMetaContent(html: string, prop: string): string | null {
+  const re = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["']`,
+    "i",
+  );
+  const m = html.match(re) || html.match(
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["']`, "i"),
+  );
+  return m ? htmlDecode(m[1]) : null;
+}
+
+// Pull every episode number anime3rb links for THIS title's slug, then build
+// the full contiguous 1..max list. anime3rb numbers episodes from 1 with no
+// gaps for standard series, and its URLs are constructible, so filling the
+// range guarantees the user sees every episode (including ones the page only
+// exposes through its "load more" control) — each card is a valid, playable
+// URL. The parsed set is used to cap the range so we never invent episodes
+// beyond what the site actually has.
+function parseA3rbEpisodesFromTitle(html: string, slug: string): A3rbEpisode[] {
+  const nums = new Set<number>();
+  // anime3rb is Livewire-rendered: episode links appear both as plain <a href>
+  // and inside JSON snapshots where slashes are escaped (…\/episode\/slug\/11).
+  // Unescape so a single scan catches both forms.
+  html = html.replace(/\\\//g, "/");
+  // Slug may be percent-encoded in the page's hrefs; compare decoded forms.
+  const wantSlug = slug.toLowerCase();
+  const re = /\/episode\/([^/"'\s\\]+)\/(\d+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    let s = m[1];
+    try { s = decodeURIComponent(s); } catch {}
+    if (s.toLowerCase() !== wantSlug) continue;
+    const n = parseInt(m[2], 10);
+    if (!isNaN(n) && n > 0 && n < 5000) nums.add(n);
+  }
+  if (nums.size === 0) return [];
+  const max = Math.max(...nums);
+  const out: A3rbEpisode[] = [];
+  for (let n = 1; n <= max; n++) {
+    out.push({
+      title: "الحلقة " + n,
+      number: n,
+      type: "",
+      screenshot: "",
+      href: `${A3RB_BASE}/episode/${slug}/${n}`,
+    });
+  }
+  return out;
+}
+
+// Scrape a full anime3rb anime page (detail + episodes). Returns null on a
+// fetch/parse failure so callers degrade gracefully to the other sources.
+export async function scrapeAnime3rbTitlePage(titleUrl: string): Promise<A3rbDetail | null> {
+  const html = await fetchHtml(titleUrl, A3RB_BASE + "/");
+  if (!html) return null;
+  const slug = decodeURIComponent(titleUrl.replace(/\/+$/, "").split("/").pop() || "");
+  if (!slug) return null;
+
+  const ogTitle = a3rbMetaContent(html, "og:title");
+  let title = ogTitle || "";
+  if (!title) {
+    const tm = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    if (tm) title = htmlDecode(tm[1]);
+  }
+  title = title.replace(/\s*[|–-]\s*Anime3rb.*$/i, "").trim() || slug.replace(/-+/g, " ");
+
+  const poster = a3rbMetaContent(html, "og:image") || "";
+  const synopsis = a3rbMetaContent(html, "og:description") || a3rbMetaContent(html, "description") || "";
+
+  // Genres: anime3rb links them under /genres/<name> (best-effort).
+  const genres: string[] = [];
+  const seenG = new Set<string>();
+  const gre = /\/genres?\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let gm: RegExpExecArray | null;
+  while ((gm = gre.exec(html)) && genres.length < 12) {
+    const g = htmlDecode(gm[1].replace(/<[^>]+>/g, ""));
+    if (g && !seenG.has(g)) { seenG.add(g); genres.push(g); }
+  }
+
+  const episodes = parseA3rbEpisodesFromTitle(html, slug);
+  return { title, poster, synopsis, genres, episodes };
 }
 
 // Parse the anime3rb episode page's player out of the static HTML. The page

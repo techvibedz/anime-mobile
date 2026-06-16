@@ -11,6 +11,9 @@ import {
   scrapeRecent,
   scrapeGenre,
   scrapeAllAnime,
+  scrapeGenreDirect,
+  scrapeAllAnimeDirect,
+  searchWitanimeDirectList,
   scrapeVideoServers,
   findCrossSourceUrl,
   extractVideoUrl as scrapeExtractVideoUrl,
@@ -23,9 +26,11 @@ import {
   searchAnime3rbDirect,
   searchAnime3rbCatalog,
   scrapeAnime3rbEpisodeServers,
+  scrapeAnime3rbTitlePage,
   extractVid3rb,
   extractMp4upload,
 } from "./scraper/direct";
+import { getAltTitles } from "./animeInfo";
 
 const HOME_CACHE_KEY = "@home_cache_v1";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -437,6 +442,33 @@ type EpisodesPayload = {
 };
 
 async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
+  // anime3rb anime pages aren't witanime/anime4up shaped, so they're scraped
+  // via the static title-page parser instead of the WebView episode scraper.
+  // This lets anime that live ONLY on anime3rb (surfaced by search) open as a
+  // first-class detail page with a full, playable episode list.
+  if (/anime3rb\.com/i.test(animeUrl)) {
+    const a = await scrapeAnime3rbTitlePage(animeUrl);
+    const payload: EpisodesPayload = {
+      success: !!a,
+      data: {
+        title: a?.title || "",
+        poster: a?.poster || "",
+        banner: a?.poster || "",
+        synopsis: a?.synopsis || "",
+        genres: a?.genres || [],
+        rating: null,
+        metadata: {},
+        externalLinks: [],
+        relatedAnime: [],
+        totalEpisodes: a?.episodes.length || 0,
+        episodes: a?.episodes || [],
+        episodes4up: [],
+        merged: null,
+      },
+    };
+    if (a) void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
+    return payload;
+  }
   // Fast path: primary source only. Cross-source enrichment is fetched in
   // the background via fetchEpisodesUp4 — see the detail screen.
   const d = await scrapeEpisodesPage(animeUrl);
@@ -605,6 +637,39 @@ export async function fetchAnime3rbServers(animeTitle: string, epNumber: number)
   if (!slug) return [];
   const episodeUrl = `https://anime3rb.com/episode/${slug}/${epNumber}`;
   return scrapeAnime3rbEpisodeServers(episodeUrl).catch(() => [] as RawServer[]);
+}
+
+// Servers for a KNOWN anime3rb episode URL (no title/number resolution needed).
+// Used when an anime3rb episode is the primary source on the watch screen.
+export async function fetchAnime3rbServersByUrl(episodeUrl: string): Promise<RawServer[]> {
+  if (!episodeUrl) return [];
+  return scrapeAnime3rbEpisodeServers(episodeUrl).catch(() => [] as RawServer[]);
+}
+
+// Public resolver for an anime's anime3rb /titles/<slug> page (or null).
+export async function findAnime3rbAnimeUrl(animeTitle: string): Promise<string | null> {
+  return resolveAnime3rbTitleUrl(animeTitle).catch(() => null);
+}
+
+// anime3rb's full episode list for an anime, for the detail page's cross-source
+// union — so episodes missing from witanime/anime4up still appear (and stay
+// playable, since each href is a real anime3rb episode URL). Cached 6h; a miss
+// isn't cached so a flaky resolve can retry on the next visit.
+const A3RB_EPS_PREFIX = "@a3rb_eps_v1:";
+const A3RB_EPS_TTL = 6 * 60 * 60 * 1000;
+export async function fetchAnime3rbEpisodes(animeTitle: string): Promise<Episode[]> {
+  if (!animeTitle || !animeTitle.trim()) return [];
+  const titleUrl = await resolveAnime3rbTitleUrl(animeTitle);
+  if (!titleUrl) return [];
+  const cacheKey = A3RB_EPS_PREFIX + titleUrl;
+  const cached = await readCache<Episode[]>(cacheKey, A3RB_EPS_TTL);
+  if (cached) return cached;
+  const detail = await scrapeAnime3rbTitlePage(titleUrl).catch(() => null);
+  const eps: Episode[] = (detail?.episodes || []).map((e) => ({
+    title: e.title, number: e.number, type: e.type, screenshot: e.screenshot, href: e.href,
+  }));
+  if (eps.length > 0) void writeCache(cacheKey, eps);
+  return eps;
 }
 
 /* ── /recent ────────────────────────────────── */
@@ -783,28 +848,87 @@ export async function searchAnime(query: string): Promise<{
     SEARCH_CACHE_PREFIX + query.toLowerCase().trim(),
     SEARCH_CACHE_TTL,
     async () => {
-      // Search BOTH sources in parallel (each gets its own WebView slot).
-      // witanime is the primary; don't make the user wait on a slow/CF-cold
-      // anime4up scrape — once the primary lands, give the secondary a short
-      // grace window and merge whatever arrived by then.
-      const witP = scrapeSearch(query).catch(() => null);
+      // Primary: witanime's static-HTML search via a plain GET — near-instant,
+      // no WebView render. Fall back to the WebView scrape only if the direct
+      // fetch fails (network / CF hiccup).
+      let wit = await searchWitanimeDirectList(query).catch(() => null);
+      if (!wit) wit = await scrapeSearch(query).catch(() => null);
+
+      // Secondary: anime4up runs on the WebView (its static HTML is blocked to
+      // plain fetches). Since the primary now lands instantly, give the
+      // secondary only a short grace window and merge whatever arrived — its
+      // extra titles still fill in on the next (cache-served) search.
       const up4P = scrapeSearchUp4(query).catch(() => null);
-      const wit = await witP;
       const up4 = await Promise.race([
         up4P,
-        new Promise<null>((r) => setTimeout(() => r(null), wit?.results.length ? 5000 : 20000)),
+        new Promise<null>((r) => setTimeout(() => r(null), wit?.results.length ? 2500 : 15000)),
       ]);
 
       const results: SearchResult[] = (wit?.results ?? []).map(toSearchResult);
+      const seen = new Set(results.map((r) => norm(r.title)));
+      const mergeIn = (arr: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis?: string | null }[]) => {
+        for (const it of arr) {
+          const k = norm(it.title);
+          if (k && seen.has(k)) continue;
+          if (k) seen.add(k);
+          results.push(toSearchResult(it));
+        }
+      };
       if (up4?.results?.length) {
         // Dedupe across sources by normalised title so the same show
         // doesn't appear twice; anime4up-only titles get appended.
-        const seen = new Set(results.map((r) => norm(r.title)));
-        for (const it of up4.results) {
-          const k = norm(it.title);
-          if (k && seen.has(k)) continue;
-          seen.add(k);
-          results.push(toSearchResult(it));
+        mergeIn(up4.results);
+      }
+
+      // anime3rb (third source): surface anime that live ONLY on anime3rb —
+      // its catalog matcher is conservative (near-total token coverage + exact
+      // season), so a confident match is fetched for its poster/title and
+      // appended if it isn't already in the list. Opening it routes through the
+      // anime3rb detail branch above. Cheap (catalog is cached; one page GET)
+      // and the whole search is SWR-cached, so it only runs on a cold query.
+      try {
+        const a3rbUrl =
+          (await searchAnime3rbCatalog(query).catch(() => null)) ||
+          (await searchAnime3rbDirect(query).catch(() => null));
+        if (a3rbUrl) {
+          const detail = await scrapeAnime3rbTitlePage(a3rbUrl).catch(() => null);
+          if (detail?.title) {
+            const k = norm(detail.title);
+            if (!k || !seen.has(k)) {
+              if (k) seen.add(k);
+              results.push(toSearchResult({
+                title: detail.title, href: a3rbUrl, image: detail.poster || null,
+                type: null, status: null, synopsis: detail.synopsis || null,
+              }));
+            }
+          }
+        }
+      } catch {}
+
+      // Cross-language bridge: the source sites index each anime under a SINGLE
+      // language, so an English query never finds a romaji-only title (and a
+      // Japanese query never finds an English-only one). When the direct search
+      // comes up empty, ask Jikan for the title's other names and re-search the
+      // sites with the Latin-script ones (the sites don't index kanji).
+      if (results.length === 0) {
+        const alts = await getAltTitles(query).catch(() => []);
+        const tried = new Set<string>([norm(query)]);
+        const candidates = alts
+          .filter((a) => /[a-z]/i.test(a)) // sites index romaji/English, not kanji
+          .filter((a) => {
+            const n = norm(a);
+            if (!n || tried.has(n)) return false;
+            tried.add(n);
+            return true;
+          })
+          .slice(0, 2);
+        for (const alt of candidates) {
+          let wAlt = await searchWitanimeDirectList(alt).catch(() => null);
+          if (!wAlt) wAlt = await scrapeSearch(alt).catch(() => null);
+          if (wAlt?.results?.length) mergeIn(wAlt.results);
+          const upAlt = await scrapeSearchUp4(alt).catch(() => null);
+          if (upAlt?.results?.length) mergeIn(upAlt.results);
+          if (results.length) break;
         }
       }
       return { success: true, data: { query, totalResults: results.length, results } };
@@ -823,6 +947,14 @@ export async function fetchGenre(name: string, page = 1): Promise<{
     `${LISTING_CACHE_PREFIX}genre:${name}:${page}`,
     LISTING_CACHE_TTL,
     async () => {
+      // Fast path: parse the static genre page directly (no WebView). The page
+      // lists every title at once, so this paginates client-side.
+      const direct = await scrapeGenreDirect(name, page).catch(() => null);
+      if (direct && direct.items.length > 0) {
+        const items: SearchResult[] = direct.items.map(toSearchResult);
+        return { success: true, data: { genre: name, page, items, hasNext: direct.hasNext } };
+      }
+      // Fallback: WebView scrape.
       const r = await scrapeGenre(name, page);
       const items: SearchResult[] = r.items.map((it) => ({
         title: it.title,
@@ -847,6 +979,13 @@ export async function fetchAllAnime(page = 1): Promise<{
     `${LISTING_CACHE_PREFIX}all:${page}`,
     LISTING_CACHE_TTL,
     async () => {
+      // Fast path: parse the static all-anime page directly (no WebView).
+      const direct = await scrapeAllAnimeDirect(page).catch(() => null);
+      if (direct && direct.items.length > 0) {
+        const items: SearchResult[] = direct.items.map(toSearchResult);
+        return { success: true, data: { page, items, hasNext: direct.hasNext } };
+      }
+      // Fallback: WebView scrape.
       const r = await scrapeAllAnime(page);
       const items: SearchResult[] = r.items.map((it) => ({
         title: it.title,

@@ -13,6 +13,7 @@ import { checkForApkUpdate, checkForOtaUpdate } from "../lib/updater";
 import type { UpdateInfo } from "../lib/updater";
 import { UpdateModal } from "../components/UpdateModal";
 import { ScraperHost } from "../lib/scraper";
+import { initAds } from "../lib/ads";
 import "../global.css";
 
 function AuthGate() {
@@ -83,7 +84,17 @@ function AuthGate() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="anime/[id]" />
-        <Stack.Screen name="watch/[episode]" />
+        <Stack.Screen
+          name="watch/[episode]"
+          options={{
+            // Go fully immersive while watching: hide the Android on-screen
+            // system navigation bar (and status bar) so the video isn't
+            // overlapped by the phone's button bar. react-native-screens
+            // restores both when leaving this route. JS-only → OTA-safe.
+            navigationBarHidden: true,
+            statusBarHidden: true,
+          }}
+        />
         <Stack.Screen name="see-all/[section]" />
         <Stack.Screen name="scraper-debug" />
         <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
@@ -116,6 +127,9 @@ export default function RootLayout() {
     DMSans_600SemiBold,
     DMSans_700Bold,
   });
+
+  // Kick off the ad SDK once at startup (no-op until ad IDs are configured).
+  useEffect(() => { initAds(); }, []);
 
   if (!fontsLoaded) {
     return (

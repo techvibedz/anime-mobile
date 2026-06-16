@@ -1,6 +1,6 @@
 {
     "force_update": false,
-    "version": "1.2.0",
-    "release_notes": "تصميم جديد لأيقونة التطبيق وشاشة البداية. التحديثات الآن تُحمّل داخل التطبيق مباشرة مع شريط تقدّم — بدون فتح المتصفح.",
-    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.2.0/pantoufa-1.2.0.apk"
+    "version": "1.3.0",
+    "release_notes": "عدّاد تنازلي للحلقة القادمة في صفحة الأنمي، مع عرض الحلقات من المصادر الثلاثة (ويت أنمي + أنمي فور أب + أنمي3rb) لإظهار الحلقات الناقصة. تحسينات في البحث لإظهار أنميات إضافية.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.3.0/pantoufa-1.3.0.apk"
 }

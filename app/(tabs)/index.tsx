@@ -24,7 +24,6 @@ import { getContinueWatching, progressPercent, removeFromHistory } from "../../l
 import type { WatchEntry } from "../../lib/history";
 import { syncEpisodeNotifications, getUnreadCount } from "../../lib/notifications";
 import { useSidebar } from "../../components/Sidebar";
-import { useAuth } from "../../lib/auth";
 import { Shimmer } from "../../components/Shimmer";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
@@ -60,7 +59,6 @@ const SECTION_LABELS: Record<string, string> = {
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { openSidebar } = useSidebar();
-  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [featured, setFeatured] = useState<FeaturedItem[]>([]);
@@ -171,17 +169,12 @@ export default function HomeScreen() {
             </Pressable>
 
             <Pressable onPress={openSidebar} hitSlop={8}>
-              {(() => {
-                const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
-                const initial = (user?.user_metadata?.full_name || user?.email || "P").trim().charAt(0).toUpperCase();
-                return avatarUrl ? (
-                  <Image source={{ uri: avatarUrl }} style={ss.avatarBtn} contentFit="cover" transition={150} />
-                ) : (
-                  <LinearGradient colors={[C.accent, C.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={ss.avatarBtn}>
-                    <Text style={ss.avatarBtnText}>{initial}</Text>
-                  </LinearGradient>
-                );
-              })()}
+              <View style={ss.glassBtn}>
+                <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill}>
+                  <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surfaceGlass }]} />
+                </BlurView>
+                <Ionicons name="menu" size={20} color={C.text} />
+              </View>
             </Pressable>
           </View>
         </View>
@@ -706,12 +699,6 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: C.glassBorder,
   },
   topBarActions: { flexDirection: "row", alignItems: "center", gap: 10 },
-  avatarBtn: {
-    width: 36, height: 36, borderRadius: R.circle,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: C.glassBorder,
-  },
-  avatarBtnText: { color: "#fff", fontSize: 15, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
   notifBadge: {
     position: "absolute", top: -3, right: -3,
     minWidth: 17, height: 17, borderRadius: 9, paddingHorizontal: 4,

@@ -31,7 +31,7 @@ import {
   notificationsModuleAvailable,
 } from "../lib/push";
 import { checkForApkUpdate, checkForOtaUpdate, openApkDownload, applyOtaUpdate } from "../lib/updater";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
 import { t } from "../lib/i18n";
 
 const HISTORY_KEY = "watch_history";
@@ -133,7 +133,7 @@ export default function SettingsScreen() {
           <Ionicons name={I18nManager.isRTL ? "chevron-forward" : "chevron-back"} size={22} color={C.white} />
         </Pressable>
         <Text style={s.heading}>{t.settingsTitle}</Text>
-        <View style={s.backBtn} />
+        <View style={s.headerSpacer} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: S.paddingContent, paddingBottom: insets.bottom + 40 }}>
@@ -242,7 +242,7 @@ function ScopeRow({
       <View style={s.rowIcon}><Ionicons name="funnel-outline" size={19} color={C.text} /></View>
       <View style={{ flex: 1 }}>
         <Text style={s.rowTitle}>{t.settingsNotifScope}</Text>
-        <Text style={s.rowDesc} numberOfLines={2}>{t.settingsNotifScopeDesc}</Text>
+        <Text style={s.rowDesc}>{t.settingsNotifScopeDesc}</Text>
         <View style={s.segment}>
           {options.map((opt) => {
             const active = scope === opt.key;
@@ -282,7 +282,7 @@ function ActionRow({
         <Text style={[s.rowTitle, danger && { color: C.accent }]}>{title}</Text>
         <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
       </View>
-      {right ?? <Ionicons name={I18nManager.isRTL ? "chevron-back" : "chevron-forward"} size={18} color={C.textMuted} />}
+      {right ?? <Ionicons name="chevron-back" size={18} color={C.textMuted} />}
     </Pressable>
   );
 }
@@ -303,44 +303,45 @@ const s = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
-  heading: { color: C.text, fontSize: 18, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  headerSpacer: { width: 40, height: 40 },
+  heading: { flex: 1, textAlign: "center", color: C.text, fontSize: 18, fontWeight: "700", fontFamily: "Outfit_700Bold" },
 
   groupTitle: {
     color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "Outfit_700Bold",
-    marginTop: 22, marginBottom: 10, marginHorizontal: 4, textAlign: "left",
+    marginTop: 24, marginBottom: 10, marginHorizontal: 6, textAlign: "right",
   },
   group: {
     borderRadius: R.lg, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     overflow: "hidden", ...ELEVATION_CARD,
   },
   row: {
-    flexDirection: "row", alignItems: "center", gap: 14,
-    paddingVertical: 14, paddingHorizontal: 14,
+    flexDirection: "row-reverse", alignItems: "center", gap: 14,
+    paddingVertical: 15, paddingHorizontal: 14,
   },
   rowIcon: {
     width: 38, height: 38, borderRadius: R.md,
     backgroundColor: C.surfaceLight, alignItems: "center", justifyContent: "center",
   },
   rowText: { flex: 1 },
-  rowTitle: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "left" },
-  rowDesc: { color: C.textMuted, fontSize: 11, marginTop: 3, lineHeight: 15, fontFamily: "DMSans_500Medium", textAlign: "left" },
-  divider: { height: 1, backgroundColor: C.border, marginLeft: 66 },
+  rowTitle: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
+  rowDesc: { color: C.textMuted, fontSize: 11.5, marginTop: 4, lineHeight: 17, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  divider: { height: 1, backgroundColor: C.border, marginRight: 66 },
 
-  scopeRow: { flexDirection: "row", gap: 14, paddingVertical: 14, paddingHorizontal: 14 },
+  scopeRow: { flexDirection: "row-reverse", gap: 14, paddingVertical: 15, paddingHorizontal: 14 },
   segment: {
-    flexDirection: "row", gap: 6, marginTop: 12,
+    flexDirection: "row-reverse", gap: 6, marginTop: 14,
     padding: 4, borderRadius: R.pill,
     backgroundColor: C.bgDeep, borderWidth: 1, borderColor: C.glassBorder,
   },
   segmentBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 9, borderRadius: R.pill,
+    flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingVertical: 10, borderRadius: R.pill,
   },
-  segmentBtnActive: { backgroundColor: C.accent },
-  segmentText: { color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  segmentBtnActive: { backgroundColor: C.accent, ...ELEVATION_GLOW },
+  segmentText: { color: C.textSecondary, fontSize: 12.5, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
   segmentTextActive: { color: C.textOnAccent },
 
-  brandFooter: { alignItems: "center", marginTop: 36, gap: 3 },
+  brandFooter: { alignItems: "center", marginTop: 40, gap: 4 },
   brandName: { color: C.accent, fontSize: 20, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
   brandTag: { color: C.textSecondary, fontSize: 12, fontFamily: "DMSans_500Medium" },
   brandVersion: { color: C.textMuted, fontSize: 11, marginTop: 6, fontFamily: "DMSans_500Medium" },

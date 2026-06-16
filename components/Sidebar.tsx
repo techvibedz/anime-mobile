@@ -5,9 +5,9 @@ import {
   Pressable,
   StyleSheet,
   Animated,
+  Easing,
   Dimensions,
   Share,
-  Linking,
   ScrollView,
 } from "react-native";
 import { Image } from "expo-image";
@@ -15,15 +15,14 @@ import { router, usePathname } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
 import { useAuth } from "../lib/auth";
 import { getHistory, isCompleted } from "../lib/history";
 import { getFavorites } from "../lib/favorites";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 
 const { width: SW } = Dimensions.get("window");
-const PANEL_W = Math.min(320, SW * 0.82);
+const PANEL_W = Math.min(330, SW * 0.84);
 
 /* ── Context ─────────────────────────────────── */
 
@@ -52,14 +51,18 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/* ── Quick stats ─────────────────────────────── */
+/* ── Sidebar UI ──────────────────────────────── */
 
 interface QuickStats {
   episodesWatched: number;
   animeCount: number;
 }
 
-/* ── Sidebar UI ──────────────────────────────── */
+interface NavRow {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}
 
 function Sidebar() {
   const { open, closeSidebar } = useSidebar();
@@ -69,10 +72,11 @@ function Sidebar() {
 
   const [mounted, setMounted] = useState(false);
   const [stats, setStats] = useState<QuickStats>({ episodesWatched: 0, animeCount: 0 });
-  const slide = useRef(new Animated.Value(PANEL_W)).current;
-  const fade = useRef(new Animated.Value(0)).current;
+  // Single driver (0 = closed, 1 = open) — the panel slide and backdrop fade are
+  // both interpolated from it, so the whole thing animates on one native value.
+  const anim = useRef(new Animated.Value(0)).current;
 
-  // Close the drawer automatically whenever the route changes.
+  // Auto-close on route change.
   const lastPath = useRef(pathname);
   useEffect(() => {
     if (pathname !== lastPath.current) {
@@ -84,7 +88,6 @@ function Sidebar() {
   useEffect(() => {
     if (open) {
       setMounted(true);
-      // Refresh quick stats each time it opens.
       Promise.all([getHistory(), getFavorites()])
         .then(([history, favs]) => {
           setStats({
@@ -93,21 +96,28 @@ function Sidebar() {
           });
         })
         .catch(() => {});
-      Animated.parallel([
-        Animated.timing(slide, { toValue: 0, duration: 260, useNativeDriver: true }),
-        Animated.timing(fade, { toValue: 1, duration: 260, useNativeDriver: true }),
-      ]).start();
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
     } else if (mounted) {
-      Animated.parallel([
-        Animated.timing(slide, { toValue: PANEL_W, duration: 220, useNativeDriver: true }),
-        Animated.timing(fade, { toValue: 0, duration: 220, useNativeDriver: true }),
-      ]).start(({ finished }) => {
+      Animated.timing(anim, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
         if (finished) setMounted(false);
       });
     }
   }, [open]);
 
   if (!mounted) return null;
+
+  const translateX = anim.interpolate({ inputRange: [0, 1], outputRange: [PANEL_W, 0] });
+  const backdropOpacity = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
 
   const displayName =
     user?.user_metadata?.full_name ||
@@ -118,17 +128,16 @@ function Sidebar() {
 
   const go = (path: string) => {
     closeSidebar();
-    // Defer navigation slightly so the close animation reads smoothly.
-    setTimeout(() => router.push(path as any), 60);
+    setTimeout(() => router.push(path as any), 80);
   };
 
   const onShare = () => {
     closeSidebar();
-    Share.share({ message: t.shareAppMessage }).catch(() => {});
+    setTimeout(() => Share.share({ message: t.shareAppMessage }).catch(() => {}), 80);
   };
 
-  const NAV: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void; accent?: boolean }[] = [
-    { icon: "person-circle-outline", label: t.profile, onPress: () => go("/profile") },
+  const NAV: NavRow[] = [
+    { icon: "person-outline", label: t.profile, onPress: () => go("/profile") },
     { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist") },
     { icon: "notifications-outline", label: t.notifications, onPress: () => go("/notifications") },
     { icon: "settings-outline", label: t.settingsTitle, onPress: () => go("/settings") },
@@ -138,35 +147,34 @@ function Sidebar() {
   return (
     <View style={st.overlay} pointerEvents="box-none">
       {/* Backdrop */}
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity: fade }]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={closeSidebar}>
-          <View style={st.backdrop} />
-        </Pressable>
+      <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]} pointerEvents={open ? "auto" : "none"}>
+        <Pressable style={st.backdrop} onPress={closeSidebar} />
       </Animated.View>
 
-      {/* Panel (slides from the right) */}
+      {/* Panel (slides from the right — RTL natural) */}
       <Animated.View
-        style={[
-          st.panel,
-          { width: PANEL_W, paddingTop: insets.top + 16, transform: [{ translateX: slide }] },
-        ]}
+        style={[st.panel, { width: PANEL_W, paddingTop: insets.top + 10, transform: [{ translateX }] }]}
       >
-        <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill}>
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.bgDeep }]} />
-        </BlurView>
-
-        {/* Decorative mesh glow */}
+        {/* Decorative top glow */}
         <LinearGradient
           colors={[C.violetSoft, "transparent"]}
           start={{ x: 1, y: 0 }}
-          end={{ x: 0, y: 0.6 }}
+          end={{ x: 0.1, y: 0.5 }}
           style={st.mesh}
           pointerEvents="none"
         />
 
+        {/* Header: title (right) + close (left) */}
+        <View style={st.header}>
+          <Pressable onPress={closeSidebar} hitSlop={8} style={st.closeBtn}>
+            <Ionicons name="close" size={20} color={C.text} />
+          </Pressable>
+          <Text style={st.headerTitle}>{t.menu}</Text>
+        </View>
+
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
-          {/* Profile header */}
-          <Pressable style={st.profileBtn} onPress={() => go("/profile")}>
+          {/* Profile card */}
+          <Pressable style={({ pressed }) => [st.profileCard, pressed && st.pressed]} onPress={() => go("/profile")}>
             {avatarUrl ? (
               <Image source={{ uri: avatarUrl }} style={st.avatar} contentFit="cover" transition={150} />
             ) : (
@@ -176,11 +184,7 @@ function Sidebar() {
             )}
             <View style={st.profileText}>
               <Text style={st.name} numberOfLines={1}>{displayName}</Text>
-              {user?.email ? (
-                <Text style={st.email} numberOfLines={1}>{user.email}</Text>
-              ) : (
-                <Text style={st.email} numberOfLines={1}>{t.guest}</Text>
-              )}
+              <Text style={st.email} numberOfLines={1}>{user?.email || t.guest}</Text>
             </View>
             <Ionicons name="chevron-back" size={18} color={C.textMuted} />
           </Pressable>
@@ -203,29 +207,31 @@ function Sidebar() {
               <Pressable
                 key={item.label}
                 onPress={item.onPress}
-                style={({ pressed }) => [st.navItem, pressed && st.navItemPressed]}
+                style={({ pressed }) => [st.navItem, pressed && st.pressed]}
               >
                 <View style={st.navIcon}>
                   <Ionicons name={item.icon} size={19} color={C.text} />
                 </View>
                 <Text style={st.navLabel}>{item.label}</Text>
-                <Ionicons name="chevron-back" size={16} color={C.textMuted} style={{ marginLeft: "auto" }} />
+                <Ionicons name="chevron-back" size={16} color={C.textMuted} />
               </Pressable>
             ))}
           </View>
 
-          {/* Footer */}
-          <View style={st.divider} />
+          {/* Sign out */}
           {isConfigured && user ? (
-            <Pressable
-              onPress={() => { closeSidebar(); signOut(); }}
-              style={({ pressed }) => [st.navItem, pressed && st.navItemPressed]}
-            >
-              <View style={[st.navIcon, { backgroundColor: C.accentSoft }]}>
-                <Ionicons name="log-out-outline" size={19} color={C.accent} />
-              </View>
-              <Text style={[st.navLabel, { color: C.accent }]}>{t.signOut}</Text>
-            </Pressable>
+            <>
+              <View style={st.divider} />
+              <Pressable
+                onPress={() => { closeSidebar(); setTimeout(() => signOut(), 80); }}
+                style={({ pressed }) => [st.navItem, pressed && st.pressed]}
+              >
+                <View style={[st.navIcon, { backgroundColor: C.accentSoft }]}>
+                  <Ionicons name="log-out-outline" size={19} color={C.accent} />
+                </View>
+                <Text style={[st.navLabel, { color: C.accent }]}>{t.signOut}</Text>
+              </Pressable>
+            </>
           ) : null}
 
           <Text style={st.brand}>{t.settingsAppName} · {t.settingsTagline}</Text>
@@ -235,55 +241,75 @@ function Sidebar() {
   );
 }
 
+/* Rows are laid out right-to-left (icon on the right, label flowing right,
+ * chevron on the far left) to match the app's Arabic reading direction. */
 const st = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFillObject, zIndex: 1000 },
-  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)" },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)" },
+
   panel: {
     position: "absolute", top: 0, bottom: 0, right: 0,
-    overflow: "hidden",
-    borderTopLeftRadius: R.xxl, borderBottomLeftRadius: R.xxl,
+    backgroundColor: C.bgDeep,
+    borderTopLeftRadius: 24, borderBottomLeftRadius: 24,
     borderLeftWidth: 1, borderColor: C.glassBorder,
     paddingHorizontal: 16,
+    overflow: "hidden",
     ...ELEVATION_CARD,
+    shadowOffset: { width: -8, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
   },
-  mesh: { position: "absolute", top: 0, right: 0, width: PANEL_W, height: 220 },
+  mesh: { position: "absolute", top: 0, right: 0, left: 0, height: 200 },
 
-  profileBtn: {
-    flexDirection: "row", alignItems: "center", gap: 12,
-    paddingVertical: 12, paddingHorizontal: 4,
+  header: {
+    flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 4, paddingBottom: 12,
   },
-  avatar: {
-    width: 52, height: 52, borderRadius: R.circle,
+  headerTitle: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  closeBtn: {
+    width: 34, height: 34, borderRadius: R.circle,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
-  avatarInitial: { color: "#fff", fontSize: 22, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  profileText: { flex: 1 },
-  name: { color: C.text, fontSize: 16, fontWeight: "700", fontFamily: "Outfit_700Bold", textAlign: "left" },
-  email: { color: C.textMuted, fontSize: 12, marginTop: 2, fontFamily: "DMSans_500Medium", textAlign: "left" },
 
-  statsRow: { flexDirection: "row", gap: 10, marginVertical: 14 },
+  profileCard: {
+    flexDirection: "row-reverse", alignItems: "center", gap: 12,
+    padding: 12, borderRadius: R.lg,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    marginBottom: 14,
+  },
+  avatar: {
+    width: 50, height: 50, borderRadius: R.circle,
+    alignItems: "center", justifyContent: "center",
+  },
+  avatarInitial: { color: "#fff", fontSize: 21, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  profileText: { flex: 1 },
+  name: { color: C.text, fontSize: 15, fontWeight: "700", fontFamily: "Outfit_700Bold", textAlign: "right" },
+  email: { color: C.textMuted, fontSize: 12, marginTop: 3, fontFamily: "DMSans_500Medium", textAlign: "right" },
+
+  statsRow: { flexDirection: "row-reverse", gap: 10, marginBottom: 18 },
   statCard: {
     flex: 1, borderRadius: R.lg, paddingVertical: 14, alignItems: "center",
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
   statNum: { color: C.accent, fontSize: 22, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  statLabel: { color: C.textSecondary, fontSize: 10, marginTop: 3, fontFamily: "DMSans_500Medium" },
+  statLabel: { color: C.textSecondary, fontSize: 10, marginTop: 4, fontFamily: "DMSans_500Medium" },
 
-  navList: { gap: 4, marginTop: 4 },
+  navList: { gap: 2 },
   navItem: {
-    flexDirection: "row", alignItems: "center", gap: 14,
-    paddingVertical: 12, paddingHorizontal: 8, borderRadius: R.lg,
+    flexDirection: "row-reverse", alignItems: "center", gap: 13,
+    paddingVertical: 11, paddingHorizontal: 8, borderRadius: R.lg,
   },
-  navItemPressed: { backgroundColor: C.glass },
+  pressed: { backgroundColor: C.glass },
   navIcon: {
     width: 38, height: 38, borderRadius: R.md,
     backgroundColor: C.surfaceLight, alignItems: "center", justifyContent: "center",
   },
-  navLabel: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  navLabel: { flex: 1, color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
 
-  divider: { height: 1, backgroundColor: C.border, marginVertical: 14 },
+  divider: { height: 1, backgroundColor: C.border, marginVertical: 12, marginHorizontal: 4 },
   brand: {
-    color: C.textMuted, fontSize: 11, textAlign: "center", marginTop: 18,
+    color: C.textMuted, fontSize: 11, textAlign: "center", marginTop: 24,
     fontFamily: "DMSans_500Medium",
   },
 });

@@ -43,3 +43,6 @@ graphify-out/cache/
 # (google-services.json IS committed: it's client config, needed by EAS Build,
 #  and is bundled into every APK anyway.)
 fcm-service-account.json
+
+# Supabase CLI scratch
+supabase/.temp/

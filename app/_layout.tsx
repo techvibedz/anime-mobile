@@ -4,8 +4,27 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit_800ExtraBold, Outfit_900Black } from "@expo-google-fonts/outfit";
 import { DMSans_400Regular, DMSans_500Medium, DMSans_600SemiBold, DMSans_700Bold } from "@expo-google-fonts/dm-sans";
-import { View, ActivityIndicator } from "react-native";
+import { View, ActivityIndicator, I18nManager } from "react-native";
+import * as Updates from "expo-updates";
 import { C } from "../lib/theme";
+
+// The whole UI is built LTR-base and we paint the Arabic look manually with
+// `flexDirection: "row-reverse"` and text alignment. If the phone's system
+// language is RTL (Arabic), React Native auto-flips the entire layout, which
+// double-flips our manual rows and mirrors the app into a broken state.
+// Lock the app to LTR so layout is consistent regardless of device language.
+if (I18nManager.isRTL) {
+  try {
+    I18nManager.allowRTL(false);
+    I18nManager.forceRTL(false);
+    // forceRTL persists natively but the running views were already laid out
+    // RTL — reload once so the new direction takes effect. After reload
+    // isRTL is false, so this branch won't run again (no loop).
+    Updates.reloadAsync().catch(() => {});
+  } catch {
+    // no-op in environments where Updates/I18nManager isn't available
+  }
+}
 import { AuthProvider, useAuth } from "../lib/auth";
 import { pullFavoritesFromCloud } from "../lib/favorites";
 import { pullHistoryFromCloud } from "../lib/history";
@@ -127,6 +146,7 @@ function AuthGate() {
         <Stack.Screen name="notifications" />
         <Stack.Screen name="profile" />
         <Stack.Screen name="settings" />
+        <Stack.Screen name="report" />
         <Stack.Screen name="scraper-debug" />
         <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
       </Stack>

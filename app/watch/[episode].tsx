@@ -7,6 +7,8 @@ import {
   ScrollView,
   StyleSheet,
   StatusBar,
+  PanResponder,
+  Dimensions,
 } from "react-native";
 import { VideoView, useVideoPlayer } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
@@ -1457,19 +1459,115 @@ export default function WatchScreen() {
 
   const seekBarRef = useRef<View>(null);
 
-  const onSeekPress = useCallback((e: any) => {
-    if (!player || duration <= 0) return;
-    try {
-      const loc = e.nativeEvent.locationX;
-      seekBarRef.current?.measure((_x, _y, w) => {
-        const ratio = Math.max(0, Math.min(1, loc / w));
-        player.currentTime = ratio * duration;
-        setSeekValue(ratio);
-        setCurrentTime(ratio * duration);
-        if (!isPlayerPaused) player.play();
-      });
-    } catch {}
-  }, [player, duration, isPlayerPaused]);
+  // ── LIVE SCRUBBING ──
+  // Drag the seek bar to scrub: the video seeks live as the thumb moves (the
+  // frame updates under your finger) with a time-preview bubble. A plain tap
+  // still jumps to that position (handled as a zero-movement drag). Because the
+  // PanResponder is created once, every value it touches is read through a ref.
+  const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+  const durationRef = useRef(0);
+  const isPausedRef = useRef(false);
+  const playerRef = useRef(player);
+  durationRef.current = duration;
+  isPausedRef.current = isPlayerPaused;
+  playerRef.current = player;
+
+  const seekBarWidthRef = useRef(0);
+  const seekBarPageXRef = useRef(0);
+  const lastLiveSeekRef = useRef(0);
+
+  // Apply a scrub at `ratio` (0..1). `live` throttles the native seek so a fast
+  // drag doesn't flood the player; `final` forces the seek and resumes play.
+  const doScrub = useCallback((ratio: number, live: boolean, final: boolean) => {
+    const dur = durationRef.current;
+    if (dur <= 0) return;
+    const tt = ratio * dur;
+    setSeekValue(ratio);
+    setCurrentTime(tt);
+    const p = playerRef.current;
+    if (!p) return;
+    const now = Date.now();
+    if (final || !live || now - lastLiveSeekRef.current > 90) {
+      lastLiveSeekRef.current = now;
+      try { p.currentTime = tt; } catch {}
+    }
+    if (final && !isPausedRef.current) { try { p.play(); } catch {} }
+  }, []);
+
+  const seekPan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (e) => {
+        setIsSeeking(true);
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        seekBarRef.current?.measureInWindow((x, _y, w) => {
+          seekBarPageXRef.current = x;
+          if (w > 0) seekBarWidthRef.current = w;
+        });
+        const w = seekBarWidthRef.current || 1;
+        doScrub(clamp01(e.nativeEvent.locationX / w), false, false);
+      },
+      onPanResponderMove: (e) => {
+        const w = seekBarWidthRef.current || 1;
+        doScrub(clamp01((e.nativeEvent.pageX - seekBarPageXRef.current) / w), true, false);
+      },
+      onPanResponderRelease: (e) => {
+        const w = seekBarWidthRef.current || 1;
+        doScrub(clamp01((e.nativeEvent.pageX - seekBarPageXRef.current) / w), false, true);
+        setIsSeeking(false);
+        scheduleHideRef.current?.();
+      },
+      onPanResponderTerminate: () => {
+        setIsSeeking(false);
+        scheduleHideRef.current?.();
+      },
+    }),
+  ).current;
+
+  // ── BRIGHTNESS (swipe up/down) ──
+  // expo-brightness is a native module that can't be added over OTA, so we dim
+  // with a black overlay instead: swipe up = brighter (less overlay), swipe
+  // down = dimmer. Vertical-dominant drags adjust brightness; a tap toggles the
+  // chrome. Created once → reads brightness/handlers through refs.
+  const [brightness, setBrightness] = useState(1); // 0.15..1, 1 = no dim
+  const [brightnessActive, setBrightnessActive] = useState(false);
+  const brightnessRef = useRef(1);
+  brightnessRef.current = brightness;
+  const brightnessStartRef = useRef(1);
+  const brightnessHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapToToggleRef = useRef<() => void>(() => {});
+  const scheduleHideRef = useRef<() => void>(() => {});
+
+  const brightnessPan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_e, g) =>
+        Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderGrant: () => {
+        brightnessStartRef.current = brightnessRef.current;
+      },
+      onPanResponderMove: (_e, g) => {
+        if (Math.abs(g.dy) <= Math.abs(g.dx)) return;
+        const h = Dimensions.get("window").height || 1;
+        const next = Math.max(0.15, Math.min(1, brightnessStartRef.current - g.dy / h));
+        brightnessRef.current = next;
+        setBrightness(next);
+        setBrightnessActive(true);
+        if (brightnessHideTimer.current) clearTimeout(brightnessHideTimer.current);
+      },
+      onPanResponderRelease: (_e, g) => {
+        if (Math.abs(g.dx) < 6 && Math.abs(g.dy) < 6) {
+          tapToToggleRef.current?.();
+          return;
+        }
+        if (brightnessHideTimer.current) clearTimeout(brightnessHideTimer.current);
+        brightnessHideTimer.current = setTimeout(() => setBrightnessActive(false), 700);
+      },
+    }),
+  ).current;
+  useEffect(() => () => { if (brightnessHideTimer.current) clearTimeout(brightnessHideTimer.current); }, []);
 
   // Format time helper
   const fmtTime = (s: number) => {
@@ -1495,6 +1593,10 @@ export default function WatchScreen() {
       showControls();
     }
   }, [pickerOpen, controlsVisible, showControls]);
+
+  // Keep the once-created PanResponders pointed at the latest callbacks.
+  tapToToggleRef.current = tapToToggle;
+  scheduleHideRef.current = scheduleHide;
 
   // ── RENDER ──
 
@@ -1642,9 +1744,9 @@ export default function WatchScreen() {
           the chrome is visible we remove this overlay so taps reach
           expo-video's native controls. */}
       {isPlaying && !pickerOpen && !controlsVisible && (
-        <Pressable
+        <View
           style={[StyleSheet.absoluteFill, { zIndex: 2 }]}
-          onPress={showControls}
+          {...brightnessPan.panHandlers}
         />
       )}
 
@@ -1658,8 +1760,8 @@ export default function WatchScreen() {
       {/* Custom Controls Overlay */}
       {isPlaying && !pickerOpen && controlsVisible && (
         <View style={ss.controlsOverlay} pointerEvents="box-none">
-          {/* Tap on empty space hides the chrome */}
-          <Pressable style={StyleSheet.absoluteFill} onPress={tapToToggle} />
+          {/* Tap on empty space hides the chrome; vertical swipe adjusts brightness */}
+          <View style={StyleSheet.absoluteFill} {...brightnessPan.panHandlers} />
           <LinearGradient
             colors={["rgba(0,0,0,0.8)", "rgba(0,0,0,0.35)", "transparent"]}
             style={ss.gradTop}
@@ -1737,15 +1839,32 @@ export default function WatchScreen() {
           <View style={[ss.ctrlBottom, { paddingBottom: (insets.bottom || 10) + 8 }]} pointerEvents="box-none">
             <View style={ss.seekRow}>
               <Text style={ss.timeText}>{fmtTime(currentTime)}</Text>
-              <View ref={seekBarRef} style={ss.seekBarWrap} collapsable={false}>
-                <View style={ss.seekTrack}>
+              <View
+                ref={seekBarRef}
+                style={ss.seekBarWrap}
+                collapsable={false}
+                onLayout={(e) => { seekBarWidthRef.current = e.nativeEvent.layout.width; }}
+              >
+                <View style={[ss.seekTrack, isSeeking && ss.seekTrackActive]}>
                   <View style={[ss.seekFill, { width: `${Math.min(seekValue * 100, 100)}%` }]} />
                 </View>
+                {isSeeking && (
+                  <View
+                    style={[ss.seekBubble, { left: `${Math.min(seekValue * 100, 100)}%` }]}
+                    pointerEvents="none"
+                  >
+                    <Text style={ss.seekBubbleText}>{fmtTime(seekValue * duration)}</Text>
+                  </View>
+                )}
                 <View
-                  style={[ss.seekThumb, { left: `${Math.min(seekValue * 100, 100)}%` }]}
+                  style={[
+                    ss.seekThumb,
+                    { left: `${Math.min(seekValue * 100, 100)}%` },
+                    isSeeking && ss.seekThumbActive,
+                  ]}
                   pointerEvents="none"
                 />
-                <Pressable style={ss.seekTouchArea} onPress={onSeekPress} />
+                <View style={ss.seekTouchArea} {...seekPan.panHandlers} />
               </View>
               <Text style={ss.timeTextDur}>{fmtTime(duration)}</Text>
             </View>
@@ -1814,6 +1933,27 @@ export default function WatchScreen() {
               <Ionicons name="server-outline" size={18} color={C.white} />
             </Pressable>
           </View>
+        </View>
+      )}
+
+      {/* Brightness dim overlay — variable-opacity black scrim (no native module
+          needed, so it ships over OTA). Never fully opaque so the video stays
+          visible. pointerEvents none so it never eats gestures. */}
+      {isPlaying && brightness < 1 && (
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: "#000", opacity: (1 - brightness) * 0.92, zIndex: 6 }]}
+        />
+      )}
+
+      {/* Brightness level indicator (shown while swiping) */}
+      {isPlaying && brightnessActive && (
+        <View style={ss.brightnessIndicator} pointerEvents="none">
+          <Ionicons name="sunny" size={22} color={C.white} />
+          <View style={ss.brightnessBarTrack}>
+            <View style={[ss.brightnessBarFill, { height: `${brightness * 100}%` }]} />
+          </View>
+          <Text style={ss.brightnessPct}>{Math.round(brightness * 100)}%</Text>
         </View>
       )}
 
@@ -2002,14 +2142,23 @@ const ss = StyleSheet.create({
   },
   seekBarWrap: { flex: 1, height: 32, justifyContent: "center" },
   seekTrack: { height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.18)", overflow: "hidden" },
-  seekFill: { height: 4, borderRadius: 2, backgroundColor: C.accent },
+  seekTrackActive: { height: 6, borderRadius: 3 },
+  seekFill: { height: "100%", borderRadius: 3, backgroundColor: C.accent },
   seekThumb: {
     position: "absolute", top: 9, marginLeft: -7,
     width: 14, height: 14, borderRadius: 7,
     backgroundColor: C.accent, borderWidth: 2, borderColor: "#fff",
     shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 8, elevation: 4,
   },
-  seekTouchArea: { ...StyleSheet.absoluteFillObject },
+  seekThumbActive: { top: 6, marginLeft: -10, width: 20, height: 20, borderRadius: 10 },
+  seekTouchArea: { position: "absolute", left: 0, right: 0, top: -12, bottom: -12 },
+  seekBubble: {
+    position: "absolute", bottom: 22, marginLeft: -28, width: 56,
+    alignItems: "center", justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.85)", borderRadius: 8, paddingVertical: 4,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+  },
+  seekBubbleText: { color: "#fff", fontSize: 12, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", fontVariant: ["tabular-nums"] },
   ctrlRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   chipBtn: {
     flexDirection: "row", alignItems: "center", gap: 6,
@@ -2080,4 +2229,17 @@ const ss = StyleSheet.create({
     backgroundColor: C.accent, borderRadius: 100, paddingHorizontal: 8, paddingVertical: 3,
   },
   activeBadgeText: { color: "#fff", fontSize: 8, fontWeight: "800", letterSpacing: 0.8, fontFamily: "Outfit_800ExtraBold" },
+
+  // Brightness indicator
+  brightnessIndicator: {
+    position: "absolute", left: 28, top: 0, bottom: 0,
+    alignItems: "center", justifyContent: "center", gap: 10, zIndex: 7,
+  },
+  brightnessBarTrack: {
+    width: 6, height: 120, borderRadius: 3,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    justifyContent: "flex-end", overflow: "hidden",
+  },
+  brightnessBarFill: { width: 6, borderRadius: 3, backgroundColor: C.white },
+  brightnessPct: { color: "#fff", fontSize: 11, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", fontVariant: ["tabular-nums"] },
 });

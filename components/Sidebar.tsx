@@ -158,6 +158,7 @@ function Sidebar() {
     { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
     { icon: "notifications-outline", label: t.notifications, onPress: () => go("/notifications"), match: "/notifications" },
     { icon: "settings-outline", label: t.settingsTitle, onPress: () => go("/settings"), match: "/settings" },
+    { icon: "bug-outline", label: t.reportIssue, onPress: () => go("/report"), match: "/report" },
     { icon: "share-social-outline", label: t.shareApp, onPress: onShare },
   ];
 

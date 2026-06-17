@@ -230,6 +230,14 @@ type HomePayload = { success: boolean; data: { featured: FeaturedItem[]; section
 
 let bgRefreshInFlight = false;
 
+// A home payload is only worth caching/showing if it actually carries content.
+// A cold WebView or an un-cleared Cloudflare challenge can yield an empty
+// scrape; freezing that for the 30-min TTL is exactly what made the app open to
+// "zero content". Gate both the cache write and the cache read on this.
+function homeHasContent(p: HomePayload | null | undefined): p is HomePayload {
+  return !!p && (p.data.featured.length > 0 || p.data.sections.length > 0);
+}
+
 function buildHomePayload(
   wit: { featured: FeaturedItem[]; animes: any[]; episodes: any[] },
   up4Animes: { title: string; href: string; image: string | null; type: string | null }[],
@@ -285,8 +293,10 @@ async function fetchHomeFresh(): Promise<HomePayload> {
   // really needed for cross-source matching on detail pages. Home shows
   // wit-only content; up4 fills in on demand later.
   const result = buildHomePayload(wit, []);
-  // Save for next launch.
-  void writeCache(HOME_CACHE_KEY, result);
+  // Only persist a payload that actually has content. Caching an empty scrape
+  // would freeze "zero content" for the whole TTL and the SWR path would keep
+  // serving it on every launch.
+  if (homeHasContent(result)) void writeCache(HOME_CACHE_KEY, result);
   return result;
 }
 
@@ -294,7 +304,7 @@ export async function fetchHome(): Promise<HomePayload> {
   // Stale-while-revalidate: return cached payload immediately if present,
   // then kick off a background refresh so the next launch is fresher.
   const cached = await readCache<HomePayload>(HOME_CACHE_KEY, HOME_CACHE_TTL);
-  if (cached) {
+  if (homeHasContent(cached)) {
     if (!bgRefreshInFlight) {
       bgRefreshInFlight = true;
       void fetchHomeFresh().finally(() => { bgRefreshInFlight = false; });

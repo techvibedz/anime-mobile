@@ -72,6 +72,8 @@ export const ar = {
   myList: "قائمتي",
   newBadge: "جديد",
   minLeft: (m: number) => `${m} د متبقّية`,
+  homeEmptyTitle: "تعذّر تحميل المحتوى",
+  homeEmptySub: "قد يكون الاتصال ضعيفًا أو أن المصدر مشغول. حاول مرة أخرى.",
 
   // Detail page
   watchEpisode: "شاهد هذه الحلقة",
@@ -158,6 +160,31 @@ export const ar = {
   shareAppMessage: "حمّل تطبيق بانتوفة لمشاهدة الأنمي مجانًا 🎬",
   rateApp: "قيّم التطبيق",
   aboutApp: "عن التطبيق",
+  reportIssue: "الإبلاغ عن مشكلة",
+
+  // Report a problem
+  reportTitle: "الإبلاغ عن مشكلة",
+  reportSub: "صف المشكلة التي واجهتها وسنعمل على إصلاحها.",
+  reportCategory: "نوع المشكلة",
+  reportCatContent: "محتوى لا يظهر",
+  reportCatPlayback: "مشكلة في التشغيل",
+  reportCatCrash: "تعطّل أو خطأ",
+  reportCatSuggestion: "اقتراح",
+  reportCatOther: "أخرى",
+  reportMessageLabel: "وصف المشكلة",
+  reportMessagePlaceholder: "اكتب ما حدث بالتفصيل…",
+  reportEmailLabel: "بريدك للتواصل (اختياري)",
+  reportScreenshot: "إرفاق لقطة شاشة",
+  reportScreenshotChange: "تغيير اللقطة",
+  reportScreenshotRemove: "إزالة",
+  reportSubmit: "إرسال البلاغ",
+  reportSending: "جارٍ الإرسال…",
+  reportSuccessTitle: "تم إرسال بلاغك",
+  reportSuccessSub: "شكرًا لك! سنراجع المشكلة في أقرب وقت.",
+  reportDone: "تم",
+  reportErrorEmpty: "يرجى كتابة وصف للمشكلة",
+  reportErrorFailed: "تعذّر إرسال البلاغ. حاول مرة أخرى.",
+  reportPhotoPermission: "نحتاج إذن الوصول إلى الصور لإرفاق لقطة شاشة.",
 
   // Profile
   profileTitle: "الملف الشخصي",

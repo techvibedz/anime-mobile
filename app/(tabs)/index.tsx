@@ -70,6 +70,14 @@ export default function HomeScreen() {
   const [heroIndex, setHeroIndex] = useState(0);
   const heroTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Cold-start resilience: the first scrape can come back empty while the
+  // WebView is still warming up / clearing Cloudflare. Instead of dropping the
+  // user on a blank home, keep the skeleton up and retry a few times.
+  const emptyRetry = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasContent = useRef(false);
+  const MAX_EMPTY_RETRIES = 5;
+
   // Popup shown when tapping an episode card — choose Watch vs Anime page
   const [episodePopup, setEpisodePopup] = useState<EpisodeItem | null>(null);
   const openEpisodePopup = useCallback((ep: EpisodeItem) => setEpisodePopup(ep), []);
@@ -78,20 +86,46 @@ export default function HomeScreen() {
   const load = useCallback(async () => {
     try {
       const [res, hist] = await Promise.all([fetchHome(), getContinueWatching()]);
-      if (res.success) {
-        setFeatured(res.data.featured ?? []);
-        setSections(res.data.sections ?? []);
-      }
       setHistory(hist);
+      const feat = res?.success ? (res.data.featured ?? []) : [];
+      const secs = res?.success ? (res.data.sections ?? []) : [];
+      const gotContent = feat.length > 0 || secs.length > 0;
+      if (gotContent) {
+        setFeatured(feat);
+        setSections(secs);
+        hasContent.current = true;
+        emptyRetry.current = 0;
+      } else if (!hasContent.current && emptyRetry.current < MAX_EMPTY_RETRIES) {
+        // Empty scrape and nothing on screen yet — likely a cold WebView or an
+        // un-cleared Cloudflare challenge. Keep the skeleton and retry shortly.
+        emptyRetry.current += 1;
+        retryTimer.current = setTimeout(() => { void load(); }, 3000);
+        return; // don't drop out of the loading state
+      }
     } catch (e) {
       console.error("Home load failed:", e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!hasContent.current && emptyRetry.current < MAX_EMPTY_RETRIES) {
+        emptyRetry.current += 1;
+        retryTimer.current = setTimeout(() => { void load(); }, 3000);
+        return;
+      }
     }
+    setLoading(false);
+    setRefreshing(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Manual refresh / retry: clear the cold-start counters so a user-initiated
+  // reload gets a fresh batch of attempts.
+  const reload = useCallback(() => {
+    emptyRetry.current = 0;
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    load();
+    return () => { if (retryTimer.current) clearTimeout(retryTimer.current); };
+  }, [load]);
 
   // Detect new episodes → in-app notification center + report newly-available
   // episodes to the server for closed-app push (with image). Both run in the
@@ -139,6 +173,18 @@ export default function HomeScreen() {
   }
 
   if (loading) return <HomeSkeleton />;
+
+  // Genuinely nothing to show after the retries were exhausted — give the user
+  // a clear retry affordance instead of a near-blank page.
+  if (featured.length === 0 && sections.length === 0 && history.length === 0) {
+    return (
+      <HomeEmpty
+        insets={insets}
+        onMenu={openSidebar}
+        onRetry={() => { setLoading(true); reload(); }}
+      />
+    );
+  }
 
   return (
     <View style={ss.root}>
@@ -188,7 +234,7 @@ export default function HomeScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); load(); }}
+            onRefresh={() => { setRefreshing(true); reload(); }}
             tintColor={C.accent}
             colors={[C.accent]}
             progressBackgroundColor={C.surface}
@@ -565,17 +611,36 @@ function extractEpisodeNumber(title: string): number | null {
     }
     return parseInt(num, 10) || null;
   }
-  // Western numerals
-  const enMatch = title.match(/(?:Episode|E(?:p(?:isode)?)?[.\s]*)\s*(\d+)/i) || title.match(/(?:حلقة|الحلقة)\s*(\d+)/);
+  // Western numerals. Require "حلقة" or "Ep"/"Episode" — a bare "E" matched too
+  // many incidental letters and produced wrong numbers.
+  const enMatch = title.match(/(?:حلقة|الحلقة)\s*(\d+)/) || title.match(/\bEp(?:isode)?[.\s]*\s*(\d+)/i);
   if (enMatch) return parseInt(enMatch[1], 10) || null;
   return null;
+}
+
+/**
+ * Episode number for the Continue Watching badge. The episode URL is the
+ * canonical source (witanime/anime4up carry …الحلقة-N, anime3rb carries
+ * /episode/<slug>/<n>) and is always correct for the saved episode, so prefer
+ * it over the scraped title — the title can lag during prev/next navigation
+ * and mis-parses titles with numbers in the anime name.
+ */
+function episodeNumberFor(entry: WatchEntry): number | null {
+  const href = entry.episodeHref || "";
+  let s = href;
+  try { s = decodeURIComponent(href); } catch {}
+  const witMatch = s.match(/الحلقة[\s\-_]*(\d+)/);
+  if (witMatch) return parseInt(witMatch[1], 10) || null;
+  const a3rbMatch = s.match(/\/episode\/[^/]+\/(\d+)/);
+  if (a3rbMatch) return parseInt(a3rbMatch[1], 10) || null;
+  return extractEpisodeNumber(entry.episodeTitle);
 }
 
 const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: WatchEntry; onRemove: (href: string) => void }) {
   const pct = progressPercent(entry);
   const remainMs = entry.durationMs - entry.positionMs;
   const remainMin = Math.max(1, Math.round(remainMs / 60000));
-  const epNum = extractEpisodeNumber(entry.episodeTitle);
+  const epNum = episodeNumberFor(entry);
   return (
     <Pressable
       onPress={() => {
@@ -647,6 +712,45 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
   );
 });
 
+/* ── Empty / error state ──────────────────────── */
+
+function HomeEmpty({
+  insets, onRetry, onMenu,
+}: {
+  insets: { top: number; bottom: number };
+  onRetry: () => void;
+  onMenu: () => void;
+}) {
+  return (
+    <View style={ss.root}>
+      <View style={[ss.topBar, { paddingTop: insets.top + 8 }]}>
+        <View style={ss.topBarInner}>
+          <View style={ss.logoRow}>
+            <View style={ss.logoDot} />
+            <Text style={ss.logoText}>Pantoufa</Text>
+          </View>
+          <Pressable onPress={onMenu} hitSlop={8}>
+            <View style={ss.glassBtn}>
+              <Ionicons name="menu" size={20} color={C.text} />
+            </View>
+          </Pressable>
+        </View>
+      </View>
+      <View style={ss.emptyWrap}>
+        <View style={ss.emptyIcon}>
+          <Ionicons name="cloud-offline-outline" size={40} color={C.accent} />
+        </View>
+        <Text style={ss.emptyTitle}>{t.homeEmptyTitle}</Text>
+        <Text style={ss.emptyDesc}>{t.homeEmptySub}</Text>
+        <Pressable style={ss.emptyBtn} onPress={onRetry}>
+          <Ionicons name="refresh" size={16} color={C.textOnAccent} />
+          <Text style={ss.emptyBtnText}>{t.retry}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 /* ── Skeleton ─────────────────────────────────── */
 
 function HomeSkeleton() {
@@ -677,6 +781,27 @@ function HomeSkeleton() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+
+  // Empty / error state
+  emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 40, gap: 14 },
+  emptyIcon: {
+    width: 88, height: 88, borderRadius: R.circle,
+    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+    alignItems: "center", justifyContent: "center", marginBottom: 6,
+  },
+  emptyTitle: {
+    color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", textAlign: "center",
+  },
+  emptyDesc: {
+    color: C.textSecondary, fontSize: 13.5, lineHeight: 21, textAlign: "center",
+    fontFamily: "DMSans_500Medium",
+  },
+  emptyBtn: {
+    flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8,
+    backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 13, paddingHorizontal: 28,
+    ...ELEVATION_GLOW,
+  },
+  emptyBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Outfit_700Bold" },
 
   // Top bar
   topBar: {

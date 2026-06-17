@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "945339388247",
+    "project_id": "pantoufa-ff2b2",
+    "storage_bucket": "pantoufa-ff2b2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:945339388247:android:67322bc01411ea7429ae12",
+        "android_client_info": {
+          "package_name": "com.anime.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuAP66FLzKcB-OswkkwT7ZCwTyxtm0HBw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

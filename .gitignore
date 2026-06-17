@@ -39,5 +39,7 @@ graphify-out/cache/
 # macOS
 .DS_Store
 
-# Firebase (push) — never commit
-google-services.json
+# Firebase FCM service-account private key — SECRET, never commit.
+# (google-services.json IS committed: it's client config, needed by EAS Build,
+#  and is bundled into every APK anyway.)
+fcm-service-account.json

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pantoufa",
     "slug": "injaz",
-    "version": "1.3.2",
+    "version": "1.4.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "anime-mobile",
@@ -22,6 +22,7 @@
         "backgroundColor": "#080c25"
       },
       "package": "com.anime.mobile",
+      "googleServicesFile": "./google-services.json",
       "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.REQUEST_INSTALL_PACKAGES",
@@ -37,7 +38,7 @@
       "fallbackToCacheTimeout": 0,
       "url": "https://u.expo.dev/54f0baee-f81b-4de2-89f1-825251f0547d"
     },
-    "runtimeVersion": "1.3.2",
+    "runtimeVersion": "1.4.0",
     "extra": {
       "versionJsonUrl": "https://raw.githubusercontent.com/techvibedz/anime-mobile/master/version.json",
       "router": {},

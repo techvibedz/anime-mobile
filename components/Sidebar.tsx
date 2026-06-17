@@ -9,6 +9,7 @@ import {
   Dimensions,
   Share,
   ScrollView,
+  I18nManager,
 } from "react-native";
 import { Image } from "expo-image";
 import { router, usePathname } from "expo-router";
@@ -23,6 +24,10 @@ import { t } from "../lib/i18n";
 
 const { width: SW } = Dimensions.get("window");
 const PANEL_W = Math.min(330, SW * 0.84);
+
+// RTL-aware row direction. Hardcoding "row-reverse" double-flips under forced
+// RTL and breaks icon alignment; match the rest of the app's pattern.
+const ROW_DIR = I18nManager.isRTL ? "row" : "row-reverse";
 
 /* ── Context ─────────────────────────────────── */
 
@@ -262,7 +267,7 @@ const st = StyleSheet.create({
   mesh: { position: "absolute", top: 0, right: 0, left: 0, height: 200 },
 
   header: {
-    flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between",
+    flexDirection: ROW_DIR, alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: 4, paddingBottom: 12,
   },
   headerTitle: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
@@ -273,7 +278,7 @@ const st = StyleSheet.create({
   },
 
   profileCard: {
-    flexDirection: "row-reverse", alignItems: "center", gap: 12,
+    flexDirection: ROW_DIR, alignItems: "center",
     padding: 12, borderRadius: R.lg,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     marginBottom: 14,
@@ -283,29 +288,29 @@ const st = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   avatarInitial: { color: "#fff", fontSize: 21, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  profileText: { flex: 1 },
+  profileText: { flex: 1, marginHorizontal: 12 },
   name: { color: C.text, fontSize: 15, fontWeight: "700", fontFamily: "Outfit_700Bold", textAlign: "right" },
   email: { color: C.textMuted, fontSize: 12, marginTop: 3, fontFamily: "DMSans_500Medium", textAlign: "right" },
 
-  statsRow: { flexDirection: "row-reverse", gap: 10, marginBottom: 18 },
+  statsRow: { flexDirection: ROW_DIR, marginBottom: 18 },
   statCard: {
-    flex: 1, borderRadius: R.lg, paddingVertical: 14, alignItems: "center",
+    flex: 1, marginHorizontal: 5, borderRadius: R.lg, paddingVertical: 14, alignItems: "center",
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
   statNum: { color: C.accent, fontSize: 22, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
   statLabel: { color: C.textSecondary, fontSize: 10, marginTop: 4, fontFamily: "DMSans_500Medium" },
 
-  navList: { gap: 2 },
+  navList: {},
   navItem: {
-    flexDirection: "row-reverse", alignItems: "center", gap: 13,
-    paddingVertical: 11, paddingHorizontal: 8, borderRadius: R.lg,
+    flexDirection: ROW_DIR, alignItems: "center",
+    marginVertical: 1, paddingVertical: 11, paddingHorizontal: 8, borderRadius: R.lg,
   },
   pressed: { backgroundColor: C.glass },
   navIcon: {
     width: 38, height: 38, borderRadius: R.md,
     backgroundColor: C.surfaceLight, alignItems: "center", justifyContent: "center",
   },
-  navLabel: { flex: 1, color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
+  navLabel: { flex: 1, marginHorizontal: 13, color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
 
   divider: { height: 1, backgroundColor: C.border, marginVertical: 12, marginHorizontal: 4 },
   brand: {

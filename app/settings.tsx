@@ -36,6 +36,12 @@ import { t } from "../lib/i18n";
 
 const HISTORY_KEY = "watch_history";
 
+// RTL-aware row direction. On a forced-RTL device, RTL auto-flips "row" to
+// render right-to-left; on an LTR device we force the same visual with
+// "row-reverse". Hardcoding "row-reverse" double-flips under RTL and breaks
+// alignment (icons jump to the wrong side / lose vertical centering).
+const ROW_DIR = I18nManager.isRTL ? "row" : "row-reverse";
+
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const [notifs, setNotifs] = useState(true);
@@ -240,7 +246,7 @@ function ScopeRow({
   return (
     <View style={s.scopeRow}>
       <View style={s.rowIcon}><Ionicons name="funnel-outline" size={19} color={C.text} /></View>
-      <View style={{ flex: 1 }}>
+      <View style={s.scopeBody}>
         <Text style={s.rowTitle}>{t.settingsNotifScope}</Text>
         <Text style={s.rowDesc}>{t.settingsNotifScopeDesc}</Text>
         <View style={s.segment}>
@@ -315,30 +321,31 @@ const s = StyleSheet.create({
     overflow: "hidden", ...ELEVATION_CARD,
   },
   row: {
-    flexDirection: "row-reverse", alignItems: "center", gap: 14,
+    flexDirection: ROW_DIR, alignItems: "center",
     paddingVertical: 15, paddingHorizontal: 14,
   },
   rowIcon: {
     width: 38, height: 38, borderRadius: R.md,
     backgroundColor: C.surfaceLight, alignItems: "center", justifyContent: "center",
   },
-  rowText: { flex: 1 },
+  rowText: { flex: 1, marginHorizontal: 14 },
   rowTitle: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
   rowDesc: { color: C.textMuted, fontSize: 11.5, marginTop: 4, lineHeight: 17, fontFamily: "DMSans_500Medium", textAlign: "right" },
   divider: { height: 1, backgroundColor: C.border, marginRight: 66 },
 
-  scopeRow: { flexDirection: "row-reverse", gap: 14, paddingVertical: 15, paddingHorizontal: 14 },
+  scopeRow: { flexDirection: ROW_DIR, alignItems: "flex-start", paddingVertical: 15, paddingHorizontal: 14 },
+  scopeBody: { flex: 1, marginHorizontal: 14 },
   segment: {
-    flexDirection: "row-reverse", gap: 6, marginTop: 14,
+    flexDirection: ROW_DIR, marginTop: 14,
     padding: 4, borderRadius: R.pill,
     backgroundColor: C.bgDeep, borderWidth: 1, borderColor: C.glassBorder,
   },
   segmentBtn: {
-    flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 10, borderRadius: R.pill,
+    flex: 1, flexDirection: ROW_DIR, alignItems: "center", justifyContent: "center",
+    marginHorizontal: 3, paddingVertical: 10, borderRadius: R.pill,
   },
   segmentBtnActive: { backgroundColor: C.accent, ...ELEVATION_GLOW },
-  segmentText: { color: C.textSecondary, fontSize: 12.5, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  segmentText: { color: C.textSecondary, fontSize: 12.5, fontWeight: "700", fontFamily: "DMSans_600SemiBold", marginHorizontal: 3 },
   segmentTextActive: { color: C.textOnAccent },
 
   brandFooter: { alignItems: "center", marginTop: 40, gap: 4 },

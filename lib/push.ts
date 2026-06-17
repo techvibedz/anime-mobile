@@ -11,7 +11,7 @@
 
 import { Platform } from "react-native";
 import Constants from "expo-constants";
-import { getNotificationsEnabled } from "./settings";
+import { getNotificationsEnabled, getNotificationScope, type NotificationScope } from "./settings";
 import { supabase, isSupabaseConfigured } from "./supabase";
 
 let Notifications: typeof import("expo-notifications") | null = null;
@@ -150,12 +150,53 @@ export async function registerPushTokenAsync(userId: string): Promise<void> {
         user_id: userId,
         token,
         platform: Platform.OS,
+        // The server reads this to decide whether to push for every new episode
+        // ("all") or only the user's saved anime ("mylist"). Mirrors the on-device
+        // notification-scope setting.
+        notification_scope: await getNotificationScope(),
+        // Master on/off switch — the server skips tokens with enabled=false.
+        enabled: await getNotificationsEnabled(),
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id,token" },
     );
   } catch {
     // Missing FCM creds / no network / permission revoked → silent no-op.
+  }
+}
+
+/**
+ * Push the current notification-scope setting up to all of this user's
+ * registered push tokens, so the server (episode-notifier) immediately honors a
+ * change between "all anime" and "my list only" without waiting for the next
+ * token re-registration. Best-effort: no-op when signed out / not configured.
+ */
+export async function updateNotificationScopeRemote(scope: NotificationScope): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userId = data?.user?.id;
+    if (!userId) return;
+    await supabase.from("push_tokens").update({ notification_scope: scope }).eq("user_id", userId);
+  } catch {
+    // ignore — scope will still sync on the next token registration
+  }
+}
+
+/**
+ * Push the notifications master on/off switch up to all of this user's tokens so
+ * the server stops/resumes closed-app push immediately. Best-effort: no-op when
+ * signed out / not configured.
+ */
+export async function updateNotificationsEnabledRemote(enabled: boolean): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  try {
+    const { data } = await supabase.auth.getUser();
+    const userId = data?.user?.id;
+    if (!userId) return;
+    await supabase.from("push_tokens").update({ enabled }).eq("user_id", userId);
+  } catch {
+    // ignore — will still sync on the next token registration
   }
 }
 

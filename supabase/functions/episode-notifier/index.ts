@@ -1,52 +1,58 @@
 // Pantoufa — episode-notifier Edge Function
 //
-// Runs on a schedule (pg_cron / Supabase scheduled function, ~every 15 min).
-// For every anime in any user's favorites it asks AniList whether a newer
-// episode has aired since we last checked, and if so sends an Expo push
-// (with the AniList cover image) to each user who follows that anime.
+// Runs on a schedule (pg_cron, ~every 15 min) AND is nudged by the app right
+// after it uploads new episodes. It fans out the `episode_queue` — the witanime
+// "recently updated" feed reported by the app — as Expo push notifications WITH
+// the episode image, even when the app is closed.
 //
-// Why AniList and not scraping: the app's sources (witanime/anime4up) are
-// behind Cloudflare, which blocks datacenter IPs. AniList is a free, open API
-// with airing schedules + cover art, so a server can use it. Titles are matched
-// best-effort (Latin search term derived from the witanime href slug, falling
-// back to the stored title) — obscure / Arabic-only titles may not resolve.
+// Why the queue (and not an airing API): the app's sources (witanime/anime4up)
+// are behind Cloudflare, which blocks datacenter IPs, so a server can't scrape
+// them. An external airing schedule (e.g. AniList) fires at Japanese broadcast
+// time — BEFORE the Arabic sub is published — so it would notify for episodes
+// that aren't available in the app yet. Instead, the app (which CAN scrape, via
+// its hidden WebView) reports episodes that are genuinely available, and the
+// server just delivers them. The feed is shared: any one signed-in user opening
+// the app keeps it fresh for everyone.
+//
+// Per-user scope (push_tokens.notification_scope):
+//   • "all"    → push every queued episode.
+//   • "mylist" → push only episodes whose anime is in that user's favorites.
+// Dedup is per-user via notified_episodes so an episode is pushed at most once.
 //
 // Deploy:   supabase functions deploy episode-notifier --no-verify-jwt
-// Schedule: see supabase/notifications.sql notes / Supabase dashboard → Cron.
-//
 // Env (auto-provided by Supabase): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const ANILIST_URL = "https://graphql.anilist.co";
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const CHANNEL_ID = "new-episodes";
+
+// Only consider recently-reported episodes, and prune anything older than this.
+const QUEUE_TTL_HOURS = 72;
+
+interface TokenRow {
+  user_id: string;
+  token: string;
+  notification_scope: string | null;
+  enabled: boolean | null;
+}
 
 interface Favorite {
   user_id: string;
   href: string;
   title: string;
-  image: string | null;
 }
 
-interface AnimeGroup {
-  key: string;
-  title: string;
-  href: string;
+interface QueueRow {
+  episode_key: string;
+  anime_key: string;
+  anime_title: string;
+  anime_href: string;
+  episode_title: string | null;
+  episode_href: string | null;
+  episode_number: number;
   image: string | null;
-  userIds: Set<string>;
 }
-
-interface Mapping {
-  key: string;
-  anilist_id: number | null;
-  title: string | null;
-  image: string | null;
-  last_aired_episode: number;
-  not_found: boolean;
-}
-
-/* ── Title helpers ─────────────────────────────────────────────── */
 
 // Mirror of norm() in lib/notifications.ts — keep latin/digits + Arabic block.
 function norm(s: string): string {
@@ -55,69 +61,6 @@ function norm(s: string): string {
     .replace(/[^a-z0-9؀-ۿ\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-// Derive a Latin search term from a witanime/anime4up href slug, e.g.
-// "https://witanime.com/anime/one-piece/" → "one piece". Anime sites slug
-// titles in romaji/English even when the display title is Arabic, which makes
-// AniList matching far more reliable than searching the Arabic title.
-function searchTermFromHref(href: string, fallbackTitle: string): string {
-  try {
-    const m = href.match(/\/anime\/([^/?#]+)/i);
-    if (m && m[1]) {
-      const slug = decodeURIComponent(m[1]).replace(/[-_]+/g, " ").trim();
-      // Only trust the slug if it's actually Latin text.
-      if (/[a-z]/i.test(slug)) return slug;
-    }
-  } catch { /* ignore */ }
-  return fallbackTitle;
-}
-
-/* ── AniList ───────────────────────────────────────────────────── */
-
-interface AniListResult {
-  id: number;
-  title: string;
-  image: string | null;
-  lastAired: number;
-}
-
-async function resolveAniList(search: string): Promise<AniListResult | null> {
-  const query = `
-    query ($search: String) {
-      Media(search: $search, type: ANIME) {
-        id
-        episodes
-        status
-        nextAiringEpisode { episode }
-        title { romaji english native }
-        coverImage { extraLarge large }
-      }
-    }`;
-  try {
-    const resp = await fetch(ANILIST_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query, variables: { search } }),
-    });
-    if (!resp.ok) return null;
-    const json = await resp.json();
-    const m = json?.data?.Media;
-    if (!m) return null;
-    // Last aired = the episode before the next-to-air one; if the show has
-    // finished airing, all its episodes are out.
-    const lastAired = m.nextAiringEpisode?.episode
-      ? Math.max(0, m.nextAiringEpisode.episode - 1)
-      : (m.status === "FINISHED" ? (m.episodes ?? 0) : 0);
-    return {
-      id: m.id,
-      title: m.title?.english || m.title?.romaji || m.title?.native || search,
-      image: m.coverImage?.extraLarge || m.coverImage?.large || null,
-      lastAired,
-    };
-  } catch {
-    return null;
-  }
 }
 
 /* ── Expo push ─────────────────────────────────────────────────── */
@@ -133,8 +76,26 @@ interface PushMessage {
   richContent?: { image: string };
 }
 
+function buildMessage(to: string, q: QueueRow): PushMessage {
+  const msg: PushMessage = {
+    to,
+    title: "حلقة جديدة! 🎬",
+    body: `${q.anime_title} — الحلقة ${q.episode_number} متوفرة الآن`,
+    sound: "default",
+    channelId: CHANNEL_ID,
+    priority: "high",
+    data: {
+      animeHref: q.anime_href,
+      episodeHref: q.episode_href,
+      episodeNumber: q.episode_number,
+      image: q.image,
+    },
+  };
+  if (q.image) msg.richContent = { image: q.image };
+  return msg;
+}
+
 async function sendExpoPush(messages: PushMessage[]) {
-  // Expo accepts up to 100 messages per request.
   for (let i = 0; i < messages.length; i += 100) {
     const chunk = messages.slice(i, i + 100);
     try {
@@ -161,133 +122,92 @@ Deno.serve(async () => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  // 1. All favorites across all users.
-  const { data: favs, error: favErr } = await supabase
-    .from("favorites")
-    .select("user_id, href, title, image");
-  if (favErr) {
-    return new Response(JSON.stringify({ error: favErr.message }), { status: 500 });
-  }
-  const favorites = (favs ?? []) as Favorite[];
-  if (favorites.length === 0) {
-    return new Response(JSON.stringify({ ok: true, checked: 0, pushed: 0 }));
-  }
-
-  // 2. Group favorites by normalized title → unique anime.
-  const groups = new Map<string, AnimeGroup>();
-  for (const f of favorites) {
-    const key = norm(f.title) || f.href;
-    let g = groups.get(key);
-    if (!g) {
-      g = { key, title: f.title, href: f.href, image: f.image, userIds: new Set() };
-      groups.set(key, g);
-    }
-    g.userIds.add(f.user_id);
-  }
-
-  // 3. Push tokens per user.
-  const { data: tokenRows } = await supabase.from("push_tokens").select("user_id, token");
-  const tokensByUser = new Map<string, string[]>();
-  for (const r of (tokenRows ?? []) as { user_id: string; token: string }[]) {
-    const arr = tokensByUser.get(r.user_id) ?? [];
+  // 1. Tokens, split by scope (default "all" matches the app default).
+  const { data: tokenRows } = await supabase
+    .from("push_tokens")
+    .select("user_id, token, notification_scope, enabled");
+  const mylistTokensByUser = new Map<string, string[]>();
+  const allTokensByUser = new Map<string, string[]>();
+  for (const r of (tokenRows ?? []) as TokenRow[]) {
+    if (r.enabled === false) continue; // master switch off → skip this device
+    const map = r.notification_scope === "mylist" ? mylistTokensByUser : allTokensByUser;
+    const arr = map.get(r.user_id) ?? [];
     arr.push(r.token);
-    tokensByUser.set(r.user_id, arr);
+    map.set(r.user_id, arr);
   }
 
-  // 4. Existing mappings.
-  const { data: mapRows } = await supabase.from("anime_mappings").select("*");
-  const mappings = new Map<string, Mapping>();
-  for (const m of (mapRows ?? []) as Mapping[]) mappings.set(m.key, m);
+  // 2. Favorites → per-user match sets (only needed for "mylist" users).
+  const favHrefsByUser = new Map<string, Set<string>>();
+  const favTitlesByUser = new Map<string, Set<string>>();
+  if (mylistTokensByUser.size > 0) {
+    const { data: favs } = await supabase.from("favorites").select("user_id, href, title");
+    for (const f of (favs ?? []) as Favorite[]) {
+      if (!mylistTokensByUser.has(f.user_id)) continue;
+      let hrefs = favHrefsByUser.get(f.user_id);
+      if (!hrefs) { hrefs = new Set(); favHrefsByUser.set(f.user_id, hrefs); }
+      hrefs.add(f.href);
+      let titles = favTitlesByUser.get(f.user_id);
+      if (!titles) { titles = new Set(); favTitlesByUser.set(f.user_id, titles); }
+      const nt = norm(f.title);
+      if (nt) titles.add(nt);
+    }
+  }
+
+  // 3. Recent queue rows (the witanime feed the app reported).
+  const cutoff = new Date(Date.now() - QUEUE_TTL_HOURS * 3600 * 1000).toISOString();
+  const { data: queueRows } = await supabase
+    .from("episode_queue")
+    .select("*")
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: true })
+    .limit(500);
+  const queue = (queueRows ?? []) as QueueRow[];
 
   const messages: PushMessage[] = [];
   let pushedCount = 0;
 
-  for (const g of groups.values()) {
-    const existing = mappings.get(g.key);
+  // Claim (user, anime_key, episode) for dedup; true the first time only.
+  async function claimEpisode(userId: string, animeKey: string, episode: number): Promise<boolean> {
+    const { data: already } = await supabase
+      .from("notified_episodes")
+      .select("episode_number")
+      .eq("user_id", userId)
+      .eq("anime_key", animeKey)
+      .eq("episode_number", episode)
+      .maybeSingle();
+    if (already) return false;
+    await supabase.from("notified_episodes").insert({
+      user_id: userId,
+      anime_key: animeKey,
+      episode_number: episode,
+    });
+    return true;
+  }
 
-    // Resolve AniList if we've never looked this anime up before.
-    let anilistId = existing?.anilist_id ?? null;
-    let coverImage = existing?.image ?? g.image ?? null;
-    let resolvedTitle = existing?.title ?? g.title;
-    let lastAired: number;
-    const isFirstSeen = !existing;
+  for (const q of queue) {
+    const normTitle = norm(q.anime_title);
 
-    if (!existing || existing.anilist_id == null) {
-      const search = searchTermFromHref(g.href, g.title);
-      const res = await resolveAniList(search);
-      if (!res) {
-        // Record the miss so we don't hammer AniList every run.
-        await supabase.from("anime_mappings").upsert({
-          key: g.key,
-          title: g.title,
-          image: g.image,
-          anilist_id: null,
-          not_found: true,
-          last_aired_episode: existing?.last_aired_episode ?? 0,
-          last_checked: new Date().toISOString(),
-        });
-        continue;
+    // "all" users → everyone.
+    for (const [userId, tokens] of allTokensByUser) {
+      if (!(await claimEpisode(userId, q.anime_key, q.episode_number))) continue;
+      for (const to of tokens) {
+        messages.push(buildMessage(to, q));
+        pushedCount++;
       }
-      anilistId = res.id;
-      coverImage = res.image || coverImage;
-      resolvedTitle = res.title;
-      lastAired = res.lastAired;
-    } else {
-      // Re-check airing for an already-resolved anime.
-      const res = await resolveAniList(existing.title || g.title);
-      lastAired = res?.lastAired ?? existing.last_aired_episode;
-      if (res?.image) coverImage = res.image;
     }
 
-    const prevAired = existing?.last_aired_episode ?? 0;
-
-    // Persist the latest state.
-    await supabase.from("anime_mappings").upsert({
-      key: g.key,
-      anilist_id: anilistId,
-      title: resolvedTitle,
-      image: coverImage,
-      last_aired_episode: Math.max(prevAired, lastAired),
-      not_found: false,
-      last_checked: new Date().toISOString(),
-    });
-
-    // First time we ever see this anime → seed silently (no backlog spam).
-    if (isFirstSeen) continue;
-    // Nothing newer aired.
-    if (lastAired <= prevAired || lastAired <= 0) continue;
-
-    // New episode! Notify each follower (deduped) for the newest episode.
-    for (const userId of g.userIds) {
-      // Per-user dedup.
-      const { data: already } = await supabase
-        .from("notified_episodes")
-        .select("episode_number")
-        .eq("user_id", userId)
-        .eq("anime_key", g.key)
-        .eq("episode_number", lastAired)
-        .maybeSingle();
-      if (already) continue;
-
-      await supabase.from("notified_episodes").insert({
-        user_id: userId,
-        anime_key: g.key,
-        episode_number: lastAired,
-      });
-
-      const tokens = tokensByUser.get(userId) ?? [];
+    // "mylist" users → only if this anime is in their favorites.
+    for (const [userId, tokens] of mylistTokensByUser) {
+      const hrefs = favHrefsByUser.get(userId);
+      const titles = favTitlesByUser.get(userId);
+      const matches =
+        (q.anime_href && hrefs?.has(q.anime_href)) ||
+        (q.anime_key && hrefs?.has(q.anime_key)) ||
+        (normTitle && titles?.has(normTitle));
+      if (!matches) continue;
+      if (!(await claimEpisode(userId, q.anime_key, q.episode_number))) continue;
       for (const to of tokens) {
-        const msg: PushMessage = {
-          to,
-          title: "حلقة جديدة! 🎬",
-          body: `${resolvedTitle} — الحلقة ${lastAired} متوفرة الآن`,
-          sound: "default",
-          channelId: CHANNEL_ID,
-          priority: "high",
-          data: { animeHref: g.href, episodeNumber: lastAired, image: coverImage },
-        };
-        if (coverImage) msg.richContent = { image: coverImage };
-        messages.push(msg);
+        messages.push(buildMessage(to, q));
         pushedCount++;
       }
     }
@@ -295,8 +215,19 @@ Deno.serve(async () => {
 
   await sendExpoPush(messages);
 
+  // Housekeeping: drop queue rows past the TTL.
+  try {
+    await supabase.from("episode_queue").delete().lt("created_at", cutoff);
+  } catch { /* ignore */ }
+
   return new Response(
-    JSON.stringify({ ok: true, animeChecked: groups.size, pushed: pushedCount }),
+    JSON.stringify({
+      ok: true,
+      queued: queue.length,
+      allUsers: allTokensByUser.size,
+      mylistUsers: mylistTokensByUser.size,
+      pushed: pushedCount,
+    }),
     { headers: { "Content-Type": "application/json" } },
   );
 });

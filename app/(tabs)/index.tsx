@@ -22,7 +22,7 @@ import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../li
 import { addFavorite, isFavorite, toAnimeUrl } from "../../lib/favorites";
 import { getContinueWatching, progressPercent, removeFromHistory } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
-import { syncEpisodeNotifications, getUnreadCount } from "../../lib/notifications";
+import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebar } from "../../components/Sidebar";
 import { Shimmer } from "../../components/Shimmer";
 import { AdBanner } from "../../components/AdBanner";
@@ -93,13 +93,15 @@ export default function HomeScreen() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Detect new episodes of favorited anime → in-app notifications.
-  // Runs in the background so it never blocks the home feed.
+  // Detect new episodes → in-app notification center + report newly-available
+  // episodes to the server for closed-app push (with image). Both run in the
+  // background so they never block the home feed.
   useEffect(() => {
     syncEpisodeNotifications()
       .then(() => getUnreadCount())
       .then(setUnread)
       .catch(() => {});
+    reportRecentEpisodes().catch(() => {});
   }, []);
 
   // Refresh history + unread badge when the tab regains focus

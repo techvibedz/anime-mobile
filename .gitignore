@@ -46,3 +46,6 @@ fcm-service-account.json
 
 # Supabase CLI scratch
 supabase/.temp/
+
+# Built APK release artifacts (uploaded to GitHub Releases, not tracked here)
+*.apk

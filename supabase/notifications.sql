@@ -14,9 +14,23 @@ create table if not exists public.push_tokens (
   user_id    uuid not null references auth.users(id) on delete cascade,
   token      text not null,
   platform   text,
+  -- Mirror of the on-device notification-scope setting: 'all' = push for every
+  -- new episode, 'mylist' = only the user's saved anime. Default 'all' matches
+  -- the app default.
+  notification_scope text not null default 'all',
+  -- Master on/off switch mirroring the on-device "notifications enabled" toggle.
+  enabled boolean not null default true,
   updated_at timestamptz not null default now(),
   primary key (user_id, token)
 );
+
+-- Migrations for existing deployments (columns added after 1.4.0 ship).
+alter table public.push_tokens
+  add column if not exists notification_scope text not null default 'all';
+-- Master on/off switch (mirrors the on-device "notifications enabled" toggle);
+-- the episode-notifier skips tokens with enabled = false.
+alter table public.push_tokens
+  add column if not exists enabled boolean not null default true;
 
 alter table public.push_tokens enable row level security;
 
@@ -47,6 +61,33 @@ create table if not exists public.anime_mappings (
 
 -- Server-only table — no public access (service role bypasses RLS).
 alter table public.anime_mappings enable row level security;
+
+-- ── episode_queue (witanime "recently available" feed) ───────────────
+-- The app reports newly-available episodes here (it can scrape witanime via its
+-- hidden WebView; the server can't, due to Cloudflare). The episode-notifier
+-- fans these out as closed-app push WITH the episode image. Shared/global: any
+-- signed-in user keeps it fresh for everyone. Pruned to a short TTL by the fn.
+create table if not exists public.episode_queue (
+  episode_key    text primary key,        -- `${anime_key}#${episode_number}`
+  anime_key      text not null,
+  anime_title    text not null default '',
+  anime_href     text not null default '',
+  episode_title  text,
+  episode_href   text,
+  episode_number integer not null,
+  image          text,
+  created_at     timestamptz not null default now()
+);
+
+alter table public.episode_queue enable row level security;
+
+-- Any signed-in user may contribute the shared feed (insert only; first write
+-- wins via ON CONFLICT DO NOTHING). Service role reads/prunes, bypassing RLS.
+create policy "episode_queue_insert_auth" on public.episode_queue
+  for insert to authenticated with check (true);
+
+create index if not exists episode_queue_created_idx
+  on public.episode_queue (created_at desc);
 
 -- ── notified_episodes (per-user dedup) ───────────────────────────────
 create table if not exists public.notified_episodes (

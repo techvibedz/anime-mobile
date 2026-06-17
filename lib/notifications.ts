@@ -1,10 +1,18 @@
-// New-episode notifications (in-app center + native push fan-out).
+// New-episode notifications (in-app center only).
 //
 // Every time the home feed loads we diff the "recently updated" episodes feed
 // against either ALL anime or just the user's saved list (controlled by the
 // notification-scope setting) and record a notification whenever a new episode
-// drops. The bell on the home screen surfaces an unread badge, the
-// /notifications screen lists them, and lib/push fires a real OS notification.
+// drops. The bell on the home screen surfaces an unread badge and the
+// /notifications screen lists them.
+//
+// We intentionally do NOT fire a local OS notification here anymore: a local
+// notification (expo-notifications scheduleNotificationAsync) can't show the
+// anime cover image on Android, and it only fires while the app is open. The
+// real OS notification — closed-app, WITH the cover image — is delivered by the
+// server (supabase/functions/episode-notifier → Expo Push richContent.image).
+// Keeping both meant the user got a redundant image-less banner; this file is
+// now purely the in-app center.
 //
 // Flood guard: the seen-episode set is seeded silently on the first sync and
 // whenever the scope changes, so switching to "all" (or first launch) never
@@ -14,15 +22,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchRecent } from "./api";
 import { getFavorites, toAnimeUrl, type FavoriteAnime } from "./favorites";
-import { presentNewEpisodeNotification } from "./push";
 import { getNotificationScope, type NotificationScope } from "./settings";
-import { t } from "./i18n";
+import { supabase, isSupabaseConfigured, SUPABASE_FUNCTIONS_URL } from "./supabase";
 
 const LIST_KEY = "@notifications_v1";
 const SEEN_KEYS_KEY = "@notif_seen_keys_v2"; // { scope, keys: string[] } — dedup of notified episodes
+const QUEUE_SEEN_KEY = "@queue_seen_v1"; // scope-independent keys already reported to the server
 const MAX_STORED = 60;
 const MAX_SEEN_KEYS = 1000; // cap the dedup set (recent feed ages old keys out anyway)
-const MAX_PUSH_PER_SYNC = 10; // OS-notification storm guard (in-app list still keeps all)
 
 export interface AppNotification {
   /** Stable id: `${animeHref}#${episodeNumber}` so the same episode never duplicates. */
@@ -144,6 +151,28 @@ function animeKeyFor(ep: RawEpisode): string {
   return url || norm(ep.animeTitle) || ep.href;
 }
 
+/** Resolve the /anime/ URL for an episode (best effort). */
+function animeUrlFor(ep: RawEpisode): string {
+  return ep.animeHref?.includes("/anime/")
+    ? ep.animeHref
+    : (toAnimeUrl(ep.animeHref || ep.href) || ep.animeHref || "");
+}
+
+/** Pull the first couple of pages of the "recently updated" feed (newest first). */
+async function fetchRecentFeed(): Promise<RawEpisode[]> {
+  const episodes: RawEpisode[] = [];
+  for (const page of [1, 2]) {
+    try {
+      const r = await fetchRecent(page);
+      if (r.success) episodes.push(...r.data.episodes);
+      if (!r.success || !r.data.hasNext) break;
+    } catch {
+      break;
+    }
+  }
+  return episodes;
+}
+
 /**
  * Diff the latest "recently updated" episodes against either all anime or the
  * user's saved list (per the notification-scope setting) and append a
@@ -176,16 +205,7 @@ export async function syncEpisodeNotifications(): Promise<number> {
     }
 
     // Pull a couple of pages of recent episodes (newest first).
-    const episodes: RawEpisode[] = [];
-    for (const page of [1, 2]) {
-      try {
-        const r = await fetchRecent(page);
-        if (r.success) episodes.push(...r.data.episodes);
-        if (!r.success || !r.data.hasNext) break;
-      } catch {
-        break;
-      }
-    }
+    const episodes = await fetchRecentFeed();
     if (episodes.length === 0) return 0;
 
     // Build the candidate set for this scope, deduped by `${animeKey}#${epNum}`.
@@ -252,23 +272,130 @@ export async function syncEpisodeNotifications(): Promise<number> {
       // Newest first in the stored list.
       created.sort((a, b) => (b.episodeNumber ?? 0) - (a.episodeNumber ?? 0));
       await writeList([...created, ...list]);
-      // Fire OS notifications (capped to avoid a storm in "all" scope); the
-      // in-app list above keeps every item regardless. No-op on older builds
-      // without the native module, or when disabled/denied.
-      for (const n of created.slice(0, MAX_PUSH_PER_SYNC)) {
-        void presentNewEpisodeNotification({
-          title: t.notifNewEpisodeTitle,
-          body:
-            n.episodeNumber != null
-              ? t.notifNewEpisode(n.animeTitle, n.episodeNumber)
-              : t.notifNewEpisodeNoNum(n.animeTitle),
-          episodeHref: n.episodeHref,
-          animeHref: n.animeHref,
-          image: n.image,
-        });
-      }
+      // No local OS notification: the closed-app, with-image OS notification is
+      // delivered by the server (episode-notifier Edge Function). The in-app
+      // list above keeps every item regardless.
     }
     return created.length;
+  } catch {
+    return 0;
+  }
+}
+
+/* ── Server report: newly-available episodes → closed-app push ──────────── */
+
+async function readQueueSeen(): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(QUEUE_SEEN_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as { keys: string[] };
+    return new Set(parsed.keys || []);
+  } catch {
+    return new Set();
+  }
+}
+
+async function writeQueueSeen(keys: Set<string>) {
+  try {
+    const arr = [...keys];
+    const trimmed = arr.length > MAX_SEEN_KEYS ? arr.slice(arr.length - MAX_SEEN_KEYS) : arr;
+    await AsyncStorage.setItem(QUEUE_SEEN_KEY, JSON.stringify({ keys: trimmed }));
+  } catch {}
+}
+
+interface QueueRow {
+  episode_key: string;
+  anime_key: string;
+  anime_title: string;
+  anime_href: string;
+  episode_title: string;
+  episode_href: string;
+  episode_number: number;
+  image: string;
+}
+
+/**
+ * Report newly-available episodes (witanime's "recently updated" feed) to the
+ * server so the episode-notifier Edge Function can fan them out as closed-app
+ * push notifications WITH the episode image — but only for episodes that are
+ * ACTUALLY available in the app. The server can't scrape witanime (Cloudflare),
+ * so the app is the only thing that knows real availability; an external airing
+ * schedule would fire before the Arabic sub is published.
+ *
+ * Scope-independent: it always reports ALL anime; the server decides per user
+ * whether to push everything ("all") or only saved anime ("mylist"). The feed
+ * is shared, so any one signed-in user opening the app keeps it fresh for
+ * everyone. Seeded silently on first run so the current backlog isn't announced.
+ *
+ * Returns the number of NEW episodes uploaded (0 on any failure / no-op).
+ */
+export async function reportRecentEpisodes(): Promise<number> {
+  try {
+    if (!isSupabaseConfigured) return 0;
+    // Only signed-in users can write the shared feed (RLS); skip otherwise.
+    const { data: auth } = await supabase.auth.getSession();
+    if (!auth?.session?.user?.id) return 0;
+
+    const episodes = await fetchRecentFeed();
+    if (episodes.length === 0) return 0;
+
+    // All candidates (no scope filter), deduped by `${animeKey}#${epNum}`.
+    const candidates = new Map<string, QueueRow>();
+    for (const ep of episodes) {
+      const epNum = extractEpisodeNumber(ep.title);
+      if (epNum == null) continue;
+      const animeKey = animeKeyFor(ep);
+      const key = `${animeKey}#${epNum}`;
+      if (candidates.has(key)) continue;
+      candidates.set(key, {
+        episode_key: key,
+        anime_key: animeKey,
+        anime_title: ep.animeTitle || "",
+        anime_href: animeUrlFor(ep),
+        episode_title: ep.title || "",
+        episode_href: ep.href || "",
+        episode_number: epNum,
+        image: ep.image || "",
+      });
+    }
+    if (candidates.size === 0) return 0;
+
+    const seen = await readQueueSeen();
+
+    // First run → seed silently (never announce the existing backlog).
+    if (seen.size === 0) {
+      for (const k of candidates.keys()) seen.add(k);
+      await writeQueueSeen(seen);
+      return 0;
+    }
+
+    const fresh: QueueRow[] = [];
+    for (const [key, row] of candidates) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fresh.push(row);
+    }
+    if (fresh.length === 0) return 0;
+
+    // Idempotent upload (ON CONFLICT DO NOTHING keeps the first-seen row/time).
+    const { error } = await supabase
+      .from("episode_queue")
+      .upsert(fresh, { onConflict: "episode_key", ignoreDuplicates: true });
+    // On failure, don't persist the seen-set so we retry these next time.
+    if (error) return 0;
+
+    await writeQueueSeen(seen);
+
+    // Nudge the notifier for near-instant delivery (the cron is the backstop).
+    if (SUPABASE_FUNCTIONS_URL) {
+      try {
+        await fetch(`${SUPABASE_FUNCTIONS_URL}/episode-notifier`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch {}
+    }
+    return fresh.length;
   } catch {
     return 0;
   }

@@ -7,10 +7,9 @@ import {
   StyleSheet,
   Switch,
   Alert,
-  I18nManager,
   ActivityIndicator,
 } from "react-native";
-import { router, useFocusEffect } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
@@ -29,18 +28,19 @@ import {
   requestNotificationPermission,
   hasNotificationPermission,
   notificationsModuleAvailable,
+  updateNotificationScopeRemote,
+  updateNotificationsEnabledRemote,
 } from "../lib/push";
 import { checkForApkUpdate, checkForOtaUpdate, openApkDownload, applyOtaUpdate } from "../lib/updater";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
 import { t } from "../lib/i18n";
+import { Aurora, ScreenHeader, SectionLabel } from "../components/ScreenChrome";
 
 const HISTORY_KEY = "watch_history";
 
-// RTL-aware row direction. On a forced-RTL device, RTL auto-flips "row" to
-// render right-to-left; on an LTR device we force the same visual with
-// "row-reverse". Hardcoding "row-reverse" double-flips under RTL and breaks
-// alignment (icons jump to the wrong side / lose vertical centering).
-const ROW_DIR = I18nManager.isRTL ? "row" : "row-reverse";
+// Always plain "row" — never "row-reverse" (RN 0.81 Yoga bug collapses mixed
+// fixed+flex rows into a vertical stack). Arabic order is achieved by laying
+// the control out first and the icon last, with right-aligned text between.
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -62,6 +62,8 @@ export default function SettingsScreen() {
   const changeScope = useCallback(async (value: NotificationScope) => {
     setScope(value);
     await setNotificationScope(value);
+    // Sync to the server so closed-app push honors the change immediately.
+    void updateNotificationScopeRemote(value);
   }, []);
 
   const toggleNotifs = useCallback(async (value: boolean) => {
@@ -76,6 +78,8 @@ export default function SettingsScreen() {
     }
     setNotifs(value);
     await setNotificationsEnabled(value);
+    // Sync to the server so closed-app push stops/resumes immediately.
+    void updateNotificationsEnabledRemote(value);
   }, []);
 
   const toggleAutoplay = useCallback(async (value: boolean) => {
@@ -129,25 +133,20 @@ export default function SettingsScreen() {
     }
   }, [checking]);
 
-  const version = Constants.expoConfig?.version ?? "1.3.1";
+  const version = Constants.expoConfig?.version ?? "1.4.0";
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={s.header}>
-        <Pressable onPress={() => router.back()} style={s.backBtn} hitSlop={8}>
-          <Ionicons name={I18nManager.isRTL ? "chevron-forward" : "chevron-back"} size={22} color={C.white} />
-        </Pressable>
-        <Text style={s.heading}>{t.settingsTitle}</Text>
-        <View style={s.headerSpacer} />
-      </View>
+      <Aurora />
+      <ScreenHeader title={t.settingsTitle} />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: S.paddingContent, paddingBottom: insets.bottom + 40 }}>
         {/* General */}
-        <Text style={s.groupTitle}>{t.settingsGeneral}</Text>
+        <SectionLabel>{t.settingsGeneral}</SectionLabel>
         <View style={s.group}>
           <ToggleRow
             icon="notifications-outline"
+            tint={C.accent}
             title={t.settingsNotifications}
             desc={
               notificationsModuleAvailable() && !permGranted && notifs
@@ -166,6 +165,7 @@ export default function SettingsScreen() {
           <Divider />
           <ToggleRow
             icon="play-forward-outline"
+            tint={C.violet}
             title={t.settingsAutoplay}
             desc={t.settingsAutoplayDesc}
             value={autoplay}
@@ -174,18 +174,21 @@ export default function SettingsScreen() {
         </View>
 
         {/* Data */}
-        <Text style={s.groupTitle}>{t.settingsData}</Text>
+        <View style={s.sectionGap} />
+        <SectionLabel>{t.settingsData}</SectionLabel>
         <View style={s.group}>
-          <ActionRow icon="trash-bin-outline" title={t.settingsClearCache} desc={t.settingsClearCacheDesc} onPress={onClearCache} />
+          <ActionRow icon="trash-bin-outline" tint={C.cyan} title={t.settingsClearCache} desc={t.settingsClearCacheDesc} onPress={onClearCache} />
           <Divider />
           <ActionRow icon="time-outline" title={t.settingsClearHistory} desc={t.settingsClearHistoryDesc} onPress={onClearHistory} danger />
         </View>
 
         {/* About */}
-        <Text style={s.groupTitle}>{t.settingsAbout}</Text>
+        <View style={s.sectionGap} />
+        <SectionLabel>{t.settingsAbout}</SectionLabel>
         <View style={s.group}>
           <ActionRow
             icon="cloud-download-outline"
+            tint={C.violet}
             title={t.settingsCheckUpdate}
             desc={`${t.settingsVersion} ${version}`}
             onPress={onCheckUpdate}
@@ -195,6 +198,7 @@ export default function SettingsScreen() {
 
         {/* Brand footer */}
         <View style={s.brandFooter}>
+          <LinearLogoMark />
           <Text style={s.brandName}>{t.settingsAppName}</Text>
           <Text style={s.brandTag}>{t.settingsTagline}</Text>
           <Text style={s.brandVersion}>v{version}</Text>
@@ -204,12 +208,34 @@ export default function SettingsScreen() {
   );
 }
 
+/* ── Brand mark ──────────────────────────────── */
+function LinearLogoMark() {
+  return (
+    <View style={s.logoMark}>
+      <Text style={s.logoGlyph}>P</Text>
+    </View>
+  );
+}
+
 /* ── Rows ────────────────────────────────────── */
+// Visual order is [control] · [text (right-aligned)] · [icon] so the icon rail
+// hugs the right edge for Arabic readers.
+
+function RowIcon({ icon, tint, danger }: { icon: keyof typeof Ionicons.glyphMap; tint?: string; danger?: boolean }) {
+  const color = danger ? C.accent : tint ?? C.text;
+  const bg = danger ? C.accentSoft : tint ? tint + "1F" : C.surfaceLight;
+  return (
+    <View style={[s.rowIcon, { backgroundColor: bg }]}>
+      <Ionicons name={icon} size={19} color={color} />
+    </View>
+  );
+}
 
 function ToggleRow({
-  icon, title, desc, value, onChange,
+  icon, tint, title, desc, value, onChange,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
+  tint?: string;
   title: string;
   desc: string;
   value: boolean;
@@ -217,11 +243,6 @@ function ToggleRow({
 }) {
   return (
     <View style={s.row}>
-      <View style={s.rowIcon}><Ionicons name={icon} size={19} color={C.text} /></View>
-      <View style={s.rowText}>
-        <Text style={s.rowTitle}>{title}</Text>
-        <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
-      </View>
       <Switch
         value={value}
         onValueChange={onChange}
@@ -229,6 +250,11 @@ function ToggleRow({
         thumbColor="#fff"
         ios_backgroundColor={C.surfaceLight}
       />
+      <View style={s.rowText}>
+        <Text style={s.rowTitle}>{title}</Text>
+        <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
+      </View>
+      <RowIcon icon={icon} tint={tint} />
     </View>
   );
 }
@@ -245,34 +271,37 @@ function ScopeRow({
   ];
   return (
     <View style={s.scopeRow}>
-      <View style={s.rowIcon}><Ionicons name="funnel-outline" size={19} color={C.text} /></View>
-      <View style={s.scopeBody}>
-        <Text style={s.rowTitle}>{t.settingsNotifScope}</Text>
-        <Text style={s.rowDesc}>{t.settingsNotifScopeDesc}</Text>
-        <View style={s.segment}>
-          {options.map((opt) => {
-            const active = scope === opt.key;
-            return (
-              <Pressable
-                key={opt.key}
-                onPress={() => onChange(opt.key)}
-                style={[s.segmentBtn, active && s.segmentBtnActive]}
-              >
-                <Ionicons name={opt.icon} size={14} color={active ? C.textOnAccent : C.textSecondary} />
-                <Text style={[s.segmentText, active && s.segmentTextActive]}>{opt.label}</Text>
-              </Pressable>
-            );
-          })}
+      <View style={s.scopeHead}>
+        <View style={s.scopeBody}>
+          <Text style={s.rowTitle}>{t.settingsNotifScope}</Text>
+          <Text style={s.rowDesc}>{t.settingsNotifScopeDesc}</Text>
         </View>
+        <RowIcon icon="funnel-outline" tint={C.gold} />
+      </View>
+      <View style={s.segment}>
+        {options.map((opt, i) => {
+          const active = scope === opt.key;
+          return (
+            <Pressable
+              key={opt.key}
+              onPress={() => onChange(opt.key)}
+              style={[s.segmentBtn, i > 0 && { marginLeft: 6 }, active && s.segmentBtnActive]}
+            >
+              <Ionicons name={opt.icon} size={14} color={active ? C.textOnAccent : C.textSecondary} />
+              <Text style={[s.segmentText, active && s.segmentTextActive]}>{opt.label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );
 }
 
 function ActionRow({
-  icon, title, desc, onPress, danger, right,
+  icon, tint, title, desc, onPress, danger, right,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
+  tint?: string;
   title: string;
   desc: string;
   onPress: () => void;
@@ -281,14 +310,12 @@ function ActionRow({
 }) {
   return (
     <Pressable style={({ pressed }) => [s.row, pressed && { backgroundColor: C.glass }]} onPress={onPress}>
-      <View style={[s.rowIcon, danger && { backgroundColor: C.accentSoft }]}>
-        <Ionicons name={icon} size={19} color={danger ? C.accent : C.text} />
-      </View>
+      {right ?? <Ionicons name="chevron-back" size={18} color={C.textMuted} />}
       <View style={s.rowText}>
         <Text style={[s.rowTitle, danger && { color: C.accent }]}>{title}</Text>
         <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
       </View>
-      {right ?? <Ionicons name="chevron-back" size={18} color={C.textMuted} />}
+      <RowIcon icon={icon} tint={tint} danger={danger} />
     </Pressable>
   );
 }
@@ -300,56 +327,49 @@ function Divider() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
-  header: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: S.paddingContent, paddingVertical: 12,
-  },
-  backBtn: {
-    width: 40, height: 40, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    alignItems: "center", justifyContent: "center",
-  },
-  headerSpacer: { width: 40, height: 40 },
-  heading: { flex: 1, textAlign: "center", color: C.text, fontSize: 18, fontWeight: "700", fontFamily: "Outfit_700Bold" },
-
-  groupTitle: {
-    color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "Outfit_700Bold",
-    marginTop: 24, marginBottom: 10, marginHorizontal: 6, textAlign: "right",
-  },
+  sectionGap: { height: 24 },
   group: {
-    borderRadius: R.lg, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    borderRadius: R.xl, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     overflow: "hidden", ...ELEVATION_CARD,
   },
   row: {
-    flexDirection: ROW_DIR, alignItems: "center",
+    flexDirection: "row", alignItems: "center",
     paddingVertical: 15, paddingHorizontal: 14,
   },
   rowIcon: {
-    width: 38, height: 38, borderRadius: R.md,
-    backgroundColor: C.surfaceLight, alignItems: "center", justifyContent: "center",
+    width: 40, height: 40, borderRadius: R.md, marginLeft: 14,
+    alignItems: "center", justifyContent: "center",
   },
-  rowText: { flex: 1, marginHorizontal: 14 },
-  rowTitle: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
+  rowText: { flex: 1, marginLeft: 14 },
+  rowTitle: { color: C.text, fontSize: 14.5, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
   rowDesc: { color: C.textMuted, fontSize: 11.5, marginTop: 4, lineHeight: 17, fontFamily: "DMSans_500Medium", textAlign: "right" },
-  divider: { height: 1, backgroundColor: C.border, marginRight: 66 },
+  // Indent the divider so it stops short of the icon rail on the right.
+  divider: { height: 1, backgroundColor: C.border, marginLeft: 14, marginRight: 68 },
 
-  scopeRow: { flexDirection: ROW_DIR, alignItems: "flex-start", paddingVertical: 15, paddingHorizontal: 14 },
-  scopeBody: { flex: 1, marginHorizontal: 14 },
+  scopeRow: { paddingVertical: 15, paddingHorizontal: 14 },
+  scopeHead: { flexDirection: "row", alignItems: "flex-start" },
+  scopeBody: { flex: 1 },
   segment: {
-    flexDirection: ROW_DIR, marginTop: 14,
+    flexDirection: "row", marginTop: 14,
     padding: 4, borderRadius: R.pill,
     backgroundColor: C.bgDeep, borderWidth: 1, borderColor: C.glassBorder,
   },
   segmentBtn: {
-    flex: 1, flexDirection: ROW_DIR, alignItems: "center", justifyContent: "center",
-    marginHorizontal: 3, paddingVertical: 10, borderRadius: R.pill,
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
+    paddingVertical: 10, borderRadius: R.pill,
   },
   segmentBtnActive: { backgroundColor: C.accent, ...ELEVATION_GLOW },
-  segmentText: { color: C.textSecondary, fontSize: 12.5, fontWeight: "700", fontFamily: "DMSans_600SemiBold", marginHorizontal: 3 },
+  segmentText: { color: C.textSecondary, fontSize: 12.5, fontWeight: "700", fontFamily: "DMSans_600SemiBold", marginLeft: 6 },
   segmentTextActive: { color: C.textOnAccent },
 
-  brandFooter: { alignItems: "center", marginTop: 40, gap: 4 },
-  brandName: { color: C.accent, fontSize: 20, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  brandFooter: { alignItems: "center", marginTop: 44, gap: 4 },
+  logoMark: {
+    width: 52, height: 52, borderRadius: 16, marginBottom: 10,
+    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+    alignItems: "center", justifyContent: "center",
+  },
+  logoGlyph: { color: C.accent, fontSize: 26, fontWeight: "900", fontFamily: "Outfit_900Black" },
+  brandName: { color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
   brandTag: { color: C.textSecondary, fontSize: 12, fontFamily: "DMSans_500Medium" },
   brandVersion: { color: C.textMuted, fontSize: 11, marginTop: 6, fontFamily: "DMSans_500Medium" },
 });

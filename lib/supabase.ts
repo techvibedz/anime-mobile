@@ -35,3 +35,6 @@ export const supabase = createClient(
 );
 
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+/** Base URL for invoking Edge Functions, e.g. `${SUPABASE_FUNCTIONS_URL}/episode-notifier`. */
+export const SUPABASE_FUNCTIONS_URL = SUPABASE_URL ? `${SUPABASE_URL}/functions/v1` : "";

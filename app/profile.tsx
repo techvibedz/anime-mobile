@@ -5,7 +5,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  I18nManager,
 } from "react-native";
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
@@ -14,10 +13,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../lib/auth";
 import { getHistory, isCompleted, type WatchEntry } from "../lib/history";
-import { getFavorites } from "../lib/favorites";
-import { toAnimeUrl } from "../lib/favorites";
+import { getFavorites, toAnimeUrl } from "../lib/favorites";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
+import { Aurora, ScreenHeader, SectionLabel, GlassIconButton } from "../components/ScreenChrome";
 
 interface Stats {
   episodesWatched: number;
@@ -83,56 +82,59 @@ export default function ProfileScreen() {
   const since = arMonthYear(user?.created_at);
 
   const bigStats = [
-    { icon: "play-circle", value: String(stats.episodesWatched), label: t.statsEpisodesWatched },
-    { icon: "time", value: t.watchTimeValue(stats.watchHours, stats.watchMins), label: t.statsWatchTime },
-    { icon: "albums", value: String(stats.animeInList), label: t.statsAnimeInList },
-  ];
+    { icon: "play-circle", value: String(stats.episodesWatched), label: t.statsEpisodesWatched, tint: C.accent },
+    { icon: "time", value: t.watchTimeValue(stats.watchHours, stats.watchMins), label: t.statsWatchTime, tint: C.violet },
+    { icon: "albums", value: String(stats.animeInList), label: t.statsAnimeInList, tint: C.cyan },
+  ] as const;
 
   const miniStats = [
     { icon: "play", value: stats.watching, label: t.statsWatching, color: C.success },
     { icon: "bookmark", value: stats.planned, label: t.statsPlanned, color: C.violet },
     { icon: "tv", value: stats.distinctAnime, label: t.statsCompleted, color: C.gold },
-  ];
+  ] as const;
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={s.header}>
-        <Pressable onPress={() => router.back()} style={s.backBtn} hitSlop={8}>
-          <Ionicons name={I18nManager.isRTL ? "chevron-forward" : "chevron-back"} size={22} color={C.white} />
-        </Pressable>
-        <Text style={s.heading}>{t.profileTitle}</Text>
-        <Pressable onPress={() => router.push("/settings")} style={s.backBtn} hitSlop={8}>
-          <Ionicons name="settings-outline" size={20} color={C.textSecondary} />
-        </Pressable>
-      </View>
+      <Aurora />
+      <ScreenHeader
+        title={t.profileTitle}
+        right={<GlassIconButton icon="settings-outline" size={19} tint={C.textSecondary} onPress={() => router.push("/settings")} />}
+      />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}>
-        {/* Hero card */}
+        {/* Hero */}
         <View style={s.hero}>
           <LinearGradient
-            colors={[C.violetSoft, "transparent"]}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          {avatarUrl ? (
-            <Image source={{ uri: avatarUrl }} style={s.avatar} contentFit="cover" transition={150} />
-          ) : (
-            <LinearGradient colors={[C.accent, C.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.avatar}>
-              <Text style={s.avatarInitial}>{initial}</Text>
-            </LinearGradient>
-          )}
+            colors={[C.accent, C.violet]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={s.avatarRing}
+          >
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={s.avatar} contentFit="cover" transition={150} />
+            ) : (
+              <View style={[s.avatar, s.avatarFallback]}>
+                <Text style={s.avatarInitial}>{initial}</Text>
+              </View>
+            )}
+          </LinearGradient>
           <Text style={s.name} numberOfLines={1}>{displayName}</Text>
           {user?.email ? <Text style={s.email} numberOfLines={1}>{user.email}</Text> : null}
-          {since ? <Text style={s.since}>{t.memberSince(since)}</Text> : null}
+          {since ? (
+            <View style={s.sinceChip}>
+              <Ionicons name="sparkles" size={11} color={C.violet} />
+              <Text style={s.sinceText}>{t.memberSince(since)}</Text>
+            </View>
+          ) : null}
         </View>
 
         {/* Big stats */}
         <View style={s.bigStatsRow}>
-          {bigStats.map((st2) => (
-            <View key={st2.label} style={s.bigStatCard}>
-              <Ionicons name={st2.icon as any} size={18} color={C.accent} />
+          {bigStats.map((st2, i) => (
+            <View key={st2.label} style={[s.bigStatCard, i > 0 && s.colSpace]}>
+              <View style={[s.bigStatIcon, { backgroundColor: st2.tint + "22" }]}>
+                <Ionicons name={st2.icon as any} size={17} color={st2.tint} />
+              </View>
               <Text style={s.bigStatValue} numberOfLines={1} adjustsFontSizeToFit>{st2.value}</Text>
               <Text style={s.bigStatLabel}>{st2.label}</Text>
             </View>
@@ -141,22 +143,28 @@ export default function ProfileScreen() {
 
         {/* Mini stats */}
         <View style={s.miniRow}>
-          {miniStats.map((m) => (
-            <View key={m.label} style={s.miniCard}>
+          {miniStats.map((m, i) => (
+            <View key={m.label} style={[s.miniCard, i > 0 && s.colSpace]}>
               <View style={[s.miniIcon, { backgroundColor: m.color + "22" }]}>
                 <Ionicons name={m.icon as any} size={14} color={m.color} />
               </View>
-              <Text style={s.miniValue}>{m.value}</Text>
-              <Text style={s.miniLabel}>{m.label}</Text>
+              <View style={s.miniText}>
+                <Text style={s.miniValue}>{m.value}</Text>
+                <Text style={s.miniLabel} numberOfLines={1}>{m.label}</Text>
+              </View>
             </View>
           ))}
         </View>
 
         {/* Recent activity */}
-        <Text style={s.sectionTitle}>{t.recentActivity}</Text>
+        <View style={s.section}>
+          <SectionLabel>{t.recentActivity}</SectionLabel>
+        </View>
         {stats.recent.length === 0 ? (
           <View style={s.emptyActivity}>
-            <Ionicons name="film-outline" size={26} color={C.textMuted} />
+            <View style={s.emptyIcon}>
+              <Ionicons name="film-outline" size={26} color={C.textMuted} />
+            </View>
             <Text style={s.emptyText}>{t.noActivity}</Text>
           </View>
         ) : (
@@ -164,7 +172,7 @@ export default function ProfileScreen() {
             {stats.recent.map((e) => (
               <Pressable
                 key={e.episodeHref}
-                style={({ pressed }) => [s.recentItem, { opacity: pressed ? 0.85 : 1 }]}
+                style={({ pressed }) => [s.recentItem, pressed && s.recentItemPressed]}
                 onPress={() => {
                   const params: Record<string, string> = {};
                   if (e.image) params.img = encodeURIComponent(e.image);
@@ -175,18 +183,18 @@ export default function ProfileScreen() {
                   router.push({ pathname: `/watch/${encodeURIComponent(e.episodeHref)}`, params });
                 }}
               >
-                {e.image ? (
-                  <Image source={{ uri: e.image }} style={s.recentThumb} contentFit="cover" transition={120} />
-                ) : (
-                  <View style={[s.recentThumb, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
-                    <Ionicons name="film-outline" size={18} color={C.textMuted} />
-                  </View>
-                )}
-                <View style={{ flex: 1 }}>
+                {isCompleted(e) ? <Ionicons name="checkmark-circle" size={18} color={C.success} style={s.recentCheck} /> : null}
+                <View style={s.recentBody}>
                   <Text style={s.recentTitle} numberOfLines={1}>{e.episodeTitle || e.animeTitle}</Text>
                   <Text style={s.recentSub} numberOfLines={1}>{e.animeTitle}</Text>
                 </View>
-                {isCompleted(e) && <Ionicons name="checkmark-circle" size={18} color={C.success} />}
+                {e.image ? (
+                  <Image source={{ uri: e.image }} style={s.recentThumb} contentFit="cover" transition={120} />
+                ) : (
+                  <View style={[s.recentThumb, s.recentThumbFallback]}>
+                    <Ionicons name="film-outline" size={18} color={C.textMuted} />
+                  </View>
+                )}
               </Pressable>
             ))}
           </View>
@@ -199,59 +207,66 @@ export default function ProfileScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
-  header: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: S.paddingContent, paddingVertical: 12,
-  },
-  backBtn: {
-    width: 40, height: 40, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    alignItems: "center", justifyContent: "center",
-  },
-  heading: { color: C.text, fontSize: 18, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  // Shared horizontal spacer between equal-width cards (margins, not row gap).
+  colSpace: { marginLeft: 10 },
 
-  hero: { alignItems: "center", paddingVertical: 24, paddingHorizontal: S.paddingContent },
-  avatar: {
-    width: 92, height: 92, borderRadius: R.circle,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 2, borderColor: C.glassBorder,
+  hero: { alignItems: "center", paddingVertical: 20, paddingHorizontal: S.paddingContent },
+  avatarRing: {
+    width: 102, height: 102, borderRadius: R.circle,
+    alignItems: "center", justifyContent: "center", padding: 3,
   },
-  avatarInitial: { color: "#fff", fontSize: 38, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  name: { color: C.text, fontSize: 22, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", marginTop: 14 },
-  email: { color: C.textSecondary, fontSize: 13, marginTop: 4, fontFamily: "DMSans_500Medium" },
-  since: { color: C.textMuted, fontSize: 11, marginTop: 6, fontFamily: "DMSans_500Medium" },
+  avatar: { width: "100%", height: "100%", borderRadius: R.circle },
+  avatarFallback: { backgroundColor: C.bgDeep, alignItems: "center", justifyContent: "center" },
+  avatarInitial: { color: C.text, fontSize: 40, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  name: { color: C.text, fontSize: 23, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", marginTop: 16 },
+  email: { color: C.textSecondary, fontSize: 13, marginTop: 5, fontFamily: "DMSans_500Medium" },
+  sinceChip: {
+    flexDirection: "row", alignItems: "center", marginTop: 12,
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: R.pill,
+    backgroundColor: C.violetSoft, borderWidth: 1, borderColor: C.borderViolet,
+  },
+  sinceText: { color: C.textSoft, fontSize: 11.5, fontFamily: "DMSans_600SemiBold", marginLeft: 6 },
 
-  bigStatsRow: { flexDirection: "row", gap: 10, paddingHorizontal: S.paddingContent, marginTop: 4 },
+  bigStatsRow: { flexDirection: "row", paddingHorizontal: S.paddingContent, marginTop: 8 },
   bigStatCard: {
-    flex: 1, alignItems: "center", gap: 6, paddingVertical: 16, borderRadius: R.lg,
+    flex: 1, alignItems: "center", paddingVertical: 18, borderRadius: R.xl,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     ...ELEVATION_CARD,
   },
+  bigStatIcon: { width: 36, height: 36, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginBottom: 8 },
   bigStatValue: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  bigStatLabel: { color: C.textSecondary, fontSize: 10, textAlign: "center", fontFamily: "DMSans_500Medium" },
+  bigStatLabel: { color: C.textSecondary, fontSize: 10, textAlign: "center", marginTop: 4, fontFamily: "DMSans_500Medium" },
 
-  miniRow: { flexDirection: "row", gap: 10, paddingHorizontal: S.paddingContent, marginTop: 10 },
+  miniRow: { flexDirection: "row", paddingHorizontal: S.paddingContent, marginTop: 10 },
   miniCard: {
-    flex: 1, alignItems: "center", gap: 5, paddingVertical: 12, borderRadius: R.lg,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    flex: 1, flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 12,
+    borderRadius: R.lg, backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
-  miniIcon: { width: 28, height: 28, borderRadius: R.circle, alignItems: "center", justifyContent: "center" },
-  miniValue: { color: C.text, fontSize: 16, fontWeight: "700", fontFamily: "Outfit_700Bold" },
-  miniLabel: { color: C.textMuted, fontSize: 9, textAlign: "center", fontFamily: "DMSans_500Medium" },
+  miniIcon: { width: 30, height: 30, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginRight: 10 },
+  miniText: { flex: 1, alignItems: "flex-end" },
+  miniValue: { color: C.text, fontSize: 17, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  miniLabel: { color: C.textMuted, fontSize: 9.5, fontFamily: "DMSans_500Medium" },
 
-  sectionTitle: {
-    color: C.text, fontSize: 16, fontWeight: "700", fontFamily: "Outfit_700Bold",
-    paddingHorizontal: S.paddingContent, marginTop: 28, marginBottom: 12, textAlign: "left",
-  },
-  recentList: { paddingHorizontal: S.paddingContent, gap: 8 },
+  section: { paddingHorizontal: S.paddingContent, marginTop: 28 },
+
+  recentList: { paddingHorizontal: S.paddingContent },
   recentItem: {
-    flexDirection: "row", alignItems: "center", gap: 12, padding: 8,
+    flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 8,
     borderRadius: R.lg, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
   },
+  recentItemPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.99 }] },
+  recentCheck: { marginRight: 12 },
+  recentBody: { flex: 1, marginRight: 12 },
   recentThumb: { width: 64, height: 40, borderRadius: R.sm },
-  recentTitle: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "left" },
-  recentSub: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "DMSans_500Medium", textAlign: "left" },
+  recentThumbFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
+  recentTitle: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
+  recentSub: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "DMSans_500Medium", textAlign: "right" },
 
-  emptyActivity: { alignItems: "center", gap: 10, paddingVertical: 36 },
+  emptyActivity: { alignItems: "center", paddingVertical: 36 },
+  emptyIcon: {
+    width: 64, height: 64, borderRadius: R.circle, marginBottom: 12,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    alignItems: "center", justifyContent: "center",
+  },
   emptyText: { color: C.textMuted, fontSize: 13, fontFamily: "DMSans_500Medium" },
 });

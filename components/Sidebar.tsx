@@ -9,7 +9,6 @@ import {
   Dimensions,
   Share,
   ScrollView,
-  I18nManager,
 } from "react-native";
 import { Image } from "expo-image";
 import { router, usePathname } from "expo-router";
@@ -19,15 +18,18 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../lib/auth";
 import { getHistory, isCompleted } from "../lib/history";
 import { getFavorites } from "../lib/favorites";
-import { C, R, ELEVATION_CARD } from "../lib/theme";
+import { C, R, ELEVATION_CARD, ELEVATION_GLOW_VIOLET } from "../lib/theme";
 import { t } from "../lib/i18n";
+import appVersion from "../version.json";
 
 const { width: SW } = Dimensions.get("window");
-const PANEL_W = Math.min(330, SW * 0.84);
+const PANEL_W = Math.min(360, SW * 0.88);
 
-// RTL-aware row direction. Hardcoding "row-reverse" double-flips under forced
-// RTL and breaks icon alignment; match the rest of the app's pattern.
-const ROW_DIR = I18nManager.isRTL ? "row" : "row-reverse";
+// Rows are always plain "row" — never "row-reverse". RN 0.81's Yoga engine
+// collapses mixed fixed+flex rows into a broken vertical stack under
+// row-reverse. The app doesn't force RTL, so "row" + right-aligned Arabic text
+// is the stable choice (RN still mirrors plain rows on RTL-locale devices).
+const CHEVRON = "chevron-back" as const;
 
 /* ── Context ─────────────────────────────────── */
 
@@ -56,7 +58,7 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/* ── Sidebar UI ──────────────────────────────── */
+/* ── Types ───────────────────────────────────── */
 
 interface QuickStats {
   episodesWatched: number;
@@ -67,7 +69,12 @@ interface NavRow {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress: () => void;
+  /** pathname fragment used to highlight the active route */
+  match?: string;
+  accent?: string;
 }
+
+/* ── Sidebar UI ──────────────────────────────── */
 
 function Sidebar() {
   const { open, closeSidebar } = useSidebar();
@@ -77,8 +84,8 @@ function Sidebar() {
 
   const [mounted, setMounted] = useState(false);
   const [stats, setStats] = useState<QuickStats>({ episodesWatched: 0, animeCount: 0 });
-  // Single driver (0 = closed, 1 = open) — the panel slide and backdrop fade are
-  // both interpolated from it, so the whole thing animates on one native value.
+  // Single driver (0 = closed, 1 = open). Panel slide, backdrop fade and the
+  // content settle are all interpolated from it — one native value, no jank.
   const anim = useRef(new Animated.Value(0)).current;
 
   // Auto-close on route change.
@@ -103,7 +110,7 @@ function Sidebar() {
         .catch(() => {});
       Animated.timing(anim, {
         toValue: 1,
-        duration: 300,
+        duration: 340,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start();
@@ -121,8 +128,13 @@ function Sidebar() {
 
   if (!mounted) return null;
 
+  // Panel travels in from off-screen-right — the menu trigger lives top-right
+  // and the app reads RTL, so the drawer emerges from the reading edge.
   const translateX = anim.interpolate({ inputRange: [0, 1], outputRange: [PANEL_W, 0] });
   const backdropOpacity = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const contentOpacity = anim.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0.15, 1] });
+  // Content drifts in a touch behind the panel for a layered, modern feel.
+  const contentDrift = anim.interpolate({ inputRange: [0, 1], outputRange: [22, 0] });
 
   const displayName =
     user?.user_metadata?.full_name ||
@@ -142,179 +154,324 @@ function Sidebar() {
   };
 
   const NAV: NavRow[] = [
-    { icon: "person-outline", label: t.profile, onPress: () => go("/profile") },
-    { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist") },
-    { icon: "notifications-outline", label: t.notifications, onPress: () => go("/notifications") },
-    { icon: "settings-outline", label: t.settingsTitle, onPress: () => go("/settings") },
+    { icon: "person-outline", label: t.profile, onPress: () => go("/profile"), match: "/profile" },
+    { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
+    { icon: "notifications-outline", label: t.notifications, onPress: () => go("/notifications"), match: "/notifications" },
+    { icon: "settings-outline", label: t.settingsTitle, onPress: () => go("/settings"), match: "/settings" },
     { icon: "share-social-outline", label: t.shareApp, onPress: onShare },
   ];
 
   return (
     <View style={st.overlay} pointerEvents="box-none">
       {/* Backdrop */}
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]} pointerEvents={open ? "auto" : "none"}>
+      <Animated.View
+        style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}
+        pointerEvents={open ? "auto" : "none"}
+      >
         <Pressable style={st.backdrop} onPress={closeSidebar} />
       </Animated.View>
 
-      {/* Panel (slides from the right — RTL natural) */}
+      {/* Panel (slides in from the right / reading edge) */}
       <Animated.View
-        style={[st.panel, { width: PANEL_W, paddingTop: insets.top + 10, transform: [{ translateX }] }]}
+        style={[st.panel, { width: PANEL_W, paddingTop: insets.top + 16, transform: [{ translateX }] }]}
       >
-        {/* Decorative top glow */}
+        {/* Layered ambient glow pinned to the top of the panel */}
+        <View style={st.glow} pointerEvents="none">
+          <LinearGradient
+            colors={[C.violetSoft, "transparent"]}
+            start={{ x: 0.05, y: 0 }}
+            end={{ x: 0.7, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <LinearGradient
+            colors={[C.meshPink, "transparent"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0.2, y: 0.85 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <LinearGradient
+            colors={[C.meshCyan, "transparent"]}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+        {/* Accent hairline on the panel's leading edge */}
         <LinearGradient
-          colors={[C.violetSoft, "transparent"]}
-          start={{ x: 1, y: 0 }}
-          end={{ x: 0.1, y: 0.5 }}
-          style={st.mesh}
+          colors={[C.accent, C.violet, "transparent"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={st.edgeLine}
           pointerEvents="none"
         />
 
-        {/* Header: title (right) + close (left) */}
-        <View style={st.header}>
-          <Pressable onPress={closeSidebar} hitSlop={8} style={st.closeBtn}>
-            <Ionicons name="close" size={20} color={C.text} />
-          </Pressable>
-          <Text style={st.headerTitle}>{t.menu}</Text>
-        </View>
-
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
-          {/* Profile card */}
-          <Pressable style={({ pressed }) => [st.profileCard, pressed && st.pressed]} onPress={() => go("/profile")}>
-            {avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={st.avatar} contentFit="cover" transition={150} />
-            ) : (
-              <LinearGradient colors={[C.accent, C.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={st.avatar}>
-                <Text style={st.avatarInitial}>{initial}</Text>
-              </LinearGradient>
-            )}
-            <View style={st.profileText}>
-              <Text style={st.name} numberOfLines={1}>{displayName}</Text>
-              <Text style={st.email} numberOfLines={1}>{user?.email || t.guest}</Text>
-            </View>
-            <Ionicons name="chevron-back" size={18} color={C.textMuted} />
-          </Pressable>
-
-          {/* Quick stats */}
-          <View style={st.statsRow}>
-            <View style={st.statCard}>
-              <Text style={st.statNum}>{stats.episodesWatched}</Text>
-              <Text style={st.statLabel}>{t.statsEpisodesWatched}</Text>
-            </View>
-            <View style={st.statCard}>
-              <Text style={st.statNum}>{stats.animeCount}</Text>
-              <Text style={st.statLabel}>{t.statsAnimeInList}</Text>
+        <Animated.View style={{ flex: 1, opacity: contentOpacity, transform: [{ translateX: contentDrift }] }}>
+          {/* Brand lockup + close */}
+          <View style={st.header}>
+            <Pressable onPress={closeSidebar} hitSlop={8} style={({ pressed }) => [st.closeBtn, pressed && st.closeBtnPressed]}>
+              <Ionicons name="close" size={20} color={C.text} />
+            </Pressable>
+            <View style={st.brandLockup}>
+              <View style={st.brandTextWrap}>
+                <Text style={st.brandName}>{t.settingsAppName}</Text>
+                <Text style={st.brandTag}>{t.settingsTagline}</Text>
+              </View>
+              <View style={st.logoWrap}>
+                <LinearGradient
+                  colors={[C.accent, C.violet]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={st.logoMark}
+                >
+                  <Text style={st.logoGlyph}>P</Text>
+                </LinearGradient>
+              </View>
             </View>
           </View>
 
-          {/* Nav items */}
-          <View style={st.navList}>
-            {NAV.map((item) => (
-              <Pressable
-                key={item.label}
-                onPress={item.onPress}
-                style={({ pressed }) => [st.navItem, pressed && st.pressed]}
-              >
-                <View style={st.navIcon}>
-                  <Ionicons name={item.icon} size={19} color={C.text} />
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
+          >
+            {/* Hero profile card */}
+            <Pressable
+              style={({ pressed }) => [st.hero, pressed && st.heroPressed]}
+              onPress={() => go("/profile")}
+            >
+              <LinearGradient
+                colors={[C.violetSoft, "transparent"]}
+                start={{ x: 1, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+              <View style={st.heroRow}>
+                <View style={st.heroChevron}>
+                  <Ionicons name={CHEVRON} size={18} color={C.textMuted} />
                 </View>
-                <Text style={st.navLabel}>{item.label}</Text>
-                <Ionicons name="chevron-back" size={16} color={C.textMuted} />
-              </Pressable>
-            ))}
-          </View>
-
-          {/* Sign out */}
-          {isConfigured && user ? (
-            <>
-              <View style={st.divider} />
-              <Pressable
-                onPress={() => { closeSidebar(); setTimeout(() => signOut(), 80); }}
-                style={({ pressed }) => [st.navItem, pressed && st.pressed]}
-              >
-                <View style={[st.navIcon, { backgroundColor: C.accentSoft }]}>
-                  <Ionicons name="log-out-outline" size={19} color={C.accent} />
+                <View style={st.heroText}>
+                  <Text style={st.name} numberOfLines={1}>{displayName}</Text>
+                  <Text style={st.email} numberOfLines={1}>{user?.email || t.guest}</Text>
+                  <View style={st.heroBadge}>
+                    <Text style={st.heroBadgeText}>{t.profileTitle}</Text>
+                  </View>
                 </View>
-                <Text style={[st.navLabel, { color: C.accent }]}>{t.signOut}</Text>
-              </Pressable>
-            </>
-          ) : null}
+                <View style={st.avatarOuter}>
+                  <LinearGradient colors={[C.accent, C.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={st.avatarRing}>
+                    <View style={st.avatarInner}>
+                      {avatarUrl ? (
+                        <Image source={{ uri: avatarUrl }} style={st.avatar} contentFit="cover" transition={150} />
+                      ) : (
+                        <View style={[st.avatar, st.avatarFallback]}>
+                          <Text style={st.avatarInitial}>{initial}</Text>
+                        </View>
+                      )}
+                    </View>
+                  </LinearGradient>
+                </View>
+              </View>
+            </Pressable>
 
-          <Text style={st.brand}>{t.settingsAppName} · {t.settingsTagline}</Text>
-        </ScrollView>
+            {/* Quick stats */}
+            <View style={st.statsRow}>
+              <StatTile icon="albums-outline" value={stats.animeCount} label={t.statsAnimeInList} tint={C.violet} />
+              <View style={st.statGap} />
+              <StatTile icon="play-circle-outline" value={stats.episodesWatched} label={t.statsEpisodesWatched} tint={C.accent} />
+            </View>
+
+            {/* Nav */}
+            <View style={st.navList}>
+              {NAV.map((item) => {
+                const active = !!item.match && pathname?.startsWith(item.match);
+                return (
+                  <Pressable
+                    key={item.label}
+                    onPress={item.onPress}
+                    style={({ pressed }) => [st.navItem, active && st.navItemActive, pressed && st.navItemPressed]}
+                  >
+                    {active ? <View style={st.activeBar} /> : null}
+                    <Ionicons name={CHEVRON} size={15} color={active ? C.accent : C.textMuted} />
+                    <Text style={[st.navLabel, active && st.navLabelActive]} numberOfLines={1}>{item.label}</Text>
+                    <View style={[st.navIcon, active && st.navIconActive]}>
+                      <Ionicons name={item.icon} size={19} color={active ? C.accent : C.textSecondary} />
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Sign out */}
+            {isConfigured && user ? (
+              <>
+                <View style={st.divider} />
+                <Pressable
+                  onPress={() => { closeSidebar(); setTimeout(() => signOut(), 80); }}
+                  style={({ pressed }) => [st.navItem, st.signOutItem, pressed && st.navItemPressed]}
+                >
+                  <View style={{ width: 15 }} />
+                  <Text style={[st.navLabel, st.signOutLabel]}>{t.signOut}</Text>
+                  <View style={[st.navIcon, st.navIconDanger]}>
+                    <Ionicons name="log-out-outline" size={19} color={C.accent} />
+                  </View>
+                </Pressable>
+              </>
+            ) : null}
+
+            <View style={st.footer}>
+              <Text style={st.footerName}>{t.settingsAppName}</Text>
+              <Text style={st.footerVersion}>v{appVersion.version}</Text>
+            </View>
+          </ScrollView>
+        </Animated.View>
       </Animated.View>
     </View>
   );
 }
 
-/* Rows are laid out right-to-left (icon on the right, label flowing right,
- * chevron on the far left) to match the app's Arabic reading direction. */
+/* ── Stat tile ───────────────────────────────── */
+
+function StatTile({
+  icon, value, label, tint,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  value: number;
+  label: string;
+  tint: string;
+}) {
+  return (
+    <View style={[st.statCard, { borderColor: tint + "33" }]}>
+      <LinearGradient
+        colors={[tint + "22", "transparent"]}
+        start={{ x: 1, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={st.statHead}>
+        <Text style={[st.statNum, { color: tint }]}>{value}</Text>
+        <View style={[st.statIcon, { backgroundColor: tint + "22" }]}>
+          <Ionicons name={icon} size={15} color={tint} />
+        </View>
+      </View>
+      <Text style={st.statLabel} numberOfLines={1}>{label}</Text>
+    </View>
+  );
+}
+
+/* Every row keeps a single visual order (chevron → label → icon, reading L→R)
+ * so the right-aligned Arabic labels stay anchored to the icon rail. */
 const st = StyleSheet.create({
   overlay: { ...StyleSheet.absoluteFillObject, zIndex: 1000 },
-  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)" },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.66)" },
 
   panel: {
     position: "absolute", top: 0, bottom: 0, right: 0,
     backgroundColor: C.bgDeep,
-    borderTopLeftRadius: 24, borderBottomLeftRadius: 24,
+    borderTopLeftRadius: 34, borderBottomLeftRadius: 34,
     borderLeftWidth: 1, borderColor: C.glassBorder,
     paddingHorizontal: 16,
     overflow: "hidden",
     ...ELEVATION_CARD,
-    shadowOffset: { width: -8, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 24,
+    shadowOffset: { width: -12, height: 0 },
+    shadowOpacity: 0.6,
+    shadowRadius: 32,
   },
-  mesh: { position: "absolute", top: 0, right: 0, left: 0, height: 200 },
+  glow: { position: "absolute", top: 0, left: 0, right: 0, height: 280 },
+  edgeLine: { position: "absolute", top: 36, bottom: 36, left: 0, width: 2.5, borderRadius: 2 },
 
   header: {
-    flexDirection: ROW_DIR, alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 4, paddingBottom: 12,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    marginBottom: 20,
   },
-  headerTitle: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  brandLockup: { flexDirection: "row", alignItems: "center" },
+  brandTextWrap: { alignItems: "flex-end", marginRight: 11 },
+  brandName: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  brandTag: { color: C.textMuted, fontSize: 10.5, marginTop: 1, fontFamily: "DMSans_500Medium" },
+  logoWrap: {
+    borderRadius: 15, padding: 2,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+  },
+  logoMark: {
+    width: 44, height: 44, borderRadius: 13,
+    alignItems: "center", justifyContent: "center",
+  },
+  logoGlyph: { color: "#fff", fontSize: 23, fontWeight: "900", fontFamily: "Outfit_900Black" },
   closeBtn: {
-    width: 34, height: 34, borderRadius: R.circle,
+    width: 40, height: 40, borderRadius: R.circle,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
+  closeBtnPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.94 }] },
 
-  profileCard: {
-    flexDirection: ROW_DIR, alignItems: "center",
-    padding: 12, borderRadius: R.lg,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    marginBottom: 14,
+  // Hero profile card
+  hero: {
+    borderRadius: R.xxl, padding: 16,
+    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.borderViolet,
+    marginBottom: 16, overflow: "hidden",
+    ...ELEVATION_CARD,
   },
-  avatar: {
-    width: 50, height: 50, borderRadius: R.circle,
-    alignItems: "center", justifyContent: "center",
+  heroPressed: { transform: [{ scale: 0.99 }], borderColor: C.borderAccent },
+  heroRow: { flexDirection: "row", alignItems: "center" },
+  heroChevron: { alignSelf: "center" },
+  heroText: { flex: 1, marginHorizontal: 12, alignItems: "flex-end" },
+  avatarOuter: {
+    borderRadius: R.circle, padding: 2,
+    backgroundColor: C.bgDeep,
+    ...ELEVATION_GLOW_VIOLET,
   },
-  avatarInitial: { color: "#fff", fontSize: 21, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  profileText: { flex: 1, marginHorizontal: 12 },
-  name: { color: C.text, fontSize: 15, fontWeight: "700", fontFamily: "Outfit_700Bold", textAlign: "right" },
-  email: { color: C.textMuted, fontSize: 12, marginTop: 3, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  avatarRing: {
+    width: 62, height: 62, borderRadius: R.circle,
+    alignItems: "center", justifyContent: "center", padding: 2.5,
+  },
+  avatarInner: {
+    width: "100%", height: "100%", borderRadius: R.circle,
+    backgroundColor: C.bgDeep, padding: 2,
+  },
+  avatar: { width: "100%", height: "100%", borderRadius: R.circle },
+  avatarFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
+  avatarInitial: { color: C.text, fontSize: 24, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  name: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Outfit_700Bold", textAlign: "right" },
+  email: { color: C.textSecondary, fontSize: 12, marginTop: 3, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  heroBadge: {
+    marginTop: 9, paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
+    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+  },
+  heroBadgeText: { color: C.accent, fontSize: 10.5, fontWeight: "700", fontFamily: "DMSans_700Bold" },
 
-  statsRow: { flexDirection: ROW_DIR, marginBottom: 18 },
+  statsRow: { flexDirection: "row", marginBottom: 22 },
+  statGap: { width: 12 },
   statCard: {
-    flex: 1, marginHorizontal: 5, borderRadius: R.lg, paddingVertical: 14, alignItems: "center",
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    flex: 1, borderRadius: R.xl, padding: 14, overflow: "hidden",
+    backgroundColor: C.glass, borderWidth: 1,
   },
-  statNum: { color: C.accent, fontSize: 22, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  statLabel: { color: C.textSecondary, fontSize: 10, marginTop: 4, fontFamily: "DMSans_500Medium" },
+  statHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  statIcon: { width: 30, height: 30, borderRadius: R.circle, alignItems: "center", justifyContent: "center" },
+  statNum: { fontSize: 28, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  statLabel: { color: C.textSecondary, fontSize: 11, marginTop: 8, fontFamily: "DMSans_500Medium", textAlign: "right" },
 
-  navList: {},
+  navList: { gap: 4 },
   navItem: {
-    flexDirection: ROW_DIR, alignItems: "center",
-    marginVertical: 1, paddingVertical: 11, paddingHorizontal: 8, borderRadius: R.lg,
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 11, paddingHorizontal: 12, borderRadius: R.lg,
+    borderWidth: 1, borderColor: "transparent",
   },
-  pressed: { backgroundColor: C.glass },
+  navItemActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
+  navItemPressed: { backgroundColor: C.glass },
+  // Accent bar pinned to the right edge of the active row (Arabic reading side).
+  activeBar: { position: "absolute", right: 0, top: 10, bottom: 10, width: 3, borderRadius: 2, backgroundColor: C.accent },
   navIcon: {
-    width: 38, height: 38, borderRadius: R.md,
-    backgroundColor: C.surfaceLight, alignItems: "center", justifyContent: "center",
+    width: 42, height: 42, borderRadius: R.md, marginLeft: 12,
+    backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.border,
+    alignItems: "center", justifyContent: "center",
   },
-  navLabel: { flex: 1, marginHorizontal: 13, color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
+  navIconActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
+  navIconDanger: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
+  navLabel: { flex: 1, color: C.text, fontSize: 14.5, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
+  navLabelActive: { color: C.accent, fontFamily: "DMSans_700Bold" },
 
-  divider: { height: 1, backgroundColor: C.border, marginVertical: 12, marginHorizontal: 4 },
-  brand: {
-    color: C.textMuted, fontSize: 11, textAlign: "center", marginTop: 24,
-    fontFamily: "DMSans_500Medium",
-  },
+  divider: { height: 1, backgroundColor: C.border, marginVertical: 14, marginHorizontal: 12 },
+  signOutItem: {},
+  signOutLabel: { color: C.accent },
+
+  footer: { alignItems: "center", marginTop: 28 },
+  footerName: { color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  footerVersion: { color: C.textMuted, fontSize: 11, marginTop: 3, fontFamily: "DMSans_500Medium" },
 });

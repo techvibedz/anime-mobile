@@ -12,6 +12,7 @@
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { getNotificationsEnabled } from "./settings";
+import { supabase, isSupabaseConfigured } from "./supabase";
 
 let Notifications: typeof import("expo-notifications") | null = null;
 try {
@@ -118,6 +119,59 @@ export async function presentNewEpisodeNotification(params: {
       trigger: null, // deliver immediately
     });
   } catch {}
+}
+
+/**
+ * Register this device's Expo push token against the signed-in user so the
+ * server (episode-notifier Edge Function) can push new-episode alerts even when
+ * the app is fully closed. No-op when the native module is missing (older
+ * build), Supabase isn't configured, or permission is denied.
+ *
+ * Requires FCM credentials configured for the Expo project (Android) — see the
+ * 1.4.0 setup notes. Until then `getExpoPushTokenAsync` will throw on Android
+ * and this degrades to a no-op.
+ */
+export async function registerPushTokenAsync(userId: string): Promise<void> {
+  if (!Notifications || !isSupabaseConfigured || !userId) return;
+  try {
+    let granted = await hasNotificationPermission();
+    if (!granted) granted = await requestNotificationPermission();
+    if (!granted) return;
+    await setupNotifications();
+
+    const projectId =
+      (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId;
+    const resp = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+    const token = resp?.data;
+    if (!token) return;
+
+    await supabase.from("push_tokens").upsert(
+      {
+        user_id: userId,
+        token,
+        platform: Platform.OS,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,token" },
+    );
+  } catch {
+    // Missing FCM creds / no network / permission revoked → silent no-op.
+  }
+}
+
+/** Remove this device's push token (call on sign-out). */
+export async function unregisterPushTokenAsync(userId: string): Promise<void> {
+  if (!Notifications || !isSupabaseConfigured || !userId) return;
+  try {
+    const projectId =
+      (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId;
+    const resp = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+    const token = resp?.data;
+    if (!token) return;
+    await supabase.from("push_tokens").delete().eq("user_id", userId).eq("token", token);
+  } catch {
+    // ignore
+  }
 }
 
 /** Subscribe to notification taps → returns the tapped notification's data payload. */

@@ -38,3 +38,6 @@ graphify-out/cache/
 
 # macOS
 .DS_Store
+
+# Firebase (push) — never commit
+google-services.json

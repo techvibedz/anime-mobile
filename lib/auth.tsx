@@ -4,6 +4,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 import { supabase, isSupabaseConfigured } from "./supabase";
+import { registerPushTokenAsync, unregisterPushTokenAsync } from "./push";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -75,6 +76,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Register this device's Expo push token whenever a user is signed in, so the
+  // server can deliver new-episode push even when the app is closed.
+  useEffect(() => {
+    if (user?.id) void registerPushTokenAsync(user.id);
+  }, [user?.id]);
+
   const signInWithEmail = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     return { error: error?.message };
@@ -111,8 +118,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    if (user?.id) await unregisterPushTokenAsync(user.id);
     await supabase.auth.signOut();
-  }, []);
+  }, [user?.id]);
 
   const sendPasswordReset = useCallback(async (email: string) => {
     const redirectTo = Linking.createURL("/auth-callback");

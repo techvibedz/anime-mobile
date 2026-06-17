@@ -1,6 +1,6 @@
 {
     "force_update": false,
-    "version": "1.3.2",
-    "release_notes": "إصلاح محاذاة الأيقونات في صفحة الإعدادات والقائمة الجانبية بحيث تظهر بشكل صحيح في الوضع العربي، مع تحسينات على التباعد والترتيب.",
-    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.3.2/pantoufa-1.3.2.apk"
+    "version": "1.4.0",
+    "release_notes": "إشعارات الحلقات الجديدة تصلك الآن حتى والتطبيق مغلق، مع عرض صورة الأنمي داخل الإشعار. كما أصلحنا محاذاة الأيقونات في صفحة الإعدادات والقائمة الجانبية.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.4.0/pantoufa-1.4.0.apk"
 }

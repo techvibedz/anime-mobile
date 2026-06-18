@@ -23,7 +23,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchRecent } from "./api";
 import { getFavorites, toAnimeUrl, type FavoriteAnime } from "./favorites";
 import { getNotificationScope, type NotificationScope } from "./settings";
-import { supabase, isSupabaseConfigured, SUPABASE_FUNCTIONS_URL } from "./supabase";
+import { supabase, isSupabaseConfigured } from "./supabase";
 
 const LIST_KEY = "@notifications_v1";
 const SEEN_KEYS_KEY = "@notif_seen_keys_v2"; // { scope, keys: string[] } — dedup of notified episodes
@@ -361,20 +361,30 @@ export async function reportRecentEpisodes(): Promise<number> {
     if (candidates.size === 0) return 0;
 
     const seen = await readQueueSeen();
+    const firstRun = seen.size === 0;
 
-    // First run → seed silently (never announce the existing backlog).
-    if (seen.size === 0) {
-      for (const k of candidates.keys()) seen.add(k);
-      await writeQueueSeen(seen);
-      return 0;
-    }
-
+    // Collect genuinely-new episodes (not yet seen on THIS device). On the very
+    // first run we still record the whole backlog into `seen` so we never flood
+    // — but, unlike before, we no longer bail out early: the newest episode is
+    // always uploaded below so the shared queue actually gets populated.
     const fresh: QueueRow[] = [];
     for (const [key, row] of candidates) {
       if (seen.has(key)) continue;
       seen.add(key);
-      fresh.push(row);
+      if (!firstRun) fresh.push(row);
     }
+
+    // Eager population: always include the single newest episode, even on a
+    // freshly-seeded device or when it's already been seen here. The queue PK
+    // (episode_key) and the server's per-user `notified_episodes` table BOTH
+    // dedup, so this is idempotent and never double-notifies — it just keeps the
+    // shared feed warm so closed-app push can actually fire. (`candidates` is
+    // built newest-first, so the first entry is the latest episode.)
+    const newest = candidates.values().next().value as QueueRow | undefined;
+    if (newest && !fresh.some((r) => r.episode_key === newest.episode_key)) {
+      fresh.unshift(newest);
+    }
+
     if (fresh.length === 0) return 0;
 
     // Idempotent upload (ON CONFLICT DO NOTHING keeps the first-seen row/time).
@@ -387,14 +397,12 @@ export async function reportRecentEpisodes(): Promise<number> {
     await writeQueueSeen(seen);
 
     // Nudge the notifier for near-instant delivery (the cron is the backstop).
-    if (SUPABASE_FUNCTIONS_URL) {
-      try {
-        await fetch(`${SUPABASE_FUNCTIONS_URL}/episode-notifier`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch {}
-    }
+    // Must go through supabase.functions.invoke — a bare fetch omits the `apikey`
+    // header the Supabase gateway requires, so it 401s and the push only fires on
+    // the next cron tick (delayed). invoke attaches the anon key + session JWT.
+    try {
+      await supabase.functions.invoke("episode-notifier", { body: {} });
+    } catch {}
     return fresh.length;
   } catch {
     return 0;

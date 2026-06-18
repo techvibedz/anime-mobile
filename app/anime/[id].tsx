@@ -9,23 +9,25 @@ import {
   Modal,
   I18nManager,
   ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes } from "../../lib/api";
-import type { AnimeDetail, RelatedAnime, Episode } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, searchAnime } from "../../lib/api";
+import type { AnimeDetail, Episode, SearchResult } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
-import { getWatchedHrefsForAnime, toggleWatched } from "../../lib/history";
-import { fetchAnimeInfo, fetchAnimeMal } from "../../lib/animeInfo";
-import type { AnimeInfoField } from "../../lib/animeInfo";
+import { getCompletedEpisodeHrefs, isEpisodeCompleted, normHref, toggleWatched } from "../../lib/history";
+import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations } from "../../lib/animeInfo";
+import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
+import { normLatin, seasonNum, formatCat } from "../../lib/relations";
 import { MalBadge, MalCardBadge } from "../../components/MalRating";
 import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
+import { GlassFill } from "../../components/GlassFill";
 import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -54,9 +56,16 @@ export default function AnimeDetailScreen() {
   const [bookmarkList, setBookmarkList] = useState<FavoriteList | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("episodes");
-  const [watchedHrefs, setWatchedHrefs] = useState<Set<string>>(new Set());
+  // Normalized hrefs of every completed episode (across all anime). Each grid
+  // card matches its own source hrefs against this, so the "watched" badge is
+  // independent of which source URL was played or which animeHref was stored.
+  const [completedHrefs, setCompletedHrefs] = useState<Set<string>>(new Set());
   const [malScore, setMalScore] = useState<number | null>(null);
+  // Related anime (sequels, prequels, side stories, spin-offs) from AniList —
+  // the source sites carry no related section, so these are resolved by title.
+  const [relations, setRelations] = useState<RelatedAnimeEntry[]>([]);
   const [titleCopied, setTitleCopied] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const bookmarked = bookmarkList !== null;
   const animeHref = id ? decodeURIComponent(id) : "";
 
@@ -105,6 +114,16 @@ export default function AnimeDetailScreen() {
     return () => { cancelled = true; };
   }, [data?.title]);
 
+  // Resolve related anime (other seasons, side stories, spin-offs) once the
+  // title is known. Runs after the UI is showing, so it never blocks render;
+  // the Related tab appears the moment AniList answers.
+  useEffect(() => {
+    if (!data?.title) return;
+    let cancelled = false;
+    fetchAnimeRelations(data.title, animeHref).then((r) => { if (!cancelled) setRelations(r); });
+    return () => { cancelled = true; };
+  }, [data?.title, animeHref]);
+
   // Background: pull anime3rb's full episode list (a third source for the
   // cross-source union). witanime is often a week behind and anime4up paginates,
   // so anime3rb frequently carries the newest episode the others are missing.
@@ -122,21 +141,25 @@ export default function AnimeDetailScreen() {
 
   // Refresh watched flags when the screen regains focus (e.g. after watching).
   useFocusEffect(useCallback(() => {
-    if (!animeHref) return;
-    getWatchedHrefsForAnime(animeHref).then(setWatchedHrefs);
-  }, [animeHref]));
+    getCompletedEpisodeHrefs().then(setCompletedHrefs);
+  }, []));
 
-  const handleToggleWatched = useCallback(async (ep: Episode) => {
-    if (!data || !ep.href) return;
-    const next = await toggleWatched(ep.href, {
+  const handleToggleWatched = useCallback(async (ep: GridEpisode) => {
+    // Use whichever source href exists so source-only episodes (no witanime
+    // href) can still be toggled — and store under that same href so the
+    // marker matches on the next render.
+    const primary = ep.href || ep.href4up || ep.href3rb;
+    if (!data || !primary) return;
+    const next = await toggleWatched(primary, {
       episodeTitle: ep.title || `${t.episode} ${ep.number}`,
       animeTitle: data.title,
       animeHref,
       image: data.poster,
     });
-    setWatchedHrefs((prev) => {
+    setCompletedHrefs((prev) => {
       const copy = new Set(prev);
-      if (next) copy.add(ep.href!); else copy.delete(ep.href!);
+      const key = normHref(primary);
+      if (next) copy.add(key); else copy.delete(key);
       return copy;
     });
   }, [data, animeHref]);
@@ -170,6 +193,30 @@ export default function AnimeDetailScreen() {
     setTimeout(() => setTitleCopied(false), 1500);
   }, [data?.title]);
 
+  // Pull-to-refresh: re-scrape the page, its anime4up enrichment, and retry the
+  // MAL rating (handy when a transient Jikan/CF blip left it without a score).
+  const reload = useCallback(async () => {
+    if (!animeHref) return;
+    setRefreshing(true);
+    try {
+      const res = await fetchEpisodes(animeHref);
+      if (res.success) {
+        setData(res.data);
+        setEpisodes4up(res.data.episodes4up || []);
+        setMerged(res.data.merged || null);
+        setError(null);
+        fetchAnimeMal(res.data.title).then((m) => setMalScore(m.score)).catch(() => {});
+      }
+      try {
+        const enrich = await fetchEpisodesUp4(animeHref, null);
+        if (enrich.merged) setMerged(enrich.merged);
+        if (enrich.episodes4up.length > 0) setEpisodes4up(enrich.episodes4up);
+      } catch {}
+    } catch {} finally {
+      setRefreshing(false);
+    }
+  }, [animeHref]);
+
   if (loading) return <DetailSkeleton />;
 
   if (error || !data) {
@@ -189,13 +236,24 @@ export default function AnimeDetailScreen() {
   const firstPlayable = data.episodes.find((e) => e.href);
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "episodes", label: t.tabEpisodes, count: data.totalEpisodes },
-    ...(data.relatedAnime.length > 0 ? [{ key: "related" as TabKey, label: t.tabRelated }] : []),
+    ...(relations.length > 0 ? [{ key: "related" as TabKey, label: t.tabRelated, count: relations.length }] : []),
     { key: "info", label: t.tabInfo },
   ];
 
   return (
     <View style={ss.root}>
-      <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={reload}
+            tintColor={C.accent}
+            colors={[C.accent]}
+            progressBackgroundColor={C.surface}
+          />
+        }
+      >
         {/* ── Banner with mesh gradient ──────── */}
         <View style={ss.banner}>
           <View style={ss.meshBg}>
@@ -327,13 +385,13 @@ export default function AnimeDetailScreen() {
               episodes3rb={episodes3rb}
               merged={merged}
               poster={data.poster}
-              watchedHrefs={watchedHrefs}
+              completedHrefs={completedHrefs}
               onToggleWatched={handleToggleWatched}
               animeHref={animeHref}
               animeTitle={data.title}
             />
           )}
-          {activeTab === "related" && <RelatedTab items={data.relatedAnime} />}
+          {activeTab === "related" && <RelatedTab items={relations} />}
           {activeTab === "info" && <InfoTab data={data} />}
         </View>
       </ScrollView>
@@ -394,9 +452,7 @@ function GlassCircleBtn({ icon, color = C.text, onPress }: { icon: string; color
   return (
     <Pressable onPress={onPress}>
       <View style={ss.glassCircle}>
-        <BlurView intensity={16} tint="dark" style={StyleSheet.absoluteFill}>
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surfaceGlass }]} />
-        </BlurView>
+        <GlassFill intensity={16} />
         <Ionicons name={icon as any} size={20} color={color} />
       </View>
     </Pressable>
@@ -411,7 +467,7 @@ function EpisodesTab({
   episodes3rb,
   merged,
   poster,
-  watchedHrefs,
+  completedHrefs,
   onToggleWatched,
   animeHref,
   animeTitle,
@@ -421,8 +477,8 @@ function EpisodesTab({
   episodes3rb: Episode[];
   merged: { anime4up: string } | null;
   poster: string;
-  watchedHrefs: Set<string>;
-  onToggleWatched: (ep: Episode) => void;
+  completedHrefs: Set<string>;
+  onToggleWatched: (ep: GridEpisode) => void;
   animeHref: string;
   animeTitle: string;
 }) {
@@ -544,7 +600,7 @@ function EpisodesTab({
           <EpisodeGridCard
             key={`${ep.number}-${i}`}
             ep={ep}
-            watched={ep.href ? watchedHrefs.has(ep.href) : false}
+            watched={isEpisodeCompleted(completedHrefs, [ep.href, ep.href4up, ep.href3rb])}
             poster={poster}
             animeHref={animeHref}
             animeTitle={animeTitle}
@@ -598,7 +654,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
   animeHref: string;
   animeTitle: string;
   byNum: GridEpisode[];
-  onToggleWatched: (ep: Episode) => void;
+  onToggleWatched: (ep: GridEpisode) => void;
 }) {
   return (
     <Pressable
@@ -632,7 +688,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
           },
         });
       }}
-      onLongPress={() => onToggleWatched(ep as Episode)}
+      onLongPress={() => onToggleWatched(ep)}
       delayLongPress={300}
       style={({ pressed }) => [ss.epCard, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
     >
@@ -674,7 +730,117 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
 
 /* ── Tab: Related ───────────────────────────── */
 
-function RelatedTab({ items }: { items: RelatedAnime[] }) {
+// Score how well a search result's title matches the wanted related title.
+// Latin-folded equality/containment first, then token overlap, with a
+// season match bonus / mismatch penalty so "Season 2" doesn't latch onto
+// Season 1. Mirrors the scorer in lib/relations but for plain result titles.
+//
+// The season penalty is HARSHER here than in lib/relations: resolving a card to
+// a source page is the step that opens the actual wrong anime, so a "Season N"
+// card must not settle for the base series when the site simply doesn't carry
+// that season — better to report "not found" than open Season 1.
+function scoreRelatedMatch(want: string, got: string): number {
+  const w = normLatin(want);
+  const g = normLatin(got);
+  if (!w || !g) return 0;
+  let s: number;
+  if (g === w) s = 100;
+  else if (g.startsWith(w) || w.startsWith(g)) s = 82;
+  else if (g.includes(w) || w.includes(g)) s = 70;
+  else {
+    const wt = w.split(" ").filter((x) => x.length > 1);
+    const gt = new Set(g.split(" ").filter((x) => x.length > 1));
+    let shared = 0;
+    for (const x of wt) if (gt.has(x)) shared++;
+    s = wt.length ? Math.round((shared / wt.length) * 64) : 0;
+  }
+  const ws = seasonNum(want);
+  const gs = seasonNum(got);
+  if (ws > 0 && gs > 0) s += ws === gs ? 10 : -25;
+  else if (ws > 0 && gs === 0) s -= 14;
+  return s;
+}
+
+// Best title-match score for a result against EVERY name the related entry is
+// known by (AniList romaji + English). The source sites index an anime under
+// only one language, so a romaji-only score misses results listed in English.
+function bestRelatedMatch(entry: RelatedAnimeEntry, gotTitle: string): number {
+  let s = scoreRelatedMatch(entry.title, gotTitle);
+  if (entry.titleEnglish) s = Math.max(s, scoreRelatedMatch(entry.titleEnglish, gotTitle));
+  return s;
+}
+
+// Minimum title-match confidence before a tapped related card is allowed to
+// open a source page. Below this we report "not found" rather than risk opening
+// a different anime. 60 clears strong containment / near-full token overlap but
+// rejects a single-word coincidence and a season-mismatched base series.
+const MIN_RELATED_TITLE_SCORE = 60;
+
+function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
+  // AniList knows the related anime by name only — the source sites don't link
+  // them — so tapping a card resolves the title to a playable source URL via
+  // the same cross-source search the search screen uses, then opens its detail
+  // page. A per-card spinner shows while that lookup runs.
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [notFoundId, setNotFoundId] = useState<number | null>(null);
+
+  const openRelated = useCallback(async (entry: RelatedAnimeEntry) => {
+    if (resolvingId != null) return;
+    setResolvingId(entry.anilistId);
+    setNotFoundId(null);
+    try {
+      // Search the source sites by BOTH names AniList knows (romaji + English):
+      // a site may index an anime under only one language, so a single-query
+      // search returned no good candidate and we'd settle for a wrong one. Pool
+      // and de-dupe (by href) the results of every query.
+      const queries = [entry.title, entry.titleEnglish]
+        .filter((q): q is string => !!q && q.trim().length > 0)
+        .filter((q, i, a) => a.findIndex((x) => x.toLowerCase() === q.toLowerCase()) === i);
+      const seen = new Set<string>();
+      const pooled: SearchResult[] = [];
+      for (const q of queries) {
+        const res = await searchAnime(q);
+        for (const r of res.data.results) {
+          if (r?.href && !seen.has(r.href)) { seen.add(r.href); pooled.push(r); }
+        }
+      }
+      // Pick the BEST match, not just the first result. The source sites' search
+      // is fuzzy, so results[0] for a query was sometimes a different anime
+      // entirely — opening the "wrong" page. Score each result against the
+      // related title (season-aware, either language) AND its format: an OVA /
+      // movie / special shares the base title with the main TV series, so without
+      // a format check a 1-episode OVA card would resolve to the 12-episode
+      // series. We bias hard toward the result whose format matches the card's.
+      // A result must clear MIN_RELATED_TITLE_SCORE on TITLE alone to be eligible
+      // — otherwise we'd rather report "not found" than open a different anime.
+      const wantFmt = formatCat(entry.format);
+      let hit: SearchResult | undefined;
+      let best = -Infinity;
+      for (const r of pooled) {
+        const titleScore = bestRelatedMatch(entry, r.title);
+        if (titleScore < MIN_RELATED_TITLE_SCORE) continue; // too weak — skip
+        let sc = titleScore;
+        if (wantFmt) {
+          const gotFmt = formatCat(r.type) || formatCat(r.title);
+          if (gotFmt) sc += gotFmt === wantFmt ? 45 : -45;
+          else if (wantFmt !== "tv") sc -= 15; // unmarked result is usually the series
+        }
+        if (sc > best) { best = sc; hit = r; }
+      }
+      if (hit?.href) {
+        router.push(`/anime/${encodeURIComponent(hit.href)}`);
+      } else {
+        setNotFoundId(entry.anilistId);
+        setTimeout(() => setNotFoundId((id) => (id === entry.anilistId ? null : id)), 2500);
+      }
+    } catch {
+      setNotFoundId(entry.anilistId);
+      setTimeout(() => setNotFoundId((id) => (id === entry.anilistId ? null : id)), 2500);
+    } finally {
+      setResolvingId(null);
+    }
+  }, [resolvingId]);
+
   if (items.length === 0) {
     return (
       <View style={ss.emptyTab}>
@@ -685,24 +851,46 @@ function RelatedTab({ items }: { items: RelatedAnime[] }) {
   }
   return (
     <View style={ss.relatedGrid}>
-      {items.map((item, i) => (
-        <Pressable
-          key={i}
-          onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-          style={({ pressed }) => [ss.relatedCard, { opacity: pressed ? 0.85 : 1 }]}
-        >
-          {item.image ? (
-            <Image source={{ uri: item.image }} style={ss.relatedImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
-          ) : (
-            <View style={[ss.relatedImage, { alignItems: "center", justifyContent: "center" }]}>
-              <Ionicons name="image-outline" size={24} color={C.textMuted} />
+      {items.map((item) => {
+        const resolving = resolvingId === item.anilistId;
+        const notFound = notFoundId === item.anilistId;
+        return (
+          <Pressable
+            key={item.anilistId}
+            onPress={() => openRelated(item)}
+            style={({ pressed }) => [ss.relatedCard, { opacity: pressed ? 0.85 : 1 }]}
+          >
+            <View style={ss.relatedImageWrap}>
+              {item.image ? (
+                <Image source={{ uri: item.image }} style={ss.relatedImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={String(item.anilistId)} transition={200} />
+              ) : (
+                <View style={[ss.relatedImage, { alignItems: "center", justifyContent: "center" }]}>
+                  <Ionicons name="image-outline" size={24} color={C.textMuted} />
+                </View>
+              )}
+              <MalCardBadge title={item.title} />
+              {/* Relation type ribbon — "تكملة" (sequel), "قصة جانبية" (side story), … */}
+              <View style={ss.relationBadge}>
+                <Text style={ss.relationBadgeText} numberOfLines={1}>{item.relation}</Text>
+              </View>
+              {(resolving || notFound) && (
+                <View style={ss.relatedOverlay}>
+                  {resolving ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="search-outline" size={18} color="#fff" />
+                      <Text style={ss.relatedOverlayText}>{t.notFound}</Text>
+                    </>
+                  )}
+                </View>
+              )}
             </View>
-          )}
-          <MalCardBadge title={item.title} />
-          <Text style={ss.relatedTitle} numberOfLines={2}>{item.title}</Text>
-          {item.type && <Text style={ss.relatedType}>{item.type}</Text>}
-        </Pressable>
-      ))}
+            <Text style={ss.relatedTitle} numberOfLines={2}>{item.title}</Text>
+            {item.format && <Text style={ss.relatedType}>{item.format}</Text>}
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -943,10 +1131,27 @@ const ss = StyleSheet.create({
   // Related
   relatedGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   relatedCard: { width: (SW - PAD * 2 - 24) / 3 },
-  relatedImage: {
+  relatedImageWrap: {
     width: "100%", aspectRatio: 2 / 3, borderRadius: R.lg, overflow: "hidden",
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    position: "relative",
   },
+  relatedImage: { width: "100%", height: "100%" },
+  relationBadge: {
+    position: "absolute", bottom: 6, left: 6, right: 6,
+    paddingHorizontal: 6, paddingVertical: 3, borderRadius: R.sm,
+    backgroundColor: C.accent, alignItems: "center",
+  },
+  relationBadgeText: {
+    color: C.textOnAccent, fontSize: 9, fontWeight: "800",
+    fontFamily: "Outfit_700Bold", writingDirection: "rtl",
+  },
+  relatedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(6,7,26,0.72)",
+    alignItems: "center", justifyContent: "center", gap: 6,
+  },
+  relatedOverlayText: { color: "#fff", fontSize: 10, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
   relatedTitle: { color: C.text, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "DMSans_600SemiBold" },
   relatedType: { color: C.textMuted, fontSize: 10, marginTop: 2, fontFamily: "DMSans_500Medium" },
 

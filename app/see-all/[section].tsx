@@ -5,6 +5,7 @@ import {
   Pressable,
   FlatList,
   ActivityIndicator,
+  RefreshControl,
   StyleSheet,
   Dimensions,
   Modal,
@@ -113,29 +114,35 @@ export default function SeeAllScreen() {
   const [items, setItems] = useState<(AnimeItem | EpisodeItem)[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasNext, setHasNext] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [episodePopup, setEpisodePopup] = useState<EpisodeItem | null>(null);
   const pageRef = useRef(1);
   const isPaginated = sectionId === "recently_updated";
   const isEpisodeType = type === "episode";
 
-  useEffect(() => {
+  const loadFirst = useCallback(async () => {
     if (isPaginated) {
-      fetchRecent(1).then((res) => {
-        if (res.success) {
-          setItems(res.data.episodes);
-          setHasNext(res.data.hasNext);
-          pageRef.current = 1;
-        }
-      });
+      const res = await fetchRecent(1);
+      if (res.success) {
+        setItems(res.data.episodes);
+        setHasNext(res.data.hasNext);
+        pageRef.current = 1;
+      }
     } else {
-      fetchHome().then((res) => {
-        if (res.success) {
-          const sec = res.data.sections.find((s: HomeSection) => s.id === sectionId);
-          if (sec) setItems(sec.items);
-        }
-      });
+      const res = await fetchHome();
+      if (res.success) {
+        const sec = res.data.sections.find((s: HomeSection) => s.id === sectionId);
+        if (sec) setItems(sec.items);
+      }
     }
   }, [sectionId, isPaginated]);
+
+  useEffect(() => { loadFirst(); }, [loadFirst]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await loadFirst(); } finally { setRefreshing(false); }
+  }, [loadFirst]);
 
   const loadMore = useCallback(async () => {
     if (!isPaginated || loadingMore || !hasNext) return;
@@ -180,6 +187,15 @@ export default function SeeAllScreen() {
         columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={C.accent}
+            colors={[C.accent]}
+            progressBackgroundColor={C.surface}
+          />
+        }
         ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
         renderItem={({ item }) => (
           <GridCard item={item} isEpisodeType={isEpisodeType} onPressEpisode={setEpisodePopup} />

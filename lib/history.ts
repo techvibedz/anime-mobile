@@ -15,11 +15,17 @@ export interface WatchEntry {
   updatedAt: number;
   url4up?: string;
   completed?: boolean;
+  /** Hidden from the "Continue Watching" row but progress is preserved. */
+  dismissed?: boolean;
 }
 
-/** Treat playback as "watched" once past 85% of duration. */
+/**
+ * Treat playback as "watched" once past 80% of duration. Anime outros/endings
+ * routinely run the last ~10-15%, and most viewers stop there — so 80% is the
+ * point at which an episode is effectively finished.
+ */
 function autoCompleted(e: WatchEntry): boolean {
-  return e.durationMs > 0 && e.positionMs / e.durationMs >= 0.85;
+  return e.durationMs > 0 && e.positionMs / e.durationMs >= 0.8;
 }
 
 /** Push a single history entry to Supabase (fire-and-forget; logs on failure). */
@@ -39,6 +45,7 @@ async function pushToCloud(entry: WatchEntry) {
     updated_at: new Date(entry.updatedAt).toISOString(),
     url4up: entry.url4up ?? null,
     completed: entry.completed ?? autoCompleted(entry),
+    dismissed: entry.dismissed ?? false,
   }, { onConflict: "user_id,episode_href" });
   if (error) console.warn("[history] cloud sync failed:", error.message);
 }
@@ -75,6 +82,7 @@ export async function pullHistoryFromCloud() {
     updatedAt: new Date(row.updated_at).getTime(),
     url4up: row.url4up || undefined,
     completed: !!row.completed,
+    dismissed: !!row.dismissed,
   }));
   await AsyncStorage.setItem(KEY, JSON.stringify(local));
 }
@@ -90,8 +98,10 @@ export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
   const merged: WatchEntry = {
     ...entry,
     updatedAt: Date.now(),
-    // Auto-mark completed when crossing 85% — preserve a manual unmark.
+    // Auto-mark completed when crossing 80% — preserve a manual unmark.
     completed: entry.completed ?? (idx >= 0 ? list[idx].completed : false),
+    // Actively watching again — bring it back into Continue Watching.
+    dismissed: false,
   };
   if (merged.completed !== true && autoCompleted(merged)) merged.completed = true;
   if (idx >= 0) {
@@ -119,6 +129,9 @@ export async function getContinueWatching(): Promise<WatchEntry[]> {
     const key = e.animeHref || e.animeTitle;
     if (seen.has(key)) continue;
     seen.add(key);
+    // The most-recent episode of this anime was dismissed from the row — hide
+    // the whole series, but keep its progress (it stays in history).
+    if (e.dismissed) continue;
     out.push(e);
   }
   return out;
@@ -133,6 +146,22 @@ export async function removeFromHistory(episodeHref: string) {
   const list = await getHistory();
   await AsyncStorage.setItem(KEY, JSON.stringify(list.filter((e) => e.episodeHref !== episodeHref)));
   deleteFromCloud(episodeHref).catch(() => {});
+}
+
+/**
+ * Hide an episode from the "Continue Watching" row WITHOUT discarding its
+ * progress. The entry stays in history (and in the cloud), so reopening the
+ * episode later still resumes exactly where the user stopped — the saved
+ * position lives on with the account, forever, until they watch past it.
+ */
+export async function dismissFromContinue(episodeHref: string) {
+  const list = await getHistory();
+  const idx = list.findIndex((e) => e.episodeHref === episodeHref);
+  if (idx < 0) return;
+  const next: WatchEntry = { ...list[idx], dismissed: true };
+  list[idx] = next;
+  await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  pushToCloud(next).catch(() => {});
 }
 
 export function formatProgress(entry: WatchEntry): string {
@@ -152,17 +181,35 @@ export function isCompleted(entry: WatchEntry | null | undefined): boolean {
   return autoCompleted(entry);
 }
 
+/** Normalize an episode URL so encoding / trailing-slash / case differences
+ *  between sources don't defeat equality checks. */
+export function normHref(u: string | null | undefined): string {
+  if (!u) return "";
+  try { return decodeURIComponent(u).replace(/\/+$/, "").toLowerCase(); }
+  catch { return u.replace(/\/+$/, "").toLowerCase(); }
+}
+
 /**
- * Returns a Set of episode hrefs the user has watched within the given anime.
- * Used by the episode grid on the anime detail page to render "seen" badges.
+ * Set of normalized hrefs for EVERY episode the user has completed (across all
+ * anime). The anime detail page matches each episode's source hrefs (witanime /
+ * anime4up / anime3rb) against this set, so an episode counts as watched no
+ * matter which source URL was actually played — and without depending on the
+ * stored animeHref matching the page's animeHref (it frequently doesn't, since
+ * the player records a scraped href while the page uses the navigation id).
  */
-export async function getWatchedHrefsForAnime(animeHref: string): Promise<Set<string>> {
+export async function getCompletedEpisodeHrefs(): Promise<Set<string>> {
   const list = await getHistory();
   const set = new Set<string>();
-  for (const e of list) {
-    if (e.animeHref === animeHref && isCompleted(e)) set.add(e.episodeHref);
-  }
+  for (const e of list) if (isCompleted(e)) set.add(normHref(e.episodeHref));
   return set;
+}
+
+/** True if any of the given source hrefs has been completed. */
+export function isEpisodeCompleted(
+  completed: Set<string>,
+  hrefs: (string | null | undefined)[],
+): boolean {
+  return hrefs.some((h) => h && completed.has(normHref(h)));
 }
 
 /**

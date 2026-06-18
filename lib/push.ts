@@ -200,6 +200,31 @@ export async function updateNotificationsEnabledRemote(enabled: boolean): Promis
   }
 }
 
+/**
+ * Fire a real closed-app push notification (with image) to THIS user's own
+ * device(s), via the episode-notifier Edge Function's test path. Lets the user
+ * verify on demand that background notifications + images work, without waiting
+ * for a real episode to flow through the shared queue. Ensures a token is
+ * registered first. Returns ok=false with a reason on any failure.
+ */
+export async function sendTestNotificationAsync(
+  userId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (!isSupabaseConfigured || !userId) return { ok: false, reason: "unconfigured" };
+  try {
+    // Make sure this device has a fresh token registered before we test.
+    await registerPushTokenAsync(userId);
+    const { data, error } = await supabase.functions.invoke("episode-notifier", {
+      body: { test: true },
+    });
+    if (error) return { ok: false, reason: "invoke" };
+    const res = (data ?? {}) as { ok?: boolean; error?: string };
+    return res.ok ? { ok: true } : { ok: false, reason: res.error ?? "unknown" };
+  } catch {
+    return { ok: false, reason: "error" };
+  }
+}
+
 /** Remove this device's push token (call on sign-out). */
 export async function unregisterPushTokenAsync(userId: string): Promise<void> {
   if (!Notifications || !isSupabaseConfigured || !userId) return;

@@ -27,6 +27,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const CHANNEL_ID = "new-episodes";
 
+// Sample cover used by the in-app "send test notification" button so the user
+// can verify closed-app + image delivery on demand (AniList CDN is stable).
+const TEST_IMAGE =
+  "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx21-tXMN3Y20PIL9.jpg";
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
 // Only consider recently-reported episodes, and prune anything older than this.
 const QUEUE_TTL_HOURS = 72;
 
@@ -116,11 +123,61 @@ async function sendExpoPush(messages: PushMessage[]) {
 
 /* ── Main ──────────────────────────────────────────────────────── */
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
+
+  // The cron invokes us with an empty body; the app nudges us with {} too. Only
+  // the in-app "send test" button passes { test: true } (with the caller's JWT).
+  let body: { test?: boolean } = {};
+  try { body = await req.json(); } catch { /* no/empty body → normal run */ }
+
+  // ── Test path: deliver ONE sample notification (with image) to just the
+  // caller's own device(s). Bypasses the queue + dedup so it can be re-run any
+  // time to confirm closed-app push works. Scoped to the authenticated user so
+  // it can't be used to spam others.
+  if (body?.test === true) {
+    const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+    let userId: string | null = null;
+    if (jwt) {
+      const { data } = await supabase.auth.getUser(jwt);
+      userId = data?.user?.id ?? null;
+    }
+    if (!userId) {
+      return new Response(JSON.stringify({ ok: false, error: "unauthenticated" }), {
+        status: 401,
+        headers: JSON_HEADERS,
+      });
+    }
+    const { data: rows } = await supabase
+      .from("push_tokens")
+      .select("token, enabled")
+      .eq("user_id", userId);
+    const tokens = ((rows ?? []) as { token: string; enabled: boolean | null }[])
+      .filter((r) => r.enabled !== false)
+      .map((r) => r.token);
+    if (tokens.length === 0) {
+      return new Response(JSON.stringify({ ok: false, error: "no_tokens" }), {
+        headers: JSON_HEADERS,
+      });
+    }
+    const testMessages: PushMessage[] = tokens.map((to) => ({
+      to,
+      title: "إشعار تجريبي 🎬",
+      body: "هذا إشعار تجريبي — الإشعارات تعمل بشكل صحيح ✅",
+      sound: "default",
+      channelId: CHANNEL_ID,
+      priority: "high",
+      data: { test: true },
+      richContent: { image: TEST_IMAGE },
+    }));
+    await sendExpoPush(testMessages);
+    return new Response(JSON.stringify({ ok: true, test: true, sent: tokens.length }), {
+      headers: JSON_HEADERS,
+    });
+  }
 
   // 1. Tokens, split by scope (default "all" matches the app default).
   const { data: tokenRows } = await supabase

@@ -4,6 +4,7 @@ import {
   Text,
   Pressable,
   FlatList,
+  RefreshControl,
   StyleSheet,
 } from "react-native";
 import { Image } from "expo-image";
@@ -36,9 +37,19 @@ function timeAgo(ts: number): string {
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const [items, setItems] = useState<AppNotification[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(() => {
     getNotifications().then(setItems);
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      setItems(await getNotifications());
+    } finally {
+      setRefreshing(false);
+    }
   }, []);
 
   // Load on focus, then mark everything read once the user has seen the list.
@@ -94,6 +105,15 @@ export default function NotificationsScreen() {
           data={items}
           keyExtractor={(n) => n.id}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={C.accent}
+              colors={[C.accent]}
+              progressBackgroundColor={C.surface}
+            />
+          }
           contentContainerStyle={{ padding: S.paddingContent, paddingBottom: insets.bottom + 30, gap: 10 }}
           renderItem={({ item }) => (
             <Pressable

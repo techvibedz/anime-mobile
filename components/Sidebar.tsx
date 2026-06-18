@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../lib/auth";
+import { isAdmin } from "../lib/presence";
 import { getHistory, isCompleted } from "../lib/history";
 import { getFavorites } from "../lib/favorites";
 import { C, R, ELEVATION_CARD, ELEVATION_GLOW_VIOLET } from "../lib/theme";
@@ -161,6 +162,18 @@ function Sidebar() {
     { icon: "bug-outline", label: t.reportIssue, onPress: () => go("/report"), match: "/report" },
     { icon: "share-social-outline", label: t.shareApp, onPress: onShare },
   ];
+
+  // Admin-only: live view of who's using the app right now. Visible only to the
+  // owner account (see ADMIN_EMAILS in lib/presence.ts).
+  if (isAdmin(user?.email)) {
+    NAV.splice(NAV.length - 1, 0, {
+      icon: "pulse-outline",
+      label: t.liveUsersTitle,
+      onPress: () => go("/live"),
+      match: "/live",
+      accent: C.success,
+    });
+  }
 
   return (
     <View style={st.overlay} pointerEvents="box-none">

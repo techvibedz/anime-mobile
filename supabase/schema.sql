@@ -37,6 +37,8 @@ create table if not exists public.watch_history (
   position_ms    bigint not null default 0,
   duration_ms    bigint not null default 0,
   url4up         text,
+  completed      boolean not null default false,
+  dismissed      boolean not null default false,
   updated_at     timestamptz not null default now(),
   primary key (user_id, episode_href)
 );

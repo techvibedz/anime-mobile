@@ -229,6 +229,25 @@ export const ar = {
   confirmClearHistory: "هل تريد حذف كل سجلّ المشاهدة؟ لا يمكن التراجع.",
   confirm: "تأكيد",
   enableNotifsPrompt: "فعّل الإشعارات من إعدادات الهاتف لتلقّي تنبيهات الحلقات.",
+  settingsTestNotif: "إرسال إشعار تجريبي",
+  settingsTestNotifDesc: "أرسل إشعارًا تجريبيًا إلى هذا الجهاز للتأكد من عمل الإشعارات",
+  testNotifSending: "جارٍ الإرسال…",
+  testNotifSent: "تم إرسال الإشعار التجريبي ✅ تحقّق من إشعارات هاتفك خلال لحظات.",
+  testNotifFailed: "تعذّر إرسال الإشعار التجريبي. تأكّد من تفعيل الإشعارات وتسجيل الدخول.",
+  testNotifSignedOut: "سجّل الدخول أولًا لإرسال إشعار تجريبي.",
+
+  // Live users (admin only)
+  liveUsersTitle: "المتصلون الآن",
+  liveUsersSub: "المستخدمون الذين يستعملون التطبيق مباشرةً في هذه اللحظة.",
+  liveUsersNow: (n: number) => `${n} ${n === 1 ? "متصل" : "متصلون"} الآن`,
+  liveUsersEmpty: "لا أحد متصل الآن",
+  liveUsersEmptySub: "سيظهر المستخدمون هنا فور فتحهم للتطبيق.",
+  liveUsersYou: "أنت",
+  liveUsersDevices: (n: number) => `${n} ${n === 1 ? "جهاز" : "أجهزة"}`,
+  liveSince: (s: string) => `منذ ${s}`,
+  liveJustNow: "الآن",
+  liveMinutes: (n: number) => `${n} د`,
+  liveHours: (n: number) => `${n} س`,
 };
 
 export const t = ar;

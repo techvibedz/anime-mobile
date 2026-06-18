@@ -32,9 +32,13 @@ import {
 } from "./scraper/direct";
 import { getAltTitles } from "./animeInfo";
 
-const HOME_CACHE_KEY = "@home_cache_v1";
+// v2 cache keys: bumped to discard payloads written by the earlier build that
+// merged anime3rb into the "new episodes" rail and could cache an anime3rb
+// detail page with a boilerplate/seasons-grid synopsis. Old cached entries
+// are simply ignored, forcing a fresh scrape with the current parsers.
+const HOME_CACHE_KEY = "@home_cache_v2";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const DETAIL_CACHE_PREFIX = "@detail_v1:";
+const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const UP4_CACHE_PREFIX = "@up4_eps_v2:";
 const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
@@ -42,7 +46,7 @@ const SEARCH_CACHE_PREFIX = "@search_v1:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v1:";
+const RECENT_CACHE_PREFIX = "@recent_v2:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
 const SERVERS_CACHE_PREFIX = "@servers_v2:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
@@ -850,101 +854,127 @@ function toSearchResult(it: { title: string; href: string; image: string | null;
   };
 }
 
-export async function searchAnime(query: string): Promise<{
+type SearchPayload = {
   success: boolean;
   data: { query: string; totalResults: number; results: SearchResult[] };
-}> {
-  return swr(
-    SEARCH_CACHE_PREFIX + query.toLowerCase().trim(),
-    SEARCH_CACHE_TTL,
-    async () => {
-      // Primary: witanime's static-HTML search via a plain GET — near-instant,
-      // no WebView render. Fall back to the WebView scrape only if the direct
-      // fetch fails (network / CF hiccup).
-      let wit = await searchWitanimeDirectList(query).catch(() => null);
-      if (!wit) wit = await scrapeSearch(query).catch(() => null);
+};
 
-      // Secondary: anime4up runs on the WebView (its static HTML is blocked to
-      // plain fetches). Since the primary now lands instantly, give the
-      // secondary only a short grace window and merge whatever arrived — its
-      // extra titles still fill in on the next (cache-served) search.
-      const up4P = scrapeSearchUp4(query).catch(() => null);
-      const up4 = await Promise.race([
-        up4P,
-        new Promise<null>((r) => setTimeout(() => r(null), wit?.results.length ? 2500 : 15000)),
-      ]);
+// Cold-path search. witanime (a plain-GET, near-instant) is emitted FIRST via
+// `onPartial` so the grid paints in well under a second; anime4up (WebView) and
+// anime3rb then enrich the SAME list CONCURRENTLY in the background, each
+// emitting as it lands. Previously these ran sequentially AFTER a 2.5s race, so
+// the user waited 4–6s for a list whose first (and best) rows were ready almost
+// immediately.
+async function searchAnimeFresh(
+  query: string,
+  onPartial?: (results: SearchResult[]) => void,
+): Promise<SearchPayload> {
+  const results: SearchResult[] = [];
+  const seen = new Set<string>();
+  const emit = () => { onPartial?.(results.slice()); };
+  const mergeIn = (arr: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis?: string | null }[]) => {
+    let added = false;
+    for (const it of arr) {
+      const k = norm(it.title);
+      if (k && seen.has(k)) continue;
+      if (k) seen.add(k);
+      results.push(toSearchResult(it));
+      added = true;
+    }
+    return added;
+  };
 
-      const results: SearchResult[] = (wit?.results ?? []).map(toSearchResult);
-      const seen = new Set(results.map((r) => norm(r.title)));
-      const mergeIn = (arr: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis?: string | null }[]) => {
-        for (const it of arr) {
-          const k = norm(it.title);
-          if (k && seen.has(k)) continue;
-          if (k) seen.add(k);
-          results.push(toSearchResult(it));
-        }
-      };
-      if (up4?.results?.length) {
-        // Dedupe across sources by normalised title so the same show
-        // doesn't appear twice; anime4up-only titles get appended.
-        mergeIn(up4.results);
-      }
+  // Primary: witanime's static-HTML search via a plain GET — near-instant, no
+  // WebView render. Fall back to the WebView scrape only if the direct fetch
+  // fails (network / CF hiccup). Emit as soon as it lands.
+  let wit = await searchWitanimeDirectList(query).catch(() => null);
+  if (!wit) wit = await scrapeSearch(query).catch(() => null);
+  if (wit?.results?.length && mergeIn(wit.results)) emit();
 
-      // anime3rb (third source): surface anime that live ONLY on anime3rb —
-      // its catalog matcher is conservative (near-total token coverage + exact
-      // season), so a confident match is fetched for its poster/title and
-      // appended if it isn't already in the list. Opening it routes through the
-      // anime3rb detail branch above. Cheap (catalog is cached; one page GET)
-      // and the whole search is SWR-cached, so it only runs on a cold query.
-      try {
-        const a3rbUrl =
-          (await searchAnime3rbCatalog(query).catch(() => null)) ||
-          (await searchAnime3rbDirect(query).catch(() => null));
-        if (a3rbUrl) {
-          const detail = await scrapeAnime3rbTitlePage(a3rbUrl).catch(() => null);
-          if (detail?.title) {
-            const k = norm(detail.title);
-            if (!k || !seen.has(k)) {
-              if (k) seen.add(k);
-              results.push(toSearchResult({
-                title: detail.title, href: a3rbUrl, image: detail.poster || null,
-                type: null, status: null, synopsis: detail.synopsis || null,
-              }));
-            }
-          }
-        }
-      } catch {}
+  // Secondary: anime4up (WebView; its static HTML is blocked to plain fetches)
+  // and anime3rb (third source) run in parallel and append to the visible list.
+  const up4P = scrapeSearchUp4(query)
+    .then((up4) => { if (up4?.results?.length && mergeIn(up4.results)) emit(); })
+    .catch(() => {});
 
-      // Cross-language bridge: the source sites index each anime under a SINGLE
-      // language, so an English query never finds a romaji-only title (and a
-      // Japanese query never finds an English-only one). When the direct search
-      // comes up empty, ask Jikan for the title's other names and re-search the
-      // sites with the Latin-script ones (the sites don't index kanji).
-      if (results.length === 0) {
-        const alts = await getAltTitles(query).catch(() => []);
-        const tried = new Set<string>([norm(query)]);
-        const candidates = alts
-          .filter((a) => /[a-z]/i.test(a)) // sites index romaji/English, not kanji
-          .filter((a) => {
-            const n = norm(a);
-            if (!n || tried.has(n)) return false;
-            tried.add(n);
-            return true;
-          })
-          .slice(0, 2);
-        for (const alt of candidates) {
-          let wAlt = await searchWitanimeDirectList(alt).catch(() => null);
-          if (!wAlt) wAlt = await scrapeSearch(alt).catch(() => null);
-          if (wAlt?.results?.length) mergeIn(wAlt.results);
-          const upAlt = await scrapeSearchUp4(alt).catch(() => null);
-          if (upAlt?.results?.length) mergeIn(upAlt.results);
-          if (results.length) break;
-        }
-      }
-      return { success: true, data: { query, totalResults: results.length, results } };
-    },
-    (d) => d.data.results.length > 0,
-  );
+  // anime3rb: surface anime that live ONLY on anime3rb — its catalog matcher is
+  // conservative (near-total token coverage + exact season), so a confident
+  // match is fetched for its poster/title and appended if not already present.
+  const a3rbP = (async () => {
+    try {
+      const a3rbUrl =
+        (await searchAnime3rbCatalog(query).catch(() => null)) ||
+        (await searchAnime3rbDirect(query).catch(() => null));
+      if (!a3rbUrl) return;
+      const detail = await scrapeAnime3rbTitlePage(a3rbUrl).catch(() => null);
+      if (detail?.title && mergeIn([{
+        title: detail.title, href: a3rbUrl, image: detail.poster || null,
+        type: null, status: null, synopsis: detail.synopsis || null,
+      }])) emit();
+    } catch {}
+  })();
+
+  // Wait for the secondaries — but cap the wait so the spinner clears promptly
+  // even if anime4up's WebView is slow behind a cold queue. Late arrivals still
+  // emit via onPartial (the screen's seq guard keeps stale ones out); they just
+  // won't be in the cached payload, which the next search refreshes anyway.
+  await Promise.race([
+    Promise.all([up4P, a3rbP]),
+    new Promise<void>((r) => setTimeout(r, results.length ? 6000 : 15000)),
+  ]);
+
+  // Cross-language bridge: the source sites index each anime under a SINGLE
+  // language, so an English query never finds a romaji-only title (and vice
+  // versa). When everything above came up empty, ask Jikan for the title's
+  // other names and re-search with the Latin-script ones (sites don't index
+  // kanji).
+  if (results.length === 0) {
+    const alts = await getAltTitles(query).catch(() => []);
+    const tried = new Set<string>([norm(query)]);
+    const candidates = alts
+      .filter((a) => /[a-z]/i.test(a))
+      .filter((a) => {
+        const n = norm(a);
+        if (!n || tried.has(n)) return false;
+        tried.add(n);
+        return true;
+      })
+      .slice(0, 2);
+    for (const alt of candidates) {
+      let wAlt = await searchWitanimeDirectList(alt).catch(() => null);
+      if (!wAlt) wAlt = await scrapeSearch(alt).catch(() => null);
+      if (wAlt?.results?.length && mergeIn(wAlt.results)) emit();
+      const upAlt = await scrapeSearchUp4(alt).catch(() => null);
+      if (upAlt?.results?.length && mergeIn(upAlt.results)) emit();
+      if (results.length) break;
+    }
+  }
+
+  return { success: true, data: { query, totalResults: results.length, results } };
+}
+
+export async function searchAnime(
+  query: string,
+  onPartial?: (results: SearchResult[]) => void,
+): Promise<SearchPayload> {
+  // Stale-while-revalidate by hand (so the cold path can stream partials).
+  // A cached hit returns instantly and revalidates in the background; a cold
+  // query streams witanime → anime4up → anime3rb into `onPartial`.
+  const key = SEARCH_CACHE_PREFIX + query.toLowerCase().trim();
+  const cached = await readCache<SearchPayload>(key, SEARCH_CACHE_TTL);
+  if (cached && cached.data.results.length > 0) {
+    if (!_swrInFlight.has(key)) {
+      _swrInFlight.add(key);
+      void searchAnimeFresh(query)
+        .then((d) => { if (d.data.results.length > 0) return writeCache(key, d); })
+        .catch(() => {})
+        .finally(() => _swrInFlight.delete(key));
+    }
+    return cached;
+  }
+  const data = await searchAnimeFresh(query, onPartial);
+  if (data.data.results.length > 0) void writeCache(key, data);
+  return data;
 }
 
 /* ── /genre ─────────────────────────────────── */

@@ -12,6 +12,19 @@
 // and every result is cached in AsyncStorage for a week.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  RELATIONS_PAGE_QUERY,
+  RELATIONS_BY_ID_QUERY,
+  RELATIONS_BY_MAL_QUERY,
+  buildSearchQueries,
+  slugToTitle,
+  pickBestMedia,
+  collectFranchise,
+  type AniListMedia,
+  type RelatedAnimeEntry,
+} from "./relations";
+
+export type { RelatedAnimeEntry } from "./relations";
 
 export interface AnimeInfoField {
   label: string;
@@ -184,19 +197,61 @@ function schedule<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
-async function doFetch(title: string): Promise<MalData> {
-  const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(title.trim())}&limit=8&sfw`;
-  let res = await fetch(url);
-  // Single polite retry on a rate-limit hit — the queue usually prevents this.
-  if (res.status === 429) {
-    await new Promise((r) => setTimeout(r, 1500));
-    res = await fetch(url);
+// Jikan/MyAnimeList is flaky and the source sites are messy, which is why some
+// titles (e.g. "Tomodachi Game") came back with no rating/info:
+//   1. MAL routinely answers 502/503/504 when busy — the old code only retried
+//      on 429, so a transient upstream blip left the title permanently blank.
+//   2. witanime/anime4up titles are peppered with Arabic season labels and
+//      parentheticals ("Tomodachi Game الموسم الأول", "Anime (TV) (2022)") that
+//      Jikan's title search can't resolve, returning zero candidates.
+// We clean the query and retry transient failures so ratings/info show up.
+const ARABIC_RE = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]+/g;
+
+function cleanQuery(title: string): string {
+  return (title || "")
+    .replace(ARABIC_RE, " ")             // Arabic season labels / dub markers
+    .replace(/\([^)]*\)/g, " ")           // (TV), (2022), (Dub)
+    .replace(/\b(19|20)\d{2}\b/g, " ")    // a bare year
+    .replace(/\b(the\s+)?(final\s+)?season\s*\d*\b/gi, " ")
+    .replace(/\bpart\s*\d+\b/gi, " ")
+    .replace(/[_–—-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// GET a Jikan endpoint, retrying the failures that actually happen in the wild:
+// 429 (rate limit) and 5xx (MAL transiently down). Returns parsed JSON or null.
+async function jikanGet(url: string): Promise<any | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (res.status === 429 || res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        continue;
+      }
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    }
   }
-  if (!res.ok) return EMPTY;
-  const json = await res.json();
-  const best = pickBest(json?.data || [], title);
-  if (!best) return EMPTY;
-  return { score: typeof best.score === "number" ? best.score : null, fields: buildFields(best) };
+  return null;
+}
+
+async function doFetch(title: string): Promise<MalData> {
+  // Try the cleaned query first ("Tomodachi Game الموسم الأول" → "Tomodachi
+  // Game"); fall back to the raw title for the rare case cleaning empties out.
+  const cleaned = cleanQuery(title);
+  const attempts = [cleaned, title.trim()].filter((q, i, a) => q && a.indexOf(q) === i);
+  for (const q of attempts) {
+    const json = await jikanGet(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(q)}&limit=8&sfw`);
+    if (!json) continue; // transient failure exhausted its retries — try next query
+    const best = pickBest(json?.data || [], cleaned || title);
+    if (best) {
+      return { score: typeof best.score === "number" ? best.score : null, fields: buildFields(best) };
+    }
+  }
+  return EMPTY;
 }
 
 /* ── Public API ─────────────────────────────────── */
@@ -264,15 +319,13 @@ export async function getMalRating(title: string): Promise<number | null> {
  * the sites with so "King's Game" finds "Ousama Game" and 王様ゲーム finds it too. */
 
 async function doFetchCandidates(title: string): Promise<any[]> {
-  const url = `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(title.trim())}&limit=8&sfw`;
-  let res = await fetch(url);
-  if (res.status === 429) {
-    await new Promise((r) => setTimeout(r, 1500));
-    res = await fetch(url);
+  const cleaned = cleanQuery(title);
+  const attempts = [cleaned, title.trim()].filter((q, i, a) => q && a.indexOf(q) === i);
+  for (const q of attempts) {
+    const json = await jikanGet(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(q)}&limit=8&sfw`);
+    if (json?.data?.length) return json.data;
   }
-  if (!res.ok) return [];
-  const json = await res.json();
-  return json?.data || [];
+  return [];
 }
 
 const altTitlesCache = new Map<string, string[]>();
@@ -313,6 +366,160 @@ export async function getAltTitles(query: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/* ── Related anime (AniList relations) ──────────────
+ * witanime/anime4up/anime3rb detail pages carry NO related-anime section, so
+ * "other seasons / side stories / spin-offs" can't be scraped. AniList's
+ * GraphQL API returns an anime's full relation graph — relation type, title,
+ * cover image and format — in a SINGLE keyless request (Jikan's relations
+ * endpoint omits images and would need one extra fetch per entry).
+ *
+ * The pure selection/shaping logic (variant generation, candidate scoring,
+ * de-dupe, self-exclusion) lives in ./relations so it's unit-testable without
+ * the RN runtime. This file only does the network call + caching. */
+
+const REL_CACHE_PREFIX = "@anime_relations_v4:";
+
+// POST a GraphQL query to AniList, retrying the transient failures that occur
+// in the wild (429 rate-limit, 5xx). Returns parsed JSON or null.
+async function anilistPost(query: string, variables: Record<string, unknown>): Promise<any | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch("https://graphql.anilist.co", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ query, variables }),
+      });
+      if (res.status === 429 || res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        continue;
+      }
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    }
+  }
+  return null;
+}
+
+// Fetch a single AniList media (with its relations) by id — the step that lets
+// collectFranchise() walk the SEQUEL/PREQUEL chain past adjacent seasons.
+async function fetchMediaById(id: number): Promise<AniListMedia | null> {
+  const json = await anilistPost(RELATIONS_BY_ID_QUERY, { id });
+  return (json?.data?.Media as AniListMedia) || null;
+}
+
+// Resolve a title to its MyAnimeList entry via Jikan — the SAME robust search
+// the rating/info features already rely on (it cleans Arabic season labels and
+// retries transient failures). Returns the MAL id (for the exact AniList bridge)
+// plus every name MAL knows the anime by (extra romanisations for AniList's
+// title search). The MAL id is the high-value bit: it sidesteps fuzzy AniList
+// title matching entirely. The best candidate is picked against the RAW title
+// so the correct season wins.
+const malMatchCache = new Map<string, { malId: number | null; titles: string[] }>();
+async function getMalMatch(title: string): Promise<{ malId: number | null; titles: string[] }> {
+  const empty = { malId: null as number | null, titles: [] as string[] };
+  if (!title || !title.trim()) return empty;
+  const key = title.toLowerCase().trim();
+  const cached = malMatchCache.get(key);
+  if (cached) return cached;
+  try {
+    const data = await schedule(() => doFetchCandidates(title));
+    const best = pickBest(data, title);
+    if (!best) { malMatchCache.set(key, empty); return empty; }
+    const titles: string[] = [
+      best.title, best.title_english, best.title_japanese,
+      ...(Array.isArray(best.titles) ? best.titles.map((t: any) => t?.title) : []),
+      ...(Array.isArray(best.title_synonyms) ? best.title_synonyms : []),
+    ].filter(Boolean);
+    const result = { malId: typeof best.mal_id === "number" ? best.mal_id : null, titles };
+    malMatchCache.set(key, result);
+    return result;
+  } catch {
+    return empty;
+  }
+}
+
+const relMem = new Map<string, RelatedAnimeEntry[]>();
+const relInflight = new Map<string, Promise<RelatedAnimeEntry[]>>();
+
+async function doFetchRelations(title: string, href?: string | null): Promise<RelatedAnimeEntry[]> {
+  const slugTitle = slugToTitle(href);
+
+  // 1) MAL-ID bridge (most reliable). Jikan resolves the title robustly — even
+  //    Arabic ones — then AniList is looked up EXACTLY by MAL id, with no fuzzy
+  //    AniList title matching that some titles slip through. This is the main
+  //    detection improvement; it catches the anime that title search misses.
+  const mal = await getMalMatch(title).catch(() => ({ malId: null as number | null, titles: [] as string[] }));
+  if (mal.malId != null) {
+    const json = await anilistPost(RELATIONS_BY_MAL_QUERY, { idMal: mal.malId });
+    const media = json?.data?.Media as AniListMedia | undefined;
+    if (media) {
+      const out = await collectFranchise(media, title, fetchMediaById);
+      if (out.length > 0) return out;
+    }
+  }
+
+  // 2) Fallback: AniList title search, seeded by the scraped title, the source
+  //    slug AND every MAL alt-title (extra romanisations). Candidates are scored
+  //    and low-confidence matches rejected so we never show a random anime's
+  //    relations; self-exclusion keeps a Season-2 page from listing itself.
+  const variants = buildSearchQueries([title, ...mal.titles], slugTitle);
+  for (const q of variants) {
+    const json = await anilistPost(RELATIONS_PAGE_QUERY, { search: q });
+    const medias: AniListMedia[] | undefined = json?.data?.Page?.media;
+    if (!Array.isArray(medias) || medias.length === 0) continue;
+    const best = pickBestMedia(medias, q);
+    if (!best) continue;
+    // Walk the franchise chain so ALL seasons appear (AniList only links
+    // adjacent ones per node), not just the next/previous installment.
+    const out = await collectFranchise(best, title, fetchMediaById);
+    if (out.length > 0) return out;
+  }
+  return [];
+}
+
+/** Related anime (sequels, prequels, side stories, spin-offs …) for a title.
+ * `href` (the source URL) sharpens title detection via its romaji slug.
+ * Resolved via AniList and cached for a week. Empty array on any miss. */
+export async function fetchAnimeRelations(title: string, href?: string | null): Promise<RelatedAnimeEntry[]> {
+  if (!title || !title.trim()) return [];
+  const key = title.toLowerCase().trim();
+  const cached = relMem.get(key);
+  if (cached) return cached;
+  const pending = relInflight.get(key);
+  if (pending) return pending;
+
+  const p = (async (): Promise<RelatedAnimeEntry[]> => {
+    try {
+      const raw = await AsyncStorage.getItem(REL_CACHE_PREFIX + key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Date.now() - parsed.ts < CACHE_TTL) {
+          relMem.set(key, parsed.data);
+          return parsed.data as RelatedAnimeEntry[];
+        }
+      }
+    } catch {}
+    try {
+      const data = await doFetchRelations(title, href);
+      if (data.length > 0) {
+        relMem.set(key, data);
+        try {
+          await AsyncStorage.setItem(REL_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), data }));
+        } catch {}
+      }
+      return data;
+    } catch {
+      return [];
+    } finally {
+      relInflight.delete(key);
+    }
+  })();
+  relInflight.set(key, p);
+  return p;
 }
 
 /**

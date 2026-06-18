@@ -13,18 +13,18 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { BlurView } from "expo-blur";
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchHome } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
 import { addFavorite, isFavorite, toAnimeUrl } from "../../lib/favorites";
-import { getContinueWatching, progressPercent, removeFromHistory } from "../../lib/history";
+import { getContinueWatching, progressPercent, dismissFromContinue } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebar } from "../../components/Sidebar";
 import { Shimmer } from "../../components/Shimmer";
+import { GlassFill } from "../../components/GlassFill";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
@@ -203,9 +203,7 @@ export default function HomeScreen() {
             <Pressable onPress={() => router.push("/notifications")} hitSlop={8}>
               <View>
                 <View style={ss.glassBtn}>
-                  <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill}>
-                    <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surfaceGlass }]} />
-                  </BlurView>
+                  <GlassFill intensity={20} />
                   <Ionicons name={unread > 0 ? "notifications" : "notifications-outline"} size={18} color={unread > 0 ? C.accent : C.text} />
                 </View>
                 {unread > 0 && (
@@ -218,9 +216,7 @@ export default function HomeScreen() {
 
             <Pressable onPress={openSidebar} hitSlop={8}>
               <View style={ss.glassBtn}>
-                <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill}>
-                  <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surfaceGlass }]} />
-                </BlurView>
+                <GlassFill intensity={20} />
                 <Ionicons name="menu" size={20} color={C.text} />
               </View>
             </Pressable>
@@ -358,7 +354,7 @@ export default function HomeScreen() {
                   key={entry.episodeHref}
                   entry={entry}
                   onRemove={(href) => {
-                    removeFromHistory(href).then(() => getContinueWatching().then(setHistory));
+                    dismissFromContinue(href).then(() => getContinueWatching().then(setHistory));
                   }}
                 />
               ))}

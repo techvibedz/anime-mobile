@@ -4,6 +4,8 @@ import {
   Text,
   Pressable,
   FlatList,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
   Dimensions,
 } from "react-native";
@@ -32,12 +34,22 @@ export default function MyListScreen() {
   const { user, signOut, isConfigured } = useAuth();
   const [favorites, setFavorites] = useState<FavoriteAnime[]>([]);
   const [filter, setFilter] = useState<ListFilter>("all");
+  const [refreshing, setRefreshing] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       getFavorites().then(setFavorites);
     }, []),
   );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      setFavorites(await getFavorites());
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
 
   const handleRemove = useCallback(async (href: string) => {
     await removeFavorite(href);
@@ -72,12 +84,20 @@ export default function MyListScreen() {
         </View>
       </View>
 
-      {/* Filter pills */}
-      <View style={ss.filterRow}>
+      {/* Filter pills — horizontally scrollable so long labels never clip */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={ss.filterScroll}
+        contentContainerStyle={ss.filterRow}
+      >
         {filters.map((f) => (
           <Pressable key={f.key} onPress={() => setFilter(f.key)}>
             <View style={[ss.filterPill, filter === f.key && ss.filterPillActive]}>
-              <Text style={[ss.filterText, filter === f.key && ss.filterTextActive]}>{f.label}</Text>
+              {/* Label first (leading), count last (trailing). The label uses the
+                  Cairo Arabic font so its glyphs are measured correctly and stay
+                  inside the Text box — no more spill onto the count badge. */}
+              <Text numberOfLines={1} style={[ss.filterText, filter === f.key && ss.filterTextActive]}>{f.label}</Text>
               <View style={[ss.filterCount, filter === f.key && ss.filterCountActive]}>
                 <Text style={[ss.filterCountText, filter === f.key && ss.filterCountTextActive]}>
                   {f.count}
@@ -86,7 +106,7 @@ export default function MyListScreen() {
             </View>
           </Pressable>
         ))}
-      </View>
+      </ScrollView>
 
       {visible.length === 0 ? (
         <View style={ss.empty}>
@@ -109,6 +129,15 @@ export default function MyListScreen() {
           updateCellsBatchingPeriod={50}
           contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100 }}
           columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={C.accent}
+              colors={[C.accent]}
+              progressBackgroundColor={C.surface}
+            />
+          }
           renderItem={({ item }) => <MyListCard item={item} onRemove={handleRemove} />}
         />
       )}
@@ -207,22 +236,26 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
 
-  // Filters
+  // Filters — no `gap`: it breaks layout under RTL row (Yoga bug), use margins
+  filterScroll: { flexGrow: 0 },
   filterRow: {
-    flexDirection: "row", gap: 6,
+    flexDirection: "row", alignItems: "center",
     paddingHorizontal: S.paddingContent, paddingVertical: 12,
   },
   filterPill: {
-    flexDirection: "row", alignItems: "center", gap: 6,
+    flexDirection: "row", alignItems: "center", flexShrink: 0,
+    marginHorizontal: 3,
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: R.pill,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
   filterPillActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
-  filterText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  filterText: { color: C.textSecondary, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0 },
   filterTextActive: { color: C.accent },
   filterCount: {
     backgroundColor: C.glass, borderRadius: R.circle,
+    minWidth: 20, alignItems: "center",
     paddingHorizontal: 6, paddingVertical: 1,
+    marginStart: 8,
   },
   filterCountActive: { backgroundColor: "rgba(255,45,85,0.1)" },
   filterCountText: { color: C.textMuted, fontSize: 10, fontWeight: "500" },

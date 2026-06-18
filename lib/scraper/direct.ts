@@ -782,6 +782,42 @@ function parseA3rbEpisodesFromTitle(html: string, slug: string): A3rbEpisode[] {
   return out;
 }
 
+// Pull the real story from an anime3rb title page body. The synopsis is split
+// across `leading-loose text-justify` paragraphs (the page renders a collapsed
+// first-paragraph copy plus a full copy under an Alpine toggle), so collect
+// every distinct paragraph and join them. Returns "" when none are found.
+function parseA3rbSynopsis(html: string): string {
+  // CRUCIAL: scope to the story block only. anime3rb reuses the
+  // `leading-loose text-justify` paragraph class for the cards in its
+  // "related works" / seasons grid (genres + season + year + rating + episode
+  // count + a synopsis snippet each). A page-wide scan swept those in and the
+  // detail page showed a wall of per-season blocks instead of the real story.
+  // The story lives in the default-visible block `<div … x-show="! summary">`;
+  // its sibling `x-show="summary"` is the short version and the toggle button
+  // follows — slice between them so only the real summary paragraphs match.
+  const start = html.indexOf('x-show="! summary"');
+  if (start < 0) return ""; // structure changed → caller falls back to og:description
+  let end = html.indexOf('x-show="summary"', start);
+  if (end < 0) end = html.indexOf("summary = ! summary", start);
+  const scope = html.slice(start, end > start ? end : start + 8000);
+  const re = /<p[^>]*class=["'][^"']*leading-loose[^"']*text-justify[^"']*["'][^>]*>([\s\S]*?)<\/p>/gi;
+  let m: RegExpExecArray | null;
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  // Belt-and-suspenders: even within the story block, reject any paragraph that
+  // smells like a listing/card row — a rating label ("التقييم"), an episode
+  // count ("N حلقات"), or an air-season+year badge ("صيف 1998"). This guarantees
+  // a layout change can never leak the seasons/related grid into the synopsis.
+  const JUNK = /التقييم|\d+\s*حلقات|(?:صيف|شتاء|ربيع|خريف)\s*\d{4}/;
+  while ((m = re.exec(scope))) {
+    const txt = htmlDecode(m[1].replace(/<[^>]+>/g, ""));
+    if (!txt || seen.has(txt) || JUNK.test(txt)) continue;
+    seen.add(txt);
+    parts.push(txt);
+  }
+  return parts.join("\n\n");
+}
+
 // Scrape a full anime3rb anime page (detail + episodes). Returns null on a
 // fetch/parse failure so callers degrade gracefully to the other sources.
 export async function scrapeAnime3rbTitlePage(titleUrl: string): Promise<A3rbDetail | null> {
@@ -799,7 +835,12 @@ export async function scrapeAnime3rbTitlePage(titleUrl: string): Promise<A3rbDet
   title = title.replace(/\s*[|–-]\s*Anime3rb.*$/i, "").trim() || slug.replace(/-+/g, " ");
 
   const poster = a3rbMetaContent(html, "og:image") || "";
-  const synopsis = a3rbMetaContent(html, "og:description") || a3rbMetaContent(html, "description") || "";
+  // Story comes ONLY from the page-body story block (parseA3rbSynopsis). We do
+  // NOT fall back to og:description: on anime3rb it's SEO boilerplate ("مشاهدة و
+  // تحميل X - <alt names> - … Anime3rb أنمي عرب"), so falling back to it showed
+  // that junk as the "synopsis". Better to leave it empty (the detail page just
+  // hides the synopsis) than to display the boilerplate.
+  const synopsis = parseA3rbSynopsis(html);
 
   // Genres: anime3rb links them under /genres/<name> (best-effort).
   const genres: string[] = [];

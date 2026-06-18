@@ -4,9 +4,20 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit_800ExtraBold, Outfit_900Black } from "@expo-google-fonts/outfit";
 import { DMSans_400Regular, DMSans_500Medium, DMSans_600SemiBold, DMSans_700Bold } from "@expo-google-fonts/dm-sans";
-import { View, ActivityIndicator, I18nManager } from "react-native";
+// Arabic-capable font: Outfit/DMSans are Latin-only, so Arabic glyphs were being
+// measured too narrow and spilled out of their boxes (e.g. filter pills overlapping
+// their count badges). Cairo gives correct Arabic metrics.
+import { Cairo_500Medium, Cairo_600SemiBold, Cairo_700Bold } from "@expo-google-fonts/cairo";
+import { View, ActivityIndicator, I18nManager, InteractionManager } from "react-native";
 import * as Updates from "expo-updates";
+import * as SplashScreen from "expo-splash-screen";
 import { C } from "../lib/theme";
+
+// Keep the native splash screen up until our fonts are ready. Without this the
+// native splash hides the instant JS boots, flashing a bare spinner before the
+// first real frame — on low-end phones that flash can last a noticeable beat.
+// Holding the splash makes the launch feel like one continuous animation.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 // The whole UI is built LTR-base and we paint the Arabic look manually with
 // `flexDirection: "row-reverse"` and text alignment. If the phone's system
@@ -35,6 +46,7 @@ import { ScraperHost } from "../lib/scraper";
 import { initAds } from "../lib/ads";
 import { SidebarProvider } from "../components/Sidebar";
 import { setupNotifications, requestNotificationPermission, addNotificationTapListener } from "../lib/push";
+import { startPresence, stopPresence } from "../lib/presence";
 import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
 import "../global.css";
@@ -66,16 +78,30 @@ function AuthGate() {
     }
   }, [user?.id]);
 
+  // Advertise this device as "online" via Supabase Realtime presence while a
+  // user is signed in. Powers the admin-only live-users screen (app/live.tsx).
+  useEffect(() => {
+    if (user) {
+      startPresence(user).catch(() => {});
+      return () => { stopPresence().catch(() => {}); };
+    }
+  }, [user?.id]);
+
   // Notifications: configure channel + request permission once at startup
   // (only if the user hasn't disabled them), and route taps to the episode.
   useEffect(() => {
     if (!ready) return;
-    (async () => {
-      await setupNotifications();
-      if (await getNotificationsEnabled()) {
-        await requestNotificationPermission();
-      }
-    })().catch(() => {});
+    // Notification channel setup + permission prompt aren't needed for the
+    // first frame — run them after the UI has settled so they don't compete
+    // with the home screen's initial render on slower devices.
+    const task = InteractionManager.runAfterInteractions(() => {
+      (async () => {
+        await setupNotifications();
+        if (await getNotificationsEnabled()) {
+          await requestNotificationPermission();
+        }
+      })().catch(() => {});
+    });
 
     const sub = addNotificationTapListener((data) => {
       if (!data?.episodeHref) return;
@@ -87,7 +113,7 @@ function AuthGate() {
       if (animeUrl) params.anime = animeUrl;
       router.push({ pathname: `/watch/${encodeURIComponent(data.episodeHref)}`, params });
     });
-    return () => sub.remove();
+    return () => { task.cancel(); sub.remove(); };
   }, [ready]);
 
   // Update checks (APK first, then OTA)
@@ -98,17 +124,22 @@ function AuthGate() {
     if (!ready || updateChecked) return;
     setUpdateChecked(true);
 
-    (async () => {
-      const apk = await checkForApkUpdate();
-      if (apk) {
-        setUpdateInfo(apk);
-        return;
-      }
-      const ota = await checkForOtaUpdate();
-      if (ota) {
-        setUpdateInfo(ota);
-      }
-    })();
+    // The update check hits the network and pops a modal — neither is needed
+    // for the first frame, so defer it until the UI is interactive.
+    const task = InteractionManager.runAfterInteractions(() => {
+      (async () => {
+        const apk = await checkForApkUpdate();
+        if (apk) {
+          setUpdateInfo(apk);
+          return;
+        }
+        const ota = await checkForOtaUpdate();
+        if (ota) {
+          setUpdateInfo(ota);
+        }
+      })();
+    });
+    return () => task.cancel();
   }, [ready, updateChecked]);
 
   if (!ready) {
@@ -147,6 +178,7 @@ function AuthGate() {
         <Stack.Screen name="profile" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="report" />
+        <Stack.Screen name="live" />
         <Stack.Screen name="scraper-debug" />
         <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
       </Stack>
@@ -177,18 +209,27 @@ export default function RootLayout() {
     DMSans_500Medium,
     DMSans_600SemiBold,
     DMSans_700Bold,
+    Cairo_500Medium,
+    Cairo_600SemiBold,
+    Cairo_700Bold,
   });
 
-  // Kick off the ad SDK once at startup (no-op until ad IDs are configured).
-  useEffect(() => { initAds(); }, []);
+  // Kick off the ad SDK once the UI is interactive (no-op until ad IDs are
+  // configured). Deferring keeps it off the critical first-paint path.
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => { initAds(); });
+    return () => task.cancel();
+  }, []);
 
-  if (!fontsLoaded) {
-    return (
-      <View style={{ flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator size="large" color={C.accent} />
-      </View>
-    );
-  }
+  // Hand off from the native splash to the first real frame the moment fonts
+  // are ready — no spinner flash in between.
+  useEffect(() => {
+    if (fontsLoaded) SplashScreen.hideAsync().catch(() => {});
+  }, [fontsLoaded]);
+
+  // Native splash is still covering the screen here, so render nothing rather
+  // than a spinner that the user would never actually see.
+  if (!fontsLoaded) return null;
 
   return (
     <SafeAreaProvider>

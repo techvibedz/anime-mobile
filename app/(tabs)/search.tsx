@@ -7,12 +7,12 @@ import {
   FlatList,
   ScrollView,
   ActivityIndicator,
+  RefreshControl,
   StyleSheet,
   Dimensions,
   Animated,
 } from "react-native";
 import { Image } from "expo-image";
-import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { searchAnime, fetchAllAnime, fetchGenre } from "../../lib/api";
 import type { SearchResult } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
+import { GlassFill } from "../../components/GlassFill";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -122,6 +123,7 @@ export default function SearchScreen() {
   const [genrePage, setGenrePage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<TextInput>(null);
   const lastGenreParam = useRef<string | undefined>(undefined);
@@ -218,7 +220,14 @@ export default function SearchScreen() {
     setSearching(true);
     setHasMore(false);
     try {
-      const res = await searchAnime(q.trim());
+      // Progressive: witanime results paint almost immediately; anime4up and
+      // anime3rb stream in and append without blanking the grid. The seq guard
+      // drops any partial from a query the user has already moved past.
+      const res = await searchAnime(q.trim(), (partial) => {
+        if (seq !== reqSeq.current) return;
+        setItems(partial);
+        setLoading(false);
+      });
       if (seq !== reqSeq.current) return;
       if (res.success) setItems(res.data.results);
       else setItems([]);
@@ -281,6 +290,18 @@ export default function SearchScreen() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, []);
 
+  // Pull-to-refresh — re-run whichever mode is active (search / genre / browse).
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      if (modeRef.current === "search" && query.trim()) await doSearch(query);
+      else if (modeRef.current === "genre" && activeGenre !== "All") await loadGenre(activeGenre, 1);
+      else await loadBrowse(1);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [query, activeGenre, doSearch, loadGenre, loadBrowse]);
+
   const showingSearch = modeRef.current === "search" && query.trim().length > 0;
 
   return (
@@ -298,9 +319,7 @@ export default function SearchScreen() {
       {/* Glass search bar */}
       <View style={ss.searchWrap}>
         <View style={[ss.searchBar, searching && ss.searchBarActive]}>
-          <BlurView intensity={16} tint="dark" style={StyleSheet.absoluteFill}>
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surfaceGlass }]} />
-          </BlurView>
+          <GlassFill intensity={16} />
           {searching ? (
             <ActivityIndicator size="small" color={C.accent} />
           ) : (
@@ -380,6 +399,15 @@ export default function SearchScreen() {
           columnWrapperStyle={{ gap: GAP, marginBottom: GAP + 8 }}
           onEndReached={loadMoreGenre}
           onEndReachedThreshold={0.5}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={C.accent}
+              colors={[C.accent]}
+              progressBackgroundColor={C.surface}
+            />
+          }
           ListHeaderComponent={showingSearch ? (
             <Text style={ss.resultsLabel}>{`نتائج البحث عن "${query.trim()}"`}</Text>
           ) : null}

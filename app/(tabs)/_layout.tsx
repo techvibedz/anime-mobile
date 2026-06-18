@@ -1,7 +1,7 @@
 import { Tabs } from "expo-router";
 import { View, Text, StyleSheet, Pressable } from "react-native";
-import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
+import { GlassFill } from "../../components/GlassFill";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, R, ELEVATION_NAV } from "../../lib/theme";
 
@@ -32,9 +32,7 @@ function FloatingNav({ state, navigation }: any) {
   return (
     <View style={[ss.navWrap, { bottom: 16 + insets.bottom }]} pointerEvents="box-none">
       <View style={ss.navPill}>
-        <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill}>
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surfaceGlass }]} />
-        </BlurView>
+        <GlassFill intensity={40} androidColor="rgba(14,16,40,0.92)" />
         <View style={ss.navInner}>
           {TABS.map((tab, i) => {
             const active = state.index === i;

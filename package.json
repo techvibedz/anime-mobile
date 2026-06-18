@@ -6,9 +6,11 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "prebuild": "expo prebuild"
+    "prebuild": "expo prebuild",
+    "test": "npx --yes tsx lib/relations.test.ts"
   },
   "dependencies": {
+    "@expo-google-fonts/cairo": "^0.4.2",
     "@expo-google-fonts/dm-sans": "^0.4.2",
     "@expo-google-fonts/outfit": "^0.4.3",
     "@expo/metro-runtime": "~6.1.2",

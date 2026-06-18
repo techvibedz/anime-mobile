@@ -30,7 +30,9 @@ import {
   notificationsModuleAvailable,
   updateNotificationScopeRemote,
   updateNotificationsEnabledRemote,
+  sendTestNotificationAsync,
 } from "../lib/push";
+import { supabase } from "../lib/supabase";
 import { checkForApkUpdate, checkForOtaUpdate, openApkDownload, applyOtaUpdate } from "../lib/updater";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
 import { t } from "../lib/i18n";
@@ -49,6 +51,7 @@ export default function SettingsScreen() {
   const [scope, setScope] = useState<NotificationScope>("all");
   const [permGranted, setPermGranted] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -81,6 +84,31 @@ export default function SettingsScreen() {
     // Sync to the server so closed-app push stops/resumes immediately.
     void updateNotificationsEnabledRemote(value);
   }, []);
+
+  const onSendTest = useCallback(async () => {
+    if (testing) return;
+    setTesting(true);
+    try {
+      const { data } = await supabase.auth.getUser();
+      const userId = data?.user?.id;
+      if (!userId) {
+        Alert.alert(t.settingsNotifications, t.testNotifSignedOut);
+        return;
+      }
+      if (notificationsModuleAvailable()) {
+        const granted = await requestNotificationPermission();
+        setPermGranted(granted);
+        if (!granted) {
+          Alert.alert(t.settingsNotifications, t.enableNotifsPrompt);
+          return;
+        }
+      }
+      const res = await sendTestNotificationAsync(userId);
+      Alert.alert(t.settingsNotifications, res.ok ? t.testNotifSent : t.testNotifFailed);
+    } finally {
+      setTesting(false);
+    }
+  }, [testing]);
 
   const toggleAutoplay = useCallback(async (value: boolean) => {
     setAutoplay(value);
@@ -160,6 +188,15 @@ export default function SettingsScreen() {
             <>
               <Divider />
               <ScopeRow scope={scope} onChange={changeScope} />
+              <Divider />
+              <ActionRow
+                icon="paper-plane-outline"
+                tint={C.cyan}
+                title={t.settingsTestNotif}
+                desc={testing ? t.testNotifSending : t.settingsTestNotifDesc}
+                onPress={onSendTest}
+                right={testing ? <ActivityIndicator size="small" color={C.accent} /> : undefined}
+              />
             </>
           )}
           <Divider />

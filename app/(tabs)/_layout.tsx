@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { GlassFill } from "../../components/GlassFill";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { C, R, ELEVATION_NAV } from "../../lib/theme";
+import { C, R, AR, ELEVATION_NAV } from "../../lib/theme";
 
 const TABS = [
   { name: "index", icon: "home" as const, label: "الرئيسية" },
@@ -93,8 +93,7 @@ const ss = StyleSheet.create({
   },
   navLabel: {
     fontSize: 11,
-    fontWeight: "600",
     color: C.accent,
-    fontFamily: "DMSans_600SemiBold",
+    fontFamily: AR.semibold,
   },
 });

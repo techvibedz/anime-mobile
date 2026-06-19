@@ -1605,7 +1605,7 @@ export default function WatchScreen() {
       <View style={ss.root}>
         <StatusBar hidden />
         <View style={ss.centered}>
-          <ActivityIndicator size="large" color={C.green} />
+          <ActivityIndicator size="large" color={C.accent} />
           <Text style={ss.statusText}>{t.loadingServers}</Text>
         </View>
       </View>
@@ -1619,7 +1619,7 @@ export default function WatchScreen() {
       <View style={ss.root}>
         <StatusBar hidden />
         <View style={ss.centered}>
-          <ActivityIndicator size="large" color={C.green} />
+          <ActivityIndicator size="large" color={C.accent} />
           <Text style={ss.statusText}>{t.loadingServers}</Text>
         </View>
       </View>
@@ -1683,7 +1683,7 @@ export default function WatchScreen() {
           startInLoadingState
           renderLoading={() => (
             <View style={[ss.player, ss.centered]}>
-              <ActivityIndicator size="large" color={C.green} />
+              <ActivityIndicator size="large" color={C.accent} />
               <Text style={ss.statusSub}>{t.loadingPlayer}</Text>
             </View>
           )}
@@ -1709,7 +1709,7 @@ export default function WatchScreen() {
         />
       ) : active?.status === "resolving" ? (
         <View style={[ss.player, ss.centered]}>
-          <ActivityIndicator size="large" color={C.green} />
+          <ActivityIndicator size="large" color={C.accent} />
           <Text style={ss.statusText}>Connecting...</Text>
           <Text style={ss.statusSub}>{active ? getDisplayName(active.server) : ""}</Text>
         </View>
@@ -1724,7 +1724,7 @@ export default function WatchScreen() {
         </View>
       ) : (
         <View style={[ss.player, ss.centered]}>
-          <ActivityIndicator size="large" color={C.green} />
+          <ActivityIndicator size="large" color={C.accent} />
           <Text style={ss.statusText}>Preparing...</Text>
         </View>
       )}
@@ -1942,7 +1942,7 @@ export default function WatchScreen() {
       {isPlaying && brightness < 1 && (
         <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: "#000", opacity: (1 - brightness) * 0.92, zIndex: 6 }]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: C.player, opacity: (1 - brightness) * 0.92, zIndex: 6 }]}
         />
       )}
 
@@ -1990,9 +1990,9 @@ export default function WatchScreen() {
             <ScrollView showsVerticalScrollIndicator={false} style={ss.pickerScroll} contentContainerStyle={ss.pickerContent}>
               {servers.map((item, index) => {
                 const isActive = index === activeIdx;
-                const color = item.status === "playing" ? "#00E676"
+                const color = item.status === "playing" ? C.success
                   : item.status === "webview" ? C.cyan
-                  : item.status === "failed" ? "#FF5252"
+                  : item.status === "failed" ? C.error
                   : item.status === "resolving" ? C.gold
                   : "rgba(255,255,255,0.35)";
                 const label = item.status === "playing" ? "Direct"
@@ -2032,7 +2032,7 @@ export default function WatchScreen() {
                         <Text style={ss.activeBadgeText}>NOW</Text>
                       </View>
                     ) : item.status === "playing" ? (
-                      <Ionicons name="flash" size={14} color="#00E676" />
+                      <Ionicons name="flash" size={14} color={C.success} />
                     ) : null}
                   </Pressable>
                 );
@@ -2046,23 +2046,23 @@ export default function WatchScreen() {
 }
 
 const ss = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#000" },
+  root: { flex: 1, backgroundColor: C.player },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
-  player: { flex: 1, backgroundColor: "#000" },
+  player: { flex: 1, backgroundColor: C.player },
   playerWrap: { flex: 1 },
 
   overlay: { ...StyleSheet.absoluteFillObject, justifyContent: "flex-start", zIndex: 3 },
 
   // Status / error states
-  statusText: { color: "rgba(255,255,255,0.85)", fontSize: 15, fontWeight: "700", textAlign: "center", paddingHorizontal: 32, fontFamily: "Outfit_700Bold" },
-  statusSub: { color: "rgba(255,255,255,0.45)", fontSize: 12, textAlign: "center", fontFamily: "DMSans_500Medium" },
-  errorTitle: { color: "rgba(255,255,255,0.7)", fontSize: 16, fontWeight: "700", marginTop: 8, textAlign: "center", paddingHorizontal: 32, fontFamily: "Outfit_700Bold" },
+  statusText: { color: "rgba(255,255,255,0.85)", fontSize: 15, fontWeight: "700", textAlign: "center", paddingHorizontal: 32, fontFamily: "Cairo_700Bold" },
+  statusSub: { color: "rgba(255,255,255,0.45)", fontSize: 12, textAlign: "center", fontFamily: "Cairo_500Medium" },
+  errorTitle: { color: "rgba(255,255,255,0.7)", fontSize: 16, fontWeight: "700", marginTop: 8, textAlign: "center", paddingHorizontal: 32, fontFamily: "Cairo_700Bold" },
   actionBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: C.accent, borderRadius: 24, paddingHorizontal: 22, paddingVertical: 11,
     shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 16, elevation: 6,
   },
-  actionBtnText: { color: "#fff", fontSize: 14, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  actionBtnText: { color: C.white, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   // Gradient scrims
   gradTop: { position: "absolute", top: 0, left: 0, right: 0, height: 120 },
@@ -2097,7 +2097,7 @@ const ss = StyleSheet.create({
   speedBtnText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.3 },
   titleArea: { flex: 1, gap: 3 },
   titleText: {
-    color: "#fff", fontSize: 15, fontWeight: "700", fontFamily: "Outfit_700Bold",
+    color: C.white, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold",
     textShadowColor: "rgba(0,0,0,0.6)", textShadowRadius: 6,
   },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -2106,9 +2106,9 @@ const ss = StyleSheet.create({
     backgroundColor: "rgba(0,230,118,0.15)", borderWidth: 1, borderColor: "rgba(0,230,118,0.35)",
     borderRadius: 100, paddingHorizontal: 8, paddingVertical: 2,
   },
-  directPillText: { color: "#00E676", fontSize: 8, fontWeight: "800", letterSpacing: 1, fontFamily: "Outfit_800ExtraBold" },
-  liveDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#00E676" },
-  serverLabelText: { color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "DMSans_500Medium", flexShrink: 1 },
+  directPillText: { color: C.success, fontSize: 8, fontWeight: "800", letterSpacing: 1, fontFamily: "Outfit_800ExtraBold" },
+  liveDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: C.success },
+  serverLabelText: { color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "Cairo_500Medium", flexShrink: 1 },
 
   // Center cluster
   centerCluster: {
@@ -2133,7 +2133,7 @@ const ss = StyleSheet.create({
   ctrlBottom: { paddingHorizontal: 20, gap: 10 },
   seekRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   timeText: {
-    color: "#fff", fontSize: 12, fontWeight: "700", minWidth: 42, textAlign: "center",
+    color: C.white, fontSize: 12, fontWeight: "700", minWidth: 42, textAlign: "center",
     fontFamily: "Outfit_700Bold", fontVariant: ["tabular-nums"],
   },
   timeTextDur: {
@@ -2147,7 +2147,7 @@ const ss = StyleSheet.create({
   seekThumb: {
     position: "absolute", top: 9, marginLeft: -7,
     width: 14, height: 14, borderRadius: 7,
-    backgroundColor: C.accent, borderWidth: 2, borderColor: "#fff",
+    backgroundColor: C.accent, borderWidth: 2, borderColor: C.white,
     shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 8, elevation: 4,
   },
   seekThumbActive: { top: 6, marginLeft: -10, width: 20, height: 20, borderRadius: 10 },
@@ -2158,7 +2158,7 @@ const ss = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.85)", borderRadius: 8, paddingVertical: 4,
     borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
   },
-  seekBubbleText: { color: "#fff", fontSize: 12, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", fontVariant: ["tabular-nums"] },
+  seekBubbleText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", fontVariant: ["tabular-nums"] },
   ctrlRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   chipBtn: {
     flexDirection: "row", alignItems: "center", gap: 6,
@@ -2166,20 +2166,20 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
     borderRadius: 100, paddingHorizontal: 14, paddingVertical: 8,
   },
-  chipBtnText: { color: "#fff", fontSize: 12, fontWeight: "700", fontFamily: "Outfit_600SemiBold" },
+  chipBtnText: { color: C.white, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   chipBtnAccent: {
     flexDirection: "row", alignItems: "center", gap: 6,
     backgroundColor: C.accent,
     borderRadius: 100, paddingHorizontal: 16, paddingVertical: 8,
     shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 14, elevation: 6,
   },
-  chipBtnAccentText: { color: "#fff", fontSize: 12, fontWeight: "800", fontFamily: "Outfit_700Bold" },
+  chipBtnAccentText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Cairo_700Bold" },
 
   // Server picker
   pickerOverlay: { ...StyleSheet.absoluteFillObject, flexDirection: "row", zIndex: 10 },
   pickerBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.65)" },
   pickerSheet: {
-    width: "58%", backgroundColor: "#0B0C1E",
+    width: "58%", backgroundColor: C.playerSheet,
     paddingHorizontal: 16, paddingBottom: 16,
     borderTopLeftRadius: 24, borderBottomLeftRadius: 24,
     borderLeftWidth: 1, borderColor: "rgba(255,255,255,0.08)",
@@ -2191,8 +2191,8 @@ const ss = StyleSheet.create({
     backgroundColor: "rgba(255,45,85,0.14)", borderWidth: 1, borderColor: "rgba(255,45,85,0.3)",
     alignItems: "center", justifyContent: "center",
   },
-  pickerTitle: { color: "#fff", fontSize: 17, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  pickerSub: { color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 1, fontFamily: "DMSans_500Medium" },
+  pickerTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+  pickerSub: { color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 1, fontFamily: "Cairo_500Medium" },
   pickerScroll: { flex: 1 },
   pickerContent: { gap: 7, paddingBottom: 20 },
 
@@ -2216,19 +2216,19 @@ const ss = StyleSheet.create({
   serverStatusDot: {
     position: "absolute", bottom: -1, right: -1,
     width: 10, height: 10, borderRadius: 5,
-    borderWidth: 2, borderColor: "#0B0C1E",
+    borderWidth: 2, borderColor: C.playerSheet,
   },
   serverInfo: { flex: 1 },
-  serverName: { color: "#fff", fontSize: 13, fontWeight: "700", fontFamily: "Outfit_600SemiBold" },
+  serverName: { color: C.white, fontSize: 13, fontWeight: "700", fontFamily: "Outfit_600SemiBold" },
   serverNameActive: { color: C.accent },
   serverMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
-  serverMetaLabel: { fontSize: 10, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
-  serverMeta: { color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "DMSans_500Medium", flexShrink: 1 },
+  serverMetaLabel: { fontSize: 10, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
+  serverMeta: { color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "Cairo_500Medium", flexShrink: 1 },
   activeBadge: {
     flexDirection: "row", alignItems: "center", gap: 3,
     backgroundColor: C.accent, borderRadius: 100, paddingHorizontal: 8, paddingVertical: 3,
   },
-  activeBadgeText: { color: "#fff", fontSize: 8, fontWeight: "800", letterSpacing: 0.8, fontFamily: "Outfit_800ExtraBold" },
+  activeBadgeText: { color: C.white, fontSize: 8, fontWeight: "800", letterSpacing: 0.8, fontFamily: "Outfit_800ExtraBold" },
 
   // Brightness indicator
   brightnessIndicator: {
@@ -2241,5 +2241,5 @@ const ss = StyleSheet.create({
     justifyContent: "flex-end", overflow: "hidden",
   },
   brightnessBarFill: { width: 6, borderRadius: 3, backgroundColor: C.white },
-  brightnessPct: { color: "#fff", fontSize: 11, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", fontVariant: ["tabular-nums"] },
+  brightnessPct: { color: C.white, fontSize: 11, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", fontVariant: ["tabular-nums"] },
 });

@@ -12,6 +12,7 @@ import {
 import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
@@ -246,10 +247,19 @@ export default function SettingsScreen() {
 }
 
 /* ── Brand mark ──────────────────────────────── */
+// Gradient lockup matching the sidebar + profile avatar ring, so the brand mark
+// reads the same everywhere it appears.
 function LinearLogoMark() {
   return (
-    <View style={s.logoMark}>
-      <Text style={s.logoGlyph}>P</Text>
+    <View style={s.logoWrap}>
+      <LinearGradient
+        colors={[C.accent, C.violet]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={s.logoMark}
+      >
+        <Text style={s.logoGlyph}>P</Text>
+      </LinearGradient>
     </View>
   );
 }
@@ -378,8 +388,8 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   rowText: { flex: 1, marginLeft: 14 },
-  rowTitle: { color: C.text, fontSize: 14.5, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
-  rowDesc: { color: C.textMuted, fontSize: 11.5, marginTop: 4, lineHeight: 17, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  rowTitle: { color: C.text, fontSize: 15, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  rowDesc: { color: C.textMuted, fontSize: 12, marginTop: 4, lineHeight: 17, fontFamily: "Cairo_500Medium", textAlign: "right" },
   // Indent the divider so it stops short of the icon rail on the right.
   divider: { height: 1, backgroundColor: C.border, marginLeft: 14, marginRight: 68 },
 
@@ -396,17 +406,20 @@ const s = StyleSheet.create({
     paddingVertical: 10, borderRadius: R.pill,
   },
   segmentBtnActive: { backgroundColor: C.accent, ...ELEVATION_GLOW },
-  segmentText: { color: C.textSecondary, fontSize: 12.5, fontWeight: "700", fontFamily: "DMSans_600SemiBold", marginLeft: 6 },
+  segmentText: { color: C.textSecondary, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold", marginLeft: 6 },
   segmentTextActive: { color: C.textOnAccent },
 
   brandFooter: { alignItems: "center", marginTop: 44, gap: 4 },
+  logoWrap: {
+    borderRadius: 19, padding: 3, marginBottom: 10,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+  },
   logoMark: {
-    width: 52, height: 52, borderRadius: 16, marginBottom: 10,
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+    width: 52, height: 52, borderRadius: 16,
     alignItems: "center", justifyContent: "center",
   },
-  logoGlyph: { color: C.accent, fontSize: 26, fontWeight: "900", fontFamily: "Outfit_900Black" },
-  brandName: { color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  brandTag: { color: C.textSecondary, fontSize: 12, fontFamily: "DMSans_500Medium" },
-  brandVersion: { color: C.textMuted, fontSize: 11, marginTop: 6, fontFamily: "DMSans_500Medium" },
+  logoGlyph: { color: C.white, fontSize: 26, fontWeight: "900", fontFamily: "Outfit_900Black" },
+  brandName: { color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+  brandTag: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium" },
+  brandVersion: { color: C.textMuted, fontSize: 11, marginTop: 6, fontFamily: "Cairo_500Medium" },
 });

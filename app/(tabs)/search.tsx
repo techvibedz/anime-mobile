@@ -443,7 +443,7 @@ const ss = StyleSheet.create({
   },
   heading: {
     color: C.text, fontSize: 26, fontWeight: "700", letterSpacing: -0.4,
-    fontFamily: "Outfit_700Bold",
+    fontFamily: "Cairo_700Bold",
   },
   countPill: {
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
@@ -461,7 +461,7 @@ const ss = StyleSheet.create({
   searchBarActive: { borderColor: C.borderAccent },
   input: {
     flex: 1, color: C.text, fontSize: 14, height: S.inputHeight,
-    fontFamily: "DMSans_400Regular",
+    fontFamily: "Cairo_500Medium",
   },
 
   // Chips
@@ -472,7 +472,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
   chipActive: { backgroundColor: C.accent, borderColor: "transparent" },
-  chipText: { color: C.textSecondary, fontSize: 13, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  chipText: { color: C.textSecondary, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   chipTextActive: { color: C.textOnAccent },
 
   // Glow line + progress strip
@@ -487,7 +487,7 @@ const ss = StyleSheet.create({
   // Results
   resultsLabel: {
     color: C.textSecondary, fontSize: 12, fontWeight: "600",
-    fontFamily: "DMSans_600SemiBold", textAlign: "right",
+    fontFamily: "Cairo_600SemiBold", textAlign: "right",
     marginBottom: 12,
   },
   resultCard: {
@@ -502,10 +502,10 @@ const ss = StyleSheet.create({
     paddingHorizontal: 6, paddingVertical: 2,
     borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
   },
-  typeBadgeText: { color: C.textSoft, fontSize: 8, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  typeBadgeText: { color: C.textSoft, fontSize: 8, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   resultTitle: {
     color: C.text, fontSize: 11, fontWeight: "600", lineHeight: 15,
-    marginTop: 6, width: CARD_W, fontFamily: "DMSans_600SemiBold",
+    marginTop: 6, width: CARD_W, fontFamily: "Cairo_600SemiBold",
   },
 
   // Skeletons
@@ -532,12 +532,12 @@ const ss = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
-  emptyTitle: { color: C.textSecondary, fontSize: 16, fontWeight: "600", fontFamily: "Outfit_600SemiBold" },
-  emptyDesc: { color: C.textMuted, fontSize: 13, textAlign: "center", fontFamily: "DMSans_500Medium" },
+  emptyTitle: { color: C.textSecondary, fontSize: 16, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  emptyDesc: { color: C.textMuted, fontSize: 13, textAlign: "center", fontFamily: "Cairo_500Medium" },
   emptyBtn: {
     flexDirection: "row", alignItems: "center", gap: 6,
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
     borderRadius: R.pill, paddingHorizontal: 16, paddingVertical: 9,
   },
-  emptyBtnText: { color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  emptyBtnText: { color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 });

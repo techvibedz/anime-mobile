@@ -62,5 +62,5 @@ export default function AuthCallback() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
-  msg: { color: C.textSecondary, fontSize: 13, textAlign: "center", fontFamily: "DMSans_500Medium" },
+  msg: { color: C.textSecondary, fontSize: 13, textAlign: "center", fontFamily: "Cairo_500Medium" },
 });

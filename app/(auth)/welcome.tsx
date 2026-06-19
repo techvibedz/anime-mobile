@@ -144,13 +144,13 @@ const ss = StyleSheet.create({
   },
   appName: {
     color: C.text, fontSize: 44, fontWeight: "800",
-    letterSpacing: -0.8, fontFamily: "Outfit_800ExtraBold",
+    letterSpacing: -0.8, fontFamily: "Cairo_700Bold",
     textShadowColor: C.accent + "55",
     textShadowRadius: 14,
   },
   tagline: {
     color: C.textSecondary, fontSize: 15,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
     writingDirection: "rtl",
   },
 
@@ -163,7 +163,7 @@ const ss = StyleSheet.create({
   },
   featureText: {
     color: C.text, fontSize: 14, flex: 1, lineHeight: 20,
-    fontFamily: "DMSans_500Medium", textAlign: "right",
+    fontFamily: "Cairo_500Medium", textAlign: "right",
     writingDirection: "rtl",
   },
 
@@ -176,7 +176,7 @@ const ss = StyleSheet.create({
   },
   btnPrimaryText: {
     color: "#fff", fontSize: 16, fontWeight: "800",
-    fontFamily: "Outfit_700Bold", letterSpacing: 0.2,
+    fontFamily: "Cairo_700Bold", letterSpacing: 0.2,
   },
   btnSecondary: {
     flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
@@ -187,6 +187,6 @@ const ss = StyleSheet.create({
   },
   btnSecondaryText: {
     color: C.text, fontSize: 14, fontWeight: "700",
-    fontFamily: "Outfit_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
 });

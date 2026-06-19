@@ -197,12 +197,12 @@ const ss = StyleSheet.create({
   body: { flex: 1, paddingTop: 8 },
   heading: {
     color: C.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5,
-    fontFamily: "Outfit_800ExtraBold", textAlign: "right",
+    fontFamily: "Cairo_700Bold", textAlign: "right",
     writingDirection: "rtl",
   },
   sub: {
     color: C.textSecondary, fontSize: 14, marginTop: 8, marginBottom: 28,
-    fontFamily: "DMSans_500Medium", lineHeight: 20, textAlign: "right",
+    fontFamily: "Cairo_500Medium", lineHeight: 20, textAlign: "right",
     writingDirection: "rtl",
   },
   warnBanner: {
@@ -210,7 +210,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.goldSoft, borderRadius: R.lg, padding: 12,
     borderWidth: 1, borderColor: C.gold + "33", marginBottom: 16,
   },
-  warnText: { color: C.gold, fontSize: 12, flex: 1, fontFamily: "DMSans_500Medium" },
+  warnText: { color: C.gold, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium" },
 
   googleWrap: { borderRadius: R.pill, marginBottom: 20, ...ELEVATION_GLOW },
   googleBtn: {
@@ -218,16 +218,16 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center", gap: 10,
     borderRadius: R.pill, paddingVertical: 15,
   },
-  googleBtnText: { color: "#111", fontSize: 14, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  googleBtnText: { color: "#111", fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 
   divider: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 20 },
   dividerLine: { flex: 1, height: 1, backgroundColor: C.border },
-  dividerText: { color: C.textMuted, fontSize: 11, fontFamily: "DMSans_500Medium" },
+  dividerText: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium" },
 
   inputGroup: { marginBottom: 16 },
   label: {
     color: C.textSecondary, fontSize: 12, fontWeight: "600", marginBottom: 6,
-    fontFamily: "DMSans_600SemiBold", textAlign: "right", writingDirection: "rtl",
+    fontFamily: "Cairo_600SemiBold", textAlign: "right", writingDirection: "rtl",
   },
   inputBox: {
     flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
@@ -237,18 +237,18 @@ const ss = StyleSheet.create({
   },
   input: {
     flex: 1, color: C.text, fontSize: 14, height: S.inputHeight,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
   },
 
   forgotBtn: { alignSelf: "flex-start", paddingVertical: 6 },
-  forgotText: { color: C.accent, fontSize: 12, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  forgotText: { color: C.accent, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   errorBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: C.accentSoft, borderRadius: R.lg, padding: 12, marginTop: 8,
     borderWidth: 1, borderColor: C.borderAccent,
   },
-  errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
   submitWrap: { borderRadius: R.pill, marginTop: 16, ...ELEVATION_GLOW },
   submitBtn: {
@@ -256,9 +256,9 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center", gap: 8,
     borderRadius: R.pill, paddingVertical: 16,
   },
-  submitText: { color: "#fff", fontSize: 16, fontWeight: "800", fontFamily: "Outfit_700Bold" },
+  submitText: { color: "#fff", fontSize: 16, fontWeight: "800", fontFamily: "Cairo_700Bold" },
 
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 24 },
-  footerText: { color: C.textSecondary, fontSize: 13, fontFamily: "DMSans_500Medium" },
-  footerLink: { color: C.accent, fontSize: 13, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  footerText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_500Medium" },
+  footerLink: { color: C.accent, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 });

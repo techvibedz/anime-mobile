@@ -131,7 +131,13 @@ export default function ProfileScreen() {
         {/* Big stats */}
         <View style={s.bigStatsRow}>
           {bigStats.map((st2, i) => (
-            <View key={st2.label} style={[s.bigStatCard, i > 0 && s.colSpace]}>
+            <View key={st2.label} style={[s.bigStatCard, i > 0 && s.colSpace, { borderColor: st2.tint + "2E" }]}>
+              <LinearGradient
+                colors={[st2.tint + "1A", "transparent"]}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
               <View style={[s.bigStatIcon, { backgroundColor: st2.tint + "22" }]}>
                 <Ionicons name={st2.icon as any} size={17} color={st2.tint} />
               </View>
@@ -218,24 +224,25 @@ const s = StyleSheet.create({
   avatar: { width: "100%", height: "100%", borderRadius: R.circle },
   avatarFallback: { backgroundColor: C.bgDeep, alignItems: "center", justifyContent: "center" },
   avatarInitial: { color: C.text, fontSize: 40, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  name: { color: C.text, fontSize: 23, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", marginTop: 16 },
-  email: { color: C.textSecondary, fontSize: 13, marginTop: 5, fontFamily: "DMSans_500Medium" },
+  name: { color: C.text, fontSize: 23, fontWeight: "800", fontFamily: "Cairo_700Bold", marginTop: 16 },
+  email: { color: C.textSecondary, fontSize: 13, marginTop: 5, fontFamily: "Cairo_500Medium" },
   sinceChip: {
     flexDirection: "row", alignItems: "center", marginTop: 12,
     paddingHorizontal: 12, paddingVertical: 6, borderRadius: R.pill,
     backgroundColor: C.violetSoft, borderWidth: 1, borderColor: C.borderViolet,
   },
-  sinceText: { color: C.textSoft, fontSize: 11.5, fontFamily: "DMSans_600SemiBold", marginLeft: 6 },
+  sinceText: { color: C.textSoft, fontSize: 12, fontFamily: "Cairo_600SemiBold", marginLeft: 6 },
 
   bigStatsRow: { flexDirection: "row", paddingHorizontal: S.paddingContent, marginTop: 8 },
   bigStatCard: {
     flex: 1, alignItems: "center", paddingVertical: 18, borderRadius: R.xl,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    overflow: "hidden",
     ...ELEVATION_CARD,
   },
   bigStatIcon: { width: 36, height: 36, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginBottom: 8 },
   bigStatValue: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  bigStatLabel: { color: C.textSecondary, fontSize: 10, textAlign: "center", marginTop: 4, fontFamily: "DMSans_500Medium" },
+  bigStatLabel: { color: C.textSecondary, fontSize: 10, textAlign: "center", marginTop: 4, fontFamily: "Cairo_500Medium" },
 
   miniRow: { flexDirection: "row", paddingHorizontal: S.paddingContent, marginTop: 10 },
   miniCard: {
@@ -245,7 +252,7 @@ const s = StyleSheet.create({
   miniIcon: { width: 30, height: 30, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginRight: 10 },
   miniText: { flex: 1, alignItems: "flex-end" },
   miniValue: { color: C.text, fontSize: 17, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  miniLabel: { color: C.textMuted, fontSize: 9.5, fontFamily: "DMSans_500Medium" },
+  miniLabel: { color: C.textMuted, fontSize: 10, fontFamily: "Cairo_500Medium" },
 
   section: { paddingHorizontal: S.paddingContent, marginTop: 28 },
 
@@ -259,8 +266,8 @@ const s = StyleSheet.create({
   recentBody: { flex: 1, marginRight: 12 },
   recentThumb: { width: 64, height: 40, borderRadius: R.sm },
   recentThumbFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
-  recentTitle: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
-  recentSub: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  recentTitle: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  recentSub: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
   emptyActivity: { alignItems: "center", paddingVertical: 36 },
   emptyIcon: {
@@ -268,5 +275,5 @@ const s = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
-  emptyText: { color: C.textMuted, fontSize: 13, fontFamily: "DMSans_500Medium" },
+  emptyText: { color: C.textMuted, fontSize: 13, fontFamily: "Cairo_500Medium" },
 });

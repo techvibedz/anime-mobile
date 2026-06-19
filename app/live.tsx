@@ -150,8 +150,8 @@ const s = StyleSheet.create({
   counterRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   counterText: { alignItems: "flex-end" },
   counterNum: { color: C.text, fontSize: 40, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", lineHeight: 46 },
-  counterLabel: { color: C.textSecondary, fontSize: 13, marginTop: 2, fontFamily: "DMSans_600SemiBold", textAlign: "right" },
-  counterSub: { color: C.textMuted, fontSize: 12, marginTop: 14, lineHeight: 18, textAlign: "right", fontFamily: "DMSans_500Medium" },
+  counterLabel: { color: C.textSecondary, fontSize: 13, marginTop: 2, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  counterSub: { color: C.textMuted, fontSize: 12, marginTop: 14, lineHeight: 18, textAlign: "right", fontFamily: "Cairo_500Medium" },
 
   livePill: {
     flexDirection: "row", alignItems: "center", gap: 6,
@@ -169,17 +169,17 @@ const s = StyleSheet.create({
     ...ELEVATION_CARD,
   },
   rowMeta: { alignItems: "flex-start", gap: 6, minWidth: 56 },
-  rowTime: { color: C.textMuted, fontSize: 11, fontFamily: "DMSans_500Medium" },
+  rowTime: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium" },
   deviceChip: {
     flexDirection: "row", alignItems: "center", gap: 3,
     paddingHorizontal: 7, paddingVertical: 3, borderRadius: R.pill,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
-  deviceText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "700", fontFamily: "DMSans_700Bold" },
+  deviceText: { color: C.textSecondary, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   rowBody: { flex: 1, marginHorizontal: 12, alignItems: "flex-end" },
-  rowName: { color: C.text, fontSize: 14.5, fontWeight: "700", fontFamily: "DMSans_700Bold", textAlign: "right" },
-  rowEmail: { color: C.textSecondary, fontSize: 11.5, marginTop: 3, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  rowName: { color: C.text, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },
+  rowEmail: { color: C.textSecondary, fontSize: 12, marginTop: 3, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
   avatarWrap: { width: 46, height: 46 },
   avatar: { width: 46, height: 46, borderRadius: R.circle },
@@ -198,6 +198,6 @@ const s = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
-  emptyTitle: { color: C.text, fontSize: 16, fontWeight: "700", fontFamily: "Outfit_700Bold" },
-  emptySub: { color: C.textMuted, fontSize: 12.5, marginTop: 6, textAlign: "center", fontFamily: "DMSans_500Medium" },
+  emptyTitle: { color: C.text, fontSize: 16, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  emptySub: { color: C.textMuted, fontSize: 13, marginTop: 6, textAlign: "center", fontFamily: "Cairo_500Medium" },
 });

@@ -186,13 +186,13 @@ const s = StyleSheet.create({
 
   body: { flex: 1, justifyContent: "center" },
   titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
-  cardTitle: { color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "Outfit_700Bold", textAlign: "right" },
+  cardTitle: { color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.accent, marginRight: 8 },
   cardMsg: {
-    color: C.text, fontSize: 13.5, lineHeight: 19, fontFamily: "DMSans_600SemiBold",
+    color: C.text, fontSize: 14, lineHeight: 19, fontFamily: "Cairo_600SemiBold",
     textAlign: "right", writingDirection: "rtl", marginTop: 3,
   },
-  cardTime: { color: C.textMuted, fontSize: 11, fontFamily: "DMSans_500Medium", textAlign: "right", marginTop: 4 },
+  cardTime: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 4 },
 
   // Empty
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 12 },
@@ -201,9 +201,9 @@ const s = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center", marginBottom: 4,
   },
-  emptyTitle: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  emptyTitle: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Cairo_700Bold" },
   emptySub: {
     color: C.textSecondary, fontSize: 13, lineHeight: 20, textAlign: "center", maxWidth: 260,
-    fontFamily: "DMSans_400Regular", writingDirection: "rtl",
+    fontFamily: "Cairo_500Medium", writingDirection: "rtl",
   },
 });

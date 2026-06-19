@@ -786,18 +786,18 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center", marginBottom: 6,
   },
   emptyTitle: {
-    color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", textAlign: "center",
+    color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Cairo_700Bold", textAlign: "center",
   },
   emptyDesc: {
-    color: C.textSecondary, fontSize: 13.5, lineHeight: 21, textAlign: "center",
-    fontFamily: "DMSans_500Medium",
+    color: C.textSecondary, fontSize: 14, lineHeight: 21, textAlign: "center",
+    fontFamily: "Cairo_500Medium",
   },
   emptyBtn: {
     flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8,
     backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 13, paddingHorizontal: 28,
     ...ELEVATION_GLOW,
   },
-  emptyBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  emptyBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   // Top bar
   topBar: {
@@ -829,7 +829,7 @@ const ss = StyleSheet.create({
     borderWidth: 1.5, borderColor: C.bg,
   },
   notifBadgeText: {
-    color: C.textOnAccent, fontSize: 9, fontWeight: "800", fontFamily: "Outfit_800ExtraBold",
+    color: C.textOnAccent, fontSize: 9, fontWeight: "800", fontFamily: "Cairo_700Bold",
   },
 
   // Hero
@@ -844,13 +844,13 @@ const ss = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 5, borderRadius: R.pill,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
-  chipText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  chipText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   heroTitle: {
     color: C.text, fontSize: 32, fontWeight: "800", lineHeight: 36, letterSpacing: -0.6,
-    fontFamily: "Outfit_800ExtraBold",
+    fontFamily: "Cairo_700Bold",
   },
   heroDesc: {
-    color: C.textSecondary, fontSize: 14, lineHeight: 22, fontFamily: "DMSans_400Regular",
+    color: C.textSecondary, fontSize: 14, lineHeight: 22, fontFamily: "Cairo_500Medium",
     maxWidth: 300,
   },
   heroButtons: { flexDirection: "row", gap: 10, marginTop: 4 },
@@ -859,13 +859,13 @@ const ss = StyleSheet.create({
     backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 14,
     ...ELEVATION_GLOW,
   },
-  btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Outfit_600SemiBold" },
+  btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   btnGlass: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     borderRadius: R.pill, paddingVertical: 14,
     backgroundColor: C.surfaceGlass, borderWidth: 1, borderColor: C.glassBorder,
   },
-  btnGlassText: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "Outfit_600SemiBold" },
+  btnGlassText: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Dots
   dots: {
@@ -897,10 +897,10 @@ const ss = StyleSheet.create({
     shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 8,
   },
   sectionTitle: {
-    color: C.text, fontSize: 20, fontWeight: "700", fontFamily: "Outfit_700Bold",
+    color: C.text, fontSize: 20, fontWeight: "700", fontFamily: "Cairo_700Bold",
   },
   seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
-  seeAllText: { color: C.accent, fontSize: 11, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  seeAllText: { color: C.accent, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // "See All" tail card in horizontal list
   seeAllCard: {
@@ -913,7 +913,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
     alignItems: "center", justifyContent: "center",
   },
-  seeAllCardText: { color: C.accent, fontSize: 12, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  seeAllCardText: { color: C.accent, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Categories grid
   catGrid: {
@@ -928,7 +928,7 @@ const ss = StyleSheet.create({
     paddingHorizontal: 16,
   },
   catName: {
-    color: "#fff", fontSize: 14, fontWeight: "700", fontFamily: "Outfit_700Bold",
+    color: "#fff", fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold",
   },
 
   // Progress bar (continue watching)
@@ -946,7 +946,7 @@ const ss = StyleSheet.create({
     paddingHorizontal: 6, paddingVertical: 2,
   },
   timeBadgeText: {
-    color: C.white, fontSize: 9, fontWeight: "600", fontFamily: "DMSans_600SemiBold",
+    color: C.white, fontSize: 9, fontWeight: "600", fontFamily: "Cairo_600SemiBold",
   },
   deleteBtn: {
     position: "absolute", top: 6, right: 6,
@@ -972,11 +972,11 @@ const ss = StyleSheet.create({
   },
   cardTitle: {
     color: C.text, fontSize: 11, fontWeight: "600", lineHeight: 14,
-    marginTop: 10, width: CARD_W, fontFamily: "DMSans_600SemiBold",
+    marginTop: 10, width: CARD_W, fontFamily: "Cairo_600SemiBold",
   },
   cardType: {
     color: C.textMuted, fontSize: 10, lineHeight: 13, marginTop: 3, width: CARD_W,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
   },
 
   // Badges
@@ -1026,11 +1026,11 @@ const ss = StyleSheet.create({
   },
   epTitle: {
     color: C.text, fontSize: 11, fontWeight: "600", lineHeight: 14,
-    marginTop: 8, width: EP_W, fontFamily: "DMSans_600SemiBold",
+    marginTop: 8, width: EP_W, fontFamily: "Cairo_600SemiBold",
   },
   epSub: {
     color: C.textMuted, fontSize: 10, lineHeight: 13, marginTop: 2, width: EP_W,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
   },
 
   // Episode action modal
@@ -1050,18 +1050,18 @@ const ss = StyleSheet.create({
   },
   modalTitle: {
     color: C.text, fontSize: 16, fontWeight: "700",
-    fontFamily: "Outfit_700Bold", textAlign: "center",
+    fontFamily: "Cairo_700Bold", textAlign: "center",
   },
   modalSub: {
     color: C.textMuted, fontSize: 12, textAlign: "center",
-    fontFamily: "DMSans_500Medium", marginBottom: 6,
+    fontFamily: "Cairo_500Medium", marginBottom: 6,
   },
   modalBtnPrimary: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     backgroundColor: C.accent, paddingVertical: 12, borderRadius: R.pill,
   },
   modalBtnPrimaryText: {
-    color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "DMSans_600SemiBold",
+    color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold",
   },
   modalBtnSecondary: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
@@ -1069,10 +1069,10 @@ const ss = StyleSheet.create({
     paddingVertical: 12, borderRadius: R.pill,
   },
   modalBtnSecondaryText: {
-    color: C.text, fontSize: 14, fontWeight: "700", fontFamily: "DMSans_600SemiBold",
+    color: C.text, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold",
   },
   modalCancel: { paddingVertical: 10, alignItems: "center" },
   modalCancelText: {
-    color: C.textMuted, fontSize: 13, fontWeight: "600", fontFamily: "DMSans_500Medium",
+    color: C.textMuted, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_500Medium",
   },
 });

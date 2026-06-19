@@ -3,10 +3,11 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit_800ExtraBold, Outfit_900Black } from "@expo-google-fonts/outfit";
-import { DMSans_400Regular, DMSans_500Medium, DMSans_600SemiBold, DMSans_700Bold } from "@expo-google-fonts/dm-sans";
-// Arabic-capable font: Outfit/DMSans are Latin-only, so Arabic glyphs were being
-// measured too narrow and spilled out of their boxes (e.g. filter pills overlapping
-// their count badges). Cairo gives correct Arabic metrics.
+// Cairo is the Arabic UI font. Outfit (Latin-only) is kept ONLY for numerals and
+// the brand display (ranks, countdown digits, durations) — Latin glyphs that don't
+// have the Arabic measuring problem. All Arabic word labels use Cairo, because
+// Latin fonts under-measure Arabic glyphs and the text spilled out of tight rows
+// (e.g. filter pills overlapping their count badges).
 import { Cairo_500Medium, Cairo_600SemiBold, Cairo_700Bold } from "@expo-google-fonts/cairo";
 import { View, ActivityIndicator, I18nManager, InteractionManager } from "react-native";
 import * as Updates from "expo-updates";
@@ -205,10 +206,6 @@ export default function RootLayout() {
     Outfit_700Bold,
     Outfit_800ExtraBold,
     Outfit_900Black,
-    DMSans_400Regular,
-    DMSans_500Medium,
-    DMSans_600SemiBold,
-    DMSans_700Bold,
     Cairo_500Medium,
     Cairo_600SemiBold,
     Cairo_700Bold,

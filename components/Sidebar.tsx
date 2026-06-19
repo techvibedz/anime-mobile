@@ -293,20 +293,32 @@ function Sidebar() {
             </View>
 
             {/* Nav */}
+            <Text style={st.sectionCap}>{t.menu}</Text>
             <View style={st.navList}>
               {NAV.map((item) => {
                 const active = !!item.match && pathname?.startsWith(item.match);
+                const tint = item.accent ?? C.accent;
                 return (
                   <Pressable
                     key={item.label}
                     onPress={item.onPress}
-                    style={({ pressed }) => [st.navItem, active && st.navItemActive, pressed && st.navItemPressed]}
+                    style={({ pressed }) => [
+                      st.navItem,
+                      active && { backgroundColor: tint + "1A", borderColor: tint + "33" },
+                      pressed && st.navItemPressed,
+                    ]}
                   >
-                    {active ? <View style={st.activeBar} /> : null}
-                    <Ionicons name={CHEVRON} size={15} color={active ? C.accent : C.textMuted} />
-                    <Text style={[st.navLabel, active && st.navLabelActive]} numberOfLines={1}>{item.label}</Text>
-                    <View style={[st.navIcon, active && st.navIconActive]}>
-                      <Ionicons name={item.icon} size={19} color={active ? C.accent : C.textSecondary} />
+                    {active ? <View style={[st.activeBar, { backgroundColor: tint }]} /> : null}
+                    {/* Disclosure chevron only on the focused row — keeps the list
+                        calm instead of repeating a muted arrow on every item. */}
+                    {active ? (
+                      <Ionicons name={CHEVRON} size={15} color={tint} />
+                    ) : (
+                      <View style={st.chevronSpacer} />
+                    )}
+                    <Text style={[st.navLabel, active && st.navLabelActive, active && { color: tint }]} numberOfLines={1}>{item.label}</Text>
+                    <View style={[st.navIcon, active && { backgroundColor: tint + "1F", borderColor: tint + "33" }]}>
+                      <Ionicons name={item.icon} size={19} color={active ? tint : C.textSecondary} />
                     </View>
                   </Pressable>
                 );
@@ -360,10 +372,10 @@ function StatTile({
         style={StyleSheet.absoluteFill}
       />
       <View style={st.statHead}>
-        <Text style={[st.statNum, { color: tint }]}>{value}</Text>
         <View style={[st.statIcon, { backgroundColor: tint + "22" }]}>
           <Ionicons name={icon} size={15} color={tint} />
         </View>
+        <Text style={[st.statNum, { color: tint }]}>{value}</Text>
       </View>
       <Text style={st.statLabel} numberOfLines={1}>{label}</Text>
     </View>
@@ -397,8 +409,8 @@ const st = StyleSheet.create({
   },
   brandLockup: { flexDirection: "row", alignItems: "center" },
   brandTextWrap: { alignItems: "flex-end", marginRight: 11 },
-  brandName: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  brandTag: { color: C.textMuted, fontSize: 10.5, marginTop: 1, fontFamily: "DMSans_500Medium" },
+  brandName: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+  brandTag: { color: C.textMuted, fontSize: 11, marginTop: 1, fontFamily: "Cairo_500Medium" },
   logoWrap: {
     borderRadius: 15, padding: 2,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
@@ -442,13 +454,13 @@ const st = StyleSheet.create({
   avatar: { width: "100%", height: "100%", borderRadius: R.circle },
   avatarFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
   avatarInitial: { color: C.text, fontSize: 24, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  name: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Outfit_700Bold", textAlign: "right" },
-  email: { color: C.textSecondary, fontSize: 12, marginTop: 3, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  name: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },
+  email: { color: C.textSecondary, fontSize: 12, marginTop: 3, fontFamily: "Cairo_500Medium", textAlign: "right" },
   heroBadge: {
     marginTop: 9, paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
   },
-  heroBadgeText: { color: C.accent, fontSize: 10.5, fontWeight: "700", fontFamily: "DMSans_700Bold" },
+  heroBadgeText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   statsRow: { flexDirection: "row", marginBottom: 22 },
   statGap: { width: 12 },
@@ -459,33 +471,38 @@ const st = StyleSheet.create({
   statHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   statIcon: { width: 30, height: 30, borderRadius: R.circle, alignItems: "center", justifyContent: "center" },
   statNum: { fontSize: 28, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  statLabel: { color: C.textSecondary, fontSize: 11, marginTop: 8, fontFamily: "DMSans_500Medium", textAlign: "right" },
+  statLabel: { color: C.textSecondary, fontSize: 11, marginTop: 8, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
+  // Quiet uppercase-style caption that introduces the nav list.
+  sectionCap: {
+    color: C.textMuted, fontSize: 11, fontFamily: "Cairo_700Bold",
+    letterSpacing: 0.4, textAlign: "right",
+    marginTop: 4, marginBottom: 10, marginRight: 4,
+  },
   navList: { gap: 4 },
+  chevronSpacer: { width: 15 },
   navItem: {
     flexDirection: "row", alignItems: "center",
-    paddingVertical: 11, paddingHorizontal: 12, borderRadius: R.lg,
+    paddingVertical: 12, paddingHorizontal: 12, borderRadius: R.lg,
     borderWidth: 1, borderColor: "transparent",
   },
-  navItemActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
   navItemPressed: { backgroundColor: C.glass },
   // Accent bar pinned to the right edge of the active row (Arabic reading side).
-  activeBar: { position: "absolute", right: 0, top: 10, bottom: 10, width: 3, borderRadius: 2, backgroundColor: C.accent },
+  activeBar: { position: "absolute", right: 0, top: 9, bottom: 9, width: 3, borderRadius: 2, backgroundColor: C.accent },
   navIcon: {
-    width: 42, height: 42, borderRadius: R.md, marginLeft: 12,
+    width: 40, height: 40, borderRadius: R.md, marginLeft: 12,
     backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.border,
     alignItems: "center", justifyContent: "center",
   },
-  navIconActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
   navIconDanger: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
-  navLabel: { flex: 1, color: C.text, fontSize: 14.5, fontWeight: "600", fontFamily: "DMSans_600SemiBold", textAlign: "right" },
-  navLabelActive: { color: C.accent, fontFamily: "DMSans_700Bold" },
+  navLabel: { flex: 1, color: C.text, fontSize: 15, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  navLabelActive: { color: C.accent, fontFamily: "Cairo_700Bold" },
 
   divider: { height: 1, backgroundColor: C.border, marginVertical: 14, marginHorizontal: 12 },
   signOutItem: {},
   signOutLabel: { color: C.accent },
 
   footer: { alignItems: "center", marginTop: 28 },
-  footerName: { color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "Outfit_700Bold" },
-  footerVersion: { color: C.textMuted, fontSize: 11, marginTop: 3, fontFamily: "DMSans_500Medium" },
+  footerName: { color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  footerVersion: { color: C.textMuted, fontSize: 11, marginTop: 3, fontFamily: "Cairo_500Medium" },
 });

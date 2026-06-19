@@ -105,36 +105,36 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   body: { flex: 1, paddingTop: 8 },
-  heading: { color: C.text, fontSize: 28, fontWeight: "800", letterSpacing: -0.5, fontFamily: "Outfit_800ExtraBold", textAlign: "right", writingDirection: "rtl" },
-  sub: { color: C.textSecondary, fontSize: 13, marginTop: 8, marginBottom: 28, fontFamily: "DMSans_500Medium", lineHeight: 18, textAlign: "right", writingDirection: "rtl" },
+  heading: { color: C.text, fontSize: 28, fontWeight: "800", letterSpacing: -0.5, fontFamily: "Cairo_700Bold", textAlign: "right", writingDirection: "rtl" },
+  sub: { color: C.textSecondary, fontSize: 13, marginTop: 8, marginBottom: 28, fontFamily: "Cairo_500Medium", lineHeight: 18, textAlign: "right", writingDirection: "rtl" },
 
   inputGroup: { marginBottom: 16 },
-  label: { color: C.textSecondary, fontSize: 12, fontWeight: "600", marginBottom: 6, fontFamily: "DMSans_600SemiBold", textAlign: "right", writingDirection: "rtl" },
+  label: { color: C.textSecondary, fontSize: 12, fontWeight: "600", marginBottom: 6, fontFamily: "Cairo_600SemiBold", textAlign: "right", writingDirection: "rtl" },
   inputBox: {
     flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
     alignItems: "center", gap: 10,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     borderRadius: R.lg, paddingHorizontal: 14, height: S.inputHeight,
   },
-  input: { flex: 1, color: C.text, fontSize: 14, height: S.inputHeight, fontFamily: "DMSans_500Medium" },
+  input: { flex: 1, color: C.text, fontSize: 14, height: S.inputHeight, fontFamily: "Cairo_500Medium" },
 
   errorBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: C.accentSoft, borderRadius: R.lg, padding: 12, marginTop: 8,
     borderWidth: 1, borderColor: C.borderAccent,
   },
-  errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "DMSans_500Medium" },
+  errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium" },
   successBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: C.success + "1A", borderRadius: R.lg, padding: 12, marginTop: 8,
     borderWidth: 1, borderColor: C.success + "33",
   },
-  successText: { color: C.success, fontSize: 12, flex: 1, fontFamily: "DMSans_500Medium" },
+  successText: { color: C.success, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium" },
 
   submitWrap: { borderRadius: R.pill, marginTop: 24, ...ELEVATION_GLOW },
   submitBtn: {
     borderRadius: R.pill, paddingVertical: 16,
     alignItems: "center", justifyContent: "center",
   },
-  submitText: { color: "#fff", fontSize: 16, fontWeight: "800", fontFamily: "Outfit_700Bold" },
+  submitText: { color: "#fff", fontSize: 16, fontWeight: "800", fontFamily: "Cairo_700Bold" },
 });

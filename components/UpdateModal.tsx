@@ -139,7 +139,7 @@ const ss = StyleSheet.create({
   title: {
     fontSize: 22,
     fontWeight: "800",
-    fontFamily: "Outfit_800ExtraBold",
+    fontFamily: "Cairo_700Bold",
     color: C.text,
     textAlign: "center",
     marginBottom: 10,
@@ -147,7 +147,7 @@ const ss = StyleSheet.create({
   subtitle: {
     fontSize: 14,
     color: C.textMuted,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
     textAlign: "center",
     lineHeight: 22,
     marginBottom: 20,
@@ -166,13 +166,13 @@ const ss = StyleSheet.create({
     fontWeight: "700",
     color: C.text,
     marginBottom: 6,
-    fontFamily: "Outfit_700Bold",
+    fontFamily: "Cairo_700Bold",
     textAlign: "right",
   },
   notesText: {
     fontSize: 13,
     color: C.textSecondary,
-    fontFamily: "DMSans_400Regular",
+    fontFamily: "Cairo_500Medium",
     textAlign: "right",
     lineHeight: 20,
   },
@@ -205,7 +205,7 @@ const ss = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
-    fontFamily: "Outfit_700Bold",
+    fontFamily: "Cairo_700Bold",
   },
   btnSecondary: {
     width: "100%",
@@ -217,6 +217,6 @@ const ss = StyleSheet.create({
     color: C.textMuted,
     fontSize: 15,
     fontWeight: "600",
-    fontFamily: "DMSans_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
 });

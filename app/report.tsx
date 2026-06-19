@@ -205,8 +205,8 @@ export default function ReportScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   intro: {
-    color: C.textSecondary, fontSize: 13.5, lineHeight: 21, textAlign: "right",
-    fontFamily: "DMSans_500Medium", marginBottom: 20,
+    color: C.textSecondary, fontSize: 14, lineHeight: 21, textAlign: "right",
+    fontFamily: "Cairo_500Medium", marginBottom: 20,
   },
   sectionGap: { height: 22 },
 
@@ -218,20 +218,20 @@ const s = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
   catChipActive: { backgroundColor: C.accent, borderColor: C.accent, ...ELEVATION_GLOW },
-  catText: { color: C.textSecondary, fontSize: 12.5, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  catText: { color: C.textSecondary, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   catTextActive: { color: C.textOnAccent },
 
   // Inputs
   textArea: {
     minHeight: 130, borderRadius: R.xl, padding: 16,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    color: C.text, fontSize: 14, lineHeight: 21, fontFamily: "DMSans_500Medium",
+    color: C.text, fontSize: 14, lineHeight: 21, fontFamily: "Cairo_500Medium",
     ...ELEVATION_CARD,
   },
   input: {
     height: 52, borderRadius: R.lg, paddingHorizontal: 16,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    color: C.text, fontSize: 14, fontFamily: "DMSans_500Medium",
+    color: C.text, fontSize: 14, fontFamily: "Cairo_500Medium",
   },
 
   // Screenshot
@@ -241,7 +241,7 @@ const s = StyleSheet.create({
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
     borderStyle: "dashed",
   },
-  attachText: { color: C.accent, fontSize: 14, fontWeight: "700", fontFamily: "DMSans_700Bold" },
+  attachText: { color: C.accent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
   shotCard: {
     borderRadius: R.xl, overflow: "hidden",
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, ...ELEVATION_CARD,
@@ -252,7 +252,7 @@ const s = StyleSheet.create({
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     paddingVertical: 13,
   },
-  shotActionText: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  shotActionText: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Submit
   submitBtn: {
@@ -260,7 +260,7 @@ const s = StyleSheet.create({
     marginTop: 28, height: 54, borderRadius: R.pill,
     backgroundColor: C.accent, ...ELEVATION_GLOW,
   },
-  submitText: { color: C.textOnAccent, fontSize: 15, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  submitText: { color: C.textOnAccent, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   // Success
   successWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 40, gap: 14 },
@@ -269,11 +269,11 @@ const s = StyleSheet.create({
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
     alignItems: "center", justifyContent: "center", marginBottom: 6,
   },
-  successTitle: { color: C.text, fontSize: 20, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", textAlign: "center" },
-  successSub: { color: C.textSecondary, fontSize: 13.5, lineHeight: 21, textAlign: "center", fontFamily: "DMSans_500Medium" },
+  successTitle: { color: C.text, fontSize: 20, fontWeight: "800", fontFamily: "Cairo_700Bold", textAlign: "center" },
+  successSub: { color: C.textSecondary, fontSize: 14, lineHeight: 21, textAlign: "center", fontFamily: "Cairo_500Medium" },
   successBtn: {
     marginTop: 10, backgroundColor: C.accent, borderRadius: R.pill,
     paddingVertical: 13, paddingHorizontal: 40, ...ELEVATION_GLOW,
   },
-  successBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  successBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 });

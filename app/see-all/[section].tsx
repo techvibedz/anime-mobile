@@ -274,7 +274,7 @@ const s = StyleSheet.create({
     fontSize: 22,
     fontWeight: "800",
     flex: 1,
-    fontFamily: "Outfit_800ExtraBold",
+    fontFamily: "Cairo_700Bold",
     letterSpacing: -0.4,
   },
   countPill: {
@@ -327,7 +327,7 @@ const s = StyleSheet.create({
     lineHeight: 16,
     marginTop: 6,
     width: CARD_W,
-    fontFamily: "DMSans_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
   sub: {
     color: C.textMuted,
@@ -335,7 +335,7 @@ const s = StyleSheet.create({
     lineHeight: 14,
     marginTop: 2,
     width: CARD_W,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
   },
 
   // Episode action modal

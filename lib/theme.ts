@@ -12,33 +12,33 @@ export const C = {
   surfaceGlass: "rgba(14,16,40,0.65)",
   surfaceCard: "rgba(18,21,48,0.8)",
 
-  // Accent (hot pink)
+  // Accent (hot pink) — the single brand accent. There used to be `green`,
+  // `greenDark`, `orange` aliases left over from a pre-rebrand palette; they all
+  // pointed at this same pink and were misleading. Use `accent` everywhere.
   accent: "#FF2D55",
   accentSoft: "rgba(255,45,85,0.15)",
   accentGlow: "rgba(255,45,85,0.4)",
   accentMuted: "#CC2444",
-  green: "#FF2D55",
-  greenDark: "#CC2444",
-  greenContainer: "#CC2444",
-  onGreen: "#FFFFFF",
 
   // Violet
   violet: "#7C5CFC",
   violetSoft: "rgba(124,92,252,0.15)",
   violetGlow: "rgba(124,92,252,0.3)",
 
-  // Utility
+  // Utility / semantic
   gold: "#FFAA2B",
   goldSoft: "rgba(255,170,43,0.15)",
-  orange: "#FF2D55",
   cyan: "#00D4FF",
   success: "#00E676",
+  successSoft: "rgba(0,230,118,0.15)",
+  error: "#FF5252",
 
-  // Text
-  text: "#F0ECE2",
+  // Text — contrast ratios are against `bg` (#06071A).
+  text: "#F0ECE2",            // 16.9:1
   textSoft: "rgba(240,236,226,0.85)",
-  textSecondary: "#8A8BA3",
-  textMuted: "#4E5069",
+  textSecondary: "#8A8BA3",  // 5.99:1
+  textMuted: "#7B7D96",      // 4.95:1 — readable AA. (was #4E5069 @ 2.54:1, failed)
+  textFaint: "#4E5069",      // 2.54:1 — DECORATIVE ONLY (idle icons, hairlines). Never body text.
   textOnAccent: "#FFFFFF",
   textOnSurfaceVariant: "#8A8BA3",
   white: "#FFFFFF",
@@ -68,27 +68,56 @@ export const C = {
   controlDim: "rgba(255,255,255,0.3)",
   dividerWisp: "rgba(255,255,255,0.04)",
 
+  // Player / bottom-sheet surfaces (true-black video, near-black sheets)
+  player: "#000000",
+  playerSheet: "#0B0C1E",
+
   // Gradients (as string values for LinearGradient colors arrays)
   meshViolet: "rgba(124,92,252,0.15)",
   meshPink: "rgba(255,45,85,0.1)",
   meshCyan: "rgba(0,212,255,0.05)",
 } as const;
 
+/* ── Font families ────────────────────────────────
+ * Latin runs use Outfit (display/headings) + DMSans (body/labels).
+ * Arabic UI chrome MUST use Cairo: Latin fonts under-measure Arabic glyphs,
+ * so Arabic text in tight horizontal rows (pills, counts, headers) overflows
+ * its leading edge. Route every STATIC Arabic label through `AR.*`. Leave
+ * dynamic, possibly-Latin content (anime titles, romaji) on the Latin stack. */
+export const F = {
+  display: "Outfit_800ExtraBold",
+  black: "Outfit_900Black",
+  heading: "Outfit_700Bold",
+  headingSemi: "Outfit_600SemiBold",
+  body: "DMSans_400Regular",
+  bodyMedium: "DMSans_500Medium",
+  bodySemi: "DMSans_600SemiBold",
+  bodyBold: "DMSans_700Bold",
+} as const;
+
+export const AR = {
+  bold: "Cairo_700Bold",
+  semibold: "Cairo_600SemiBold",
+  medium: "Cairo_500Medium",
+} as const;
+
+// Type scale — each step carries its own family so call sites can `...T.h2`
+// instead of re-declaring fontFamily/size/weight/lineHeight every time.
 export const T = {
-  display: { fontSize: 32, fontWeight: "800" as const, lineHeight: 36, letterSpacing: -0.6 },
-  h1: { fontSize: 26, fontWeight: "700" as const, lineHeight: 30, letterSpacing: -0.4 },
-  h2: { fontSize: 20, fontWeight: "700" as const, lineHeight: 24, letterSpacing: -0.2 },
-  h3: { fontSize: 16, fontWeight: "600" as const, lineHeight: 21 },
-  body: { fontSize: 14, fontWeight: "400" as const, lineHeight: 22 },
-  bodySmall: { fontSize: 13, fontWeight: "500" as const, lineHeight: 18 },
-  caption: { fontSize: 11, fontWeight: "600" as const, lineHeight: 14 },
-  captionSmall: { fontSize: 10, fontWeight: "500" as const, lineHeight: 13 },
-  badge: { fontSize: 9, fontWeight: "700" as const, lineHeight: 11, letterSpacing: 0.8 },
-  button: { fontSize: 14, fontWeight: "600" as const, lineHeight: 18, letterSpacing: 0.1 },
-  buttonGhost: { fontSize: 14, fontWeight: "600" as const, lineHeight: 18 },
-  label: { fontSize: 15, fontWeight: "600" as const, lineHeight: 20 },
-  tab: { fontSize: 11, fontWeight: "600" as const, lineHeight: 14 },
-  rank: { fontSize: 48, fontWeight: "900" as const, lineHeight: 48, letterSpacing: -1.5 },
+  display: { fontSize: 32, fontFamily: F.display, fontWeight: "800" as const, lineHeight: 36, letterSpacing: -0.6 },
+  h1: { fontSize: 26, fontFamily: F.heading, fontWeight: "700" as const, lineHeight: 30, letterSpacing: -0.4 },
+  h2: { fontSize: 20, fontFamily: F.heading, fontWeight: "700" as const, lineHeight: 24, letterSpacing: -0.2 },
+  h3: { fontSize: 16, fontFamily: F.headingSemi, fontWeight: "600" as const, lineHeight: 21 },
+  body: { fontSize: 14, fontFamily: F.body, fontWeight: "400" as const, lineHeight: 22 },
+  bodySmall: { fontSize: 13, fontFamily: F.bodyMedium, fontWeight: "500" as const, lineHeight: 18 },
+  caption: { fontSize: 11, fontFamily: F.bodySemi, fontWeight: "600" as const, lineHeight: 14 },
+  captionSmall: { fontSize: 10, fontFamily: F.bodyMedium, fontWeight: "500" as const, lineHeight: 13 },
+  badge: { fontSize: 9, fontFamily: F.display, fontWeight: "700" as const, lineHeight: 11, letterSpacing: 0.8 },
+  button: { fontSize: 14, fontFamily: F.bodySemi, fontWeight: "600" as const, lineHeight: 18, letterSpacing: 0.1 },
+  buttonGhost: { fontSize: 14, fontFamily: F.bodySemi, fontWeight: "600" as const, lineHeight: 18 },
+  label: { fontSize: 15, fontFamily: F.bodySemi, fontWeight: "600" as const, lineHeight: 20 },
+  tab: { fontSize: 11, fontFamily: F.bodySemi, fontWeight: "600" as const, lineHeight: 14 },
+  rank: { fontSize: 48, fontFamily: F.black, fontWeight: "900" as const, lineHeight: 48, letterSpacing: -1.5 },
 } as const;
 
 export const S = {

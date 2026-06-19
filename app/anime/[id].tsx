@@ -293,7 +293,7 @@ export default function AnimeDetailScreen() {
           </Pressable>
           {titleCopied && (
             <View style={ss.copiedPill}>
-              <Ionicons name="checkmark-circle" size={13} color={C.green} />
+              <Ionicons name="checkmark-circle" size={13} color={C.accent} />
               <Text style={ss.copiedText}>{t.titleCopied}</Text>
             </View>
           )}
@@ -417,8 +417,8 @@ export default function AnimeDetailScreen() {
             <Text style={ss.pickerSub}>{t.saveWhere(data.title)}</Text>
 
             <Pressable style={ss.pickerOption} onPress={() => saveToList("watching")}>
-              <View style={[ss.pickerIcon, { backgroundColor: C.green + "22" }]}>
-                <Ionicons name="play-circle" size={22} color={C.green} />
+              <View style={[ss.pickerIcon, { backgroundColor: C.accent + "22" }]}>
+                <Ionicons name="play-circle" size={22} color={C.accent} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={ss.pickerOptTitle}>{t.currentlyWatching}</Text>
@@ -587,7 +587,7 @@ function EpisodesTab({
 
       {merged && (
         <View style={ss.sourceBadge}>
-          <Ionicons name="checkmark-circle" size={12} color={C.green} />
+          <Ionicons name="checkmark-circle" size={12} color={C.accent} />
           <Text style={ss.sourceBadgeText}>{t.bothSourcesMerged}</Text>
         </View>
       )}
@@ -979,15 +979,15 @@ const ss = StyleSheet.create({
   infoSection: { marginTop: -48, paddingHorizontal: PAD },
   title: {
     color: C.text, fontSize: 24, fontWeight: "800", lineHeight: 30, letterSpacing: -0.4,
-    textAlign: "center", fontFamily: "Outfit_800ExtraBold",
+    textAlign: "center", fontFamily: "Cairo_700Bold",
   },
   copiedPill: {
     flexDirection: "row", alignItems: "center", gap: 5,
     alignSelf: "center", marginTop: 8,
     paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
-    backgroundColor: C.green + "1F",
+    backgroundColor: C.accent + "1F",
   },
-  copiedText: { color: C.green, fontSize: 11, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  copiedText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   quickMeta: {
     flexDirection: "row", flexWrap: "wrap", justifyContent: "center",
     gap: 6, marginTop: 14,
@@ -997,7 +997,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.goldSoft, borderRadius: R.pill,
     paddingHorizontal: 12, paddingVertical: 5,
   },
-  ratingText: { color: C.gold, fontSize: 11, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  ratingText: { color: C.gold, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Actions
   actions: { flexDirection: "row", gap: 10, marginTop: 20 },
@@ -1006,7 +1006,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 15,
     ...ELEVATION_GLOW,
   },
-  btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Outfit_600SemiBold" },
+  btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   btnGlass: {
     width: 52, alignItems: "center", justifyContent: "center",
     borderRadius: R.pill, backgroundColor: C.surfaceGlass,
@@ -1014,8 +1014,8 @@ const ss = StyleSheet.create({
   },
 
   // Synopsis
-  synopsis: { color: C.textSecondary, fontSize: 14, lineHeight: 22, marginTop: 20, fontFamily: "DMSans_400Regular" },
-  readMore: { color: C.accent, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "DMSans_600SemiBold" },
+  synopsis: { color: C.textSecondary, fontSize: 14, lineHeight: 22, marginTop: 20, fontFamily: "Cairo_500Medium" },
+  readMore: { color: C.accent, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "Cairo_600SemiBold" },
 
   // Chips
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 16 },
@@ -1023,7 +1023,7 @@ const ss = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 5, borderRadius: R.pill,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
-  chipText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  chipText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Glow line
   glowLine: {
@@ -1041,7 +1041,7 @@ const ss = StyleSheet.create({
     paddingVertical: 12, borderRadius: R.default,
   },
   tabItemActive: { backgroundColor: C.accentSoft },
-  tabText: { color: C.textMuted, fontSize: 14, fontWeight: "600", fontFamily: "Outfit_600SemiBold" },
+  tabText: { color: C.textMuted, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   tabTextActive: { color: C.accent },
   tabCount: {
     backgroundColor: C.glass, borderRadius: R.pill,
@@ -1066,17 +1066,17 @@ const ss = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
   sortChipActive: { backgroundColor: C.accent, borderColor: "transparent" },
-  sortChipText: { color: C.textSecondary, fontSize: 12, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
+  sortChipText: { color: C.textSecondary, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   sortChipTextActive: { color: C.textOnAccent },
-  epCount: { color: C.textMuted, fontSize: 12, fontFamily: "DMSans_500Medium" },
+  epCount: { color: C.textMuted, fontSize: 12, fontFamily: "Cairo_500Medium" },
 
   sourceBadge: {
     flexDirection: "row", alignItems: "center", gap: 6,
     paddingVertical: 6, paddingHorizontal: 10, marginBottom: 10,
-    backgroundColor: C.green + "1F", borderRadius: R.pill,
+    backgroundColor: C.accent + "1F", borderRadius: R.pill,
     alignSelf: "flex-start",
   },
-  sourceBadgeText: { color: C.green, fontSize: 11, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  sourceBadgeText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 
   // Episodes — grid (2 columns)
   epGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
@@ -1101,14 +1101,14 @@ const ss = StyleSheet.create({
   epCardSourceBadge: {
     position: "absolute", top: 6, right: 6,
     paddingHorizontal: 6, paddingVertical: 2, borderRadius: R.pill,
-    backgroundColor: C.green,
+    backgroundColor: C.accent,
   },
   epCardSourceText: { color: "#000", fontSize: 9, fontWeight: "800", fontFamily: "Outfit_700Bold" },
   hint: {
     color: C.textMuted, fontSize: 11, marginBottom: 10,
-    fontFamily: "DMSans_500Medium", textAlign: "right", writingDirection: "rtl",
+    fontFamily: "Cairo_500Medium", textAlign: "right", writingDirection: "rtl",
   },
-  epCardThumbWatched: { borderColor: C.green },
+  epCardThumbWatched: { borderColor: C.accent },
   watchedDim: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.55)",
@@ -1117,15 +1117,15 @@ const ss = StyleSheet.create({
     position: "absolute", top: 6, right: 6,
     flexDirection: "row", alignItems: "center", gap: 3,
     paddingHorizontal: 7, paddingVertical: 3, borderRadius: R.pill,
-    backgroundColor: C.green,
+    backgroundColor: C.accent,
   },
   watchedBadgeText: {
     color: "#fff", fontSize: 9, fontWeight: "800",
-    fontFamily: "Outfit_700Bold",
+    fontFamily: "Cairo_700Bold",
   },
   epCardTitle: {
     color: C.textSecondary, fontSize: 11, fontWeight: "600",
-    marginTop: 6, fontFamily: "DMSans_600SemiBold",
+    marginTop: 6, fontFamily: "Cairo_600SemiBold",
   },
 
   // Related
@@ -1144,25 +1144,25 @@ const ss = StyleSheet.create({
   },
   relationBadgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "800",
-    fontFamily: "Outfit_700Bold", writingDirection: "rtl",
+    fontFamily: "Cairo_700Bold", writingDirection: "rtl",
   },
   relatedOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(6,7,26,0.72)",
     alignItems: "center", justifyContent: "center", gap: 6,
   },
-  relatedOverlayText: { color: "#fff", fontSize: 10, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
-  relatedTitle: { color: C.text, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "DMSans_600SemiBold" },
-  relatedType: { color: C.textMuted, fontSize: 10, marginTop: 2, fontFamily: "DMSans_500Medium" },
+  relatedOverlayText: { color: "#fff", fontSize: 10, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  relatedTitle: { color: C.text, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "Cairo_600SemiBold" },
+  relatedType: { color: C.textMuted, fontSize: 10, marginTop: 2, fontFamily: "Cairo_500Medium" },
 
   // Info
   infoRow: { flexDirection: "row-reverse", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft },
-  infoLabel: { color: C.textMuted, fontSize: 13, fontWeight: "500", width: 110, fontFamily: "DMSans_500Medium", textAlign: "right" },
-  infoValue: { color: C.textSecondary, fontSize: 13, flex: 1, fontFamily: "DMSans_500Medium", textAlign: "left", writingDirection: "rtl" },
+  infoLabel: { color: C.textMuted, fontSize: 13, fontWeight: "500", width: 110, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  infoValue: { color: C.textSecondary, fontSize: 13, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "left", writingDirection: "rtl" },
 
   // Empty
   emptyTab: { alignItems: "center", paddingVertical: 48, gap: 12 },
-  emptyTabText: { color: C.textMuted, fontSize: 14, fontFamily: "DMSans_400Regular" },
+  emptyTabText: { color: C.textMuted, fontSize: 14, fontFamily: "Cairo_500Medium" },
 
   // Top bar
   topBar: {
@@ -1181,7 +1181,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center", marginBottom: 16,
   },
-  errorMsg: { color: C.textMuted, fontSize: 16, marginBottom: 20, fontFamily: "DMSans_500Medium" },
+  errorMsg: { color: C.textMuted, fontSize: 16, marginBottom: 20, fontFamily: "Cairo_500Medium" },
 
   // List picker modal
   pickerBackdrop: {
@@ -1195,11 +1195,11 @@ const ss = StyleSheet.create({
   },
   pickerTitle: {
     color: C.text, fontSize: 18, fontWeight: "700",
-    fontFamily: "Outfit_700Bold", textAlign: "center",
+    fontFamily: "Cairo_700Bold", textAlign: "center",
   },
   pickerSub: {
     color: C.textMuted, fontSize: 12, textAlign: "center",
-    fontFamily: "DMSans_500Medium", marginBottom: 8,
+    fontFamily: "Cairo_500Medium", marginBottom: 8,
   },
   pickerOption: {
     flexDirection: "row", alignItems: "center", gap: 12,
@@ -1212,15 +1212,15 @@ const ss = StyleSheet.create({
   },
   pickerOptTitle: {
     color: C.text, fontSize: 14, fontWeight: "700",
-    fontFamily: "DMSans_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
   pickerOptSub: {
     color: C.textMuted, fontSize: 11, marginTop: 2,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
   },
   pickerCancel: { paddingVertical: 10, alignItems: "center", marginTop: 4 },
   pickerCancelText: {
     color: C.textMuted, fontSize: 13, fontWeight: "600",
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
   },
 });

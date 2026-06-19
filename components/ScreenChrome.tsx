@@ -15,7 +15,7 @@ import { View, Text, Pressable, StyleSheet, I18nManager } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { C, R, S } from "../lib/theme";
+import { C, R, S, AR } from "../lib/theme";
 
 /* ── Aurora backdrop ─────────────────────────────
  * A single soft glow band pinned to the top of the screen (NOT a full-screen
@@ -124,15 +124,14 @@ const hs = StyleSheet.create({
   iconBtnPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.94 }] },
 
   // flex:1 centered title between the two 42px rails keeps it optically centered.
-  title: { flex: 1, textAlign: "center", color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  title: { flex: 1, textAlign: "center", color: C.text, fontSize: 18, fontFamily: AR.bold },
   rightSlot: { minWidth: ICON_BTN, height: ICON_BTN, alignItems: "flex-end", justifyContent: "center" },
 
   sectionLabel: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", marginBottom: 12 },
   sectionText: {
     color: C.textSecondary,
-    fontSize: 12.5,
-    fontWeight: "700",
-    fontFamily: "Outfit_700Bold",
+    fontSize: 13,
+    fontFamily: AR.bold,
     letterSpacing: 0.3,
     marginRight: 8,
   },

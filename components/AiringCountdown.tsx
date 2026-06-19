@@ -108,7 +108,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: 5 },
   label: {
     color: C.violet, fontSize: 12, fontWeight: "700",
-    fontFamily: "DMSans_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
   segs: { flexDirection: "row", gap: 6 },
   seg: {
@@ -122,7 +122,7 @@ const styles = StyleSheet.create({
   },
   segUnit: {
     color: C.textSecondary, fontSize: 9, fontWeight: "600",
-    marginTop: 1, fontFamily: "DMSans_500Medium",
+    marginTop: 1, fontFamily: "Cairo_500Medium",
   },
 
   liveCard: {
@@ -134,6 +134,6 @@ const styles = StyleSheet.create({
   },
   liveText: {
     color: C.accent, fontSize: 13, fontWeight: "700",
-    fontFamily: "DMSans_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
 });

@@ -226,10 +226,10 @@ const ss = StyleSheet.create({
   },
   heading: {
     color: C.text, fontSize: 26, fontWeight: "700", letterSpacing: -0.4,
-    fontFamily: "Outfit_700Bold",
+    fontFamily: "Cairo_700Bold",
   },
-  countLabel: { color: C.textMuted, fontSize: 11, fontWeight: "600", fontFamily: "DMSans_600SemiBold" },
-  userEmail: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "DMSans_500Medium", maxWidth: 200 },
+  countLabel: { color: C.textMuted, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  userEmail: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "Cairo_500Medium", maxWidth: 200 },
   signOutBtn: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
@@ -268,10 +268,10 @@ const ss = StyleSheet.create({
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
-  emptyTitle: { color: C.textSecondary, fontSize: 16, fontWeight: "600", fontFamily: "Outfit_600SemiBold" },
+  emptyTitle: { color: C.textSecondary, fontSize: 16, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   emptyDesc: {
     color: C.textMuted, fontSize: 13, textAlign: "center", maxWidth: 200,
-    fontFamily: "DMSans_500Medium",
+    fontFamily: "Cairo_500Medium",
   },
 
   // Grid cards
@@ -305,7 +305,7 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: 4,
     borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 4,
   },
-  statusBadgeText: { color: "#fff", fontSize: 10, fontWeight: "700", fontFamily: "DMSans_600SemiBold" },
+  statusBadgeText: { color: "#fff", fontSize: 10, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   removeBtn: {
     position: "absolute", top: 8, right: 8,
     width: 28, height: 28, borderRadius: R.circle,
@@ -315,6 +315,6 @@ const ss = StyleSheet.create({
   cardTitle: {
     color: C.text, fontSize: 13, fontWeight: "600", lineHeight: 17,
     marginTop: 8, width: CARD_W,
-    fontFamily: "Outfit_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
 });

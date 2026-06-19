@@ -19,10 +19,15 @@ export interface UpdateInfo {
  */
 export async function checkForApkUpdate(): Promise<UpdateInfo | null> {
   try {
-    const url =
+    const base =
       Constants.expoConfig?.extra?.versionJsonUrl ??
       "https://raw.githubusercontent.com/techvibedz/anime-mobile/master/version.json";
 
+    // Cache-buster: `cache: "no-cache"` only revalidates the device's own HTTP
+    // cache. A unique query string also forces a MISS on GitHub's raw CDN (which
+    // caches for up to 5 min) and any carrier/proxy in between, so a freshly
+    // bumped version is never hidden behind a stale cached body.
+    const url = `${base}${base.includes("?") ? "&" : "?"}t=${Date.now()}`;
     const resp = await fetch(url, { cache: "no-cache" });
     if (!resp.ok) return null;
     const data = await resp.json();

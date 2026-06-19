@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -9,7 +9,7 @@ import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit
 // Latin fonts under-measure Arabic glyphs and the text spilled out of tight rows
 // (e.g. filter pills overlapping their count badges).
 import { Cairo_500Medium, Cairo_600SemiBold, Cairo_700Bold } from "@expo-google-fonts/cairo";
-import { View, ActivityIndicator, I18nManager, InteractionManager } from "react-native";
+import { View, ActivityIndicator, I18nManager, InteractionManager, AppState } from "react-native";
 import * as Updates from "expo-updates";
 import * as SplashScreen from "expo-splash-screen";
 import { C } from "../lib/theme";
@@ -118,30 +118,49 @@ function AuthGate() {
   }, [ready]);
 
   // Update checks (APK first, then OTA)
-  const [updateChecked, setUpdateChecked] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  // Surface an update prompt at most once per app session, so the foreground
+  // re-check below can't nag the user every time they resume the app.
+  const updateSurfacedRef = useRef(false);
 
   useEffect(() => {
-    if (!ready || updateChecked) return;
-    setUpdateChecked(true);
+    if (!ready) return;
+    let cancelled = false;
 
-    // The update check hits the network and pops a modal — neither is needed
-    // for the first frame, so defer it until the UI is interactive.
+    const runApkCheck = async () => {
+      if (updateSurfacedRef.current) return true;
+      const apk = await checkForApkUpdate();
+      if (!cancelled && apk) {
+        updateSurfacedRef.current = true;
+        setUpdateInfo(apk);
+        return true;
+      }
+      return false;
+    };
+
+    // Initial check — deferred until the UI is interactive (network + modal
+    // aren't needed for the first frame).
     const task = InteractionManager.runAfterInteractions(() => {
       (async () => {
-        const apk = await checkForApkUpdate();
-        if (apk) {
-          setUpdateInfo(apk);
-          return;
-        }
+        if (await runApkCheck()) return;
         const ota = await checkForOtaUpdate();
-        if (ota) {
+        if (!cancelled && ota) {
+          updateSurfacedRef.current = true;
           setUpdateInfo(ota);
         }
       })();
     });
-    return () => task.cancel();
-  }, [ready, updateChecked]);
+
+    // Re-check whenever the app returns to the foreground. The cold-start check
+    // misses two common cases: the user resumed from the background (no cold
+    // start), or version.json was still CDN-cached at launch. Guarded to fire
+    // only until an update has been surfaced once this session.
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") void runApkCheck();
+    });
+
+    return () => { cancelled = true; task.cancel(); sub.remove(); };
+  }, [ready]);
 
   if (!ready) {
     return (

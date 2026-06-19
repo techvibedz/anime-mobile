@@ -1,6 +1,6 @@
 {
     "force_update": false,
-    "version": "1.5.0",
-    "release_notes": "أصلحنا مشكلة ظهور الصفحة الرئيسية فارغة أحيانًا عند فتح التطبيق. وأضفنا خيار «الإبلاغ عن مشكلة» في القائمة الجانبية لإرسال وصف المشكلة مع لقطة شاشة.",
-    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.5.0/pantoufa-1.5.0.apk"
+    "version": "1.5.1",
+    "release_notes": "تحسينات على التصميم: خطّ عربي أوضح في كامل التطبيق، وتباين ألوان أفضل لسهولة القراءة، وإعادة تصميم للقائمة الجانبية وصفحتَي الإعدادات والملف الشخصي.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.5.1/pantoufa-1.5.1.apk"
 }

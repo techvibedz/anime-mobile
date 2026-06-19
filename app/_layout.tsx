@@ -138,9 +138,11 @@ function AuthGate() {
       return false;
     };
 
-    // Initial check — deferred until the UI is interactive (network + modal
-    // aren't needed for the first frame).
-    const task = InteractionManager.runAfterInteractions(() => {
+    // Initial check — deferred ~1.2s past first paint with a plain timer.
+    // (Deliberately NOT InteractionManager.runAfterInteractions: looping skeleton
+    // animations hold interaction handles and would starve that callback so the
+    // modal never appears — the exact bug this replaces.)
+    const timer = setTimeout(() => {
       (async () => {
         if (await runApkCheck()) return;
         const ota = await checkForOtaUpdate();
@@ -149,7 +151,7 @@ function AuthGate() {
           setUpdateInfo(ota);
         }
       })();
-    });
+    }, 1200);
 
     // Re-check whenever the app returns to the foreground. The cold-start check
     // misses two common cases: the user resumed from the background (no cold
@@ -159,7 +161,7 @@ function AuthGate() {
       if (s === "active") void runApkCheck();
     });
 
-    return () => { cancelled = true; task.cancel(); sub.remove(); };
+    return () => { cancelled = true; clearTimeout(timer); sub.remove(); };
   }, [ready]);
 
   if (!ready) {

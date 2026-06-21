@@ -592,7 +592,11 @@ async function probeA3rbTitlePage(slug: string, title: string): Promise<string |
   const tm =
     html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
     html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const got = tm ? tm[1].replace(/\s*[|–]\s*Anime3rb.*$/i, "").trim() : slug.replace(/-+/g, " ");
+  // anime3rb's og:title now uses a plain hyphen separator
+  // ("<name> مترجم - Anime3rb أنمي عرب"), so the strip must include "-" (as the
+  // sibling scrapeAnime3rbTitlePage already does) — otherwise the match score is
+  // computed against the trailing "Anime3rb أنمي عرب" junk.
+  const got = tm ? tm[1].replace(/\s*[|–-]\s*Anime3rb.*$/i, "").trim() : slug.replace(/-+/g, " ");
   return tm_score(title, got) >= 34 ? url : null;
 }
 

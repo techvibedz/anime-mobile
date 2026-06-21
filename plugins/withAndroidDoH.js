@@ -53,7 +53,15 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
     // poisoning, where the system resolver answers with a bogus IP instead of
     // failing). Everything else uses the system resolver first and only falls
     // back to DoH if it fails — so normal traffic keeps its fast path.
-    private val forceDoh = listOf("anime4up", "anime3rb", "witanime")
+    //
+    // "vid3rb" covers anime3rb's first-party video host family
+    // (video.vid3rb.com = the player page that carries the quality sources, and
+    // files-N.vid3rb.com = the streaming CDN). These do NOT contain the string
+    // "anime3rb", so without listing "vid3rb" explicitly they fell through to
+    // the (poisoned) system resolver — anime3rb's title/episode pages resolved
+    // fine over DoH but the player + CDN didn't, so NO Anime3rb server showed up
+    // on blocking ISPs even though the rest of anime3rb worked.
+    private val forceDoh = listOf("anime4up", "anime3rb", "witanime", "vid3rb")
 
     override fun lookup(hostname: String): List<InetAddress> {
         cache[hostname]?.let { return it }

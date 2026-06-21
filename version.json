@@ -1,6 +1,6 @@
 {
     "force_update": false,
-    "version": "1.5.0",
-    "release_notes": "أصلحنا مشكلة ظهور الصفحة الرئيسية فارغة أحيانًا عند فتح التطبيق. وأضفنا خيار «الإبلاغ عن مشكلة» في القائمة الجانبية لإرسال وصف المشكلة مع لقطة شاشة.",
-    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.5.0/pantoufa-1.5.0.apk"
+    "version": "1.5.2",
+    "release_notes": "تظهر الآن سيرفرات Anime3rb لعدد أكبر بكثير من الأنميات، ويُشغَّل سيرفر Anime3rb بجودة 1080p تلقائيًا كأول سيرفر افتراضي.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.5.2/pantoufa-1.5.2.apk"
 }

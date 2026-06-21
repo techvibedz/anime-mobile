@@ -709,6 +709,45 @@ export async function findAnime3rbAnimeUrl(animeTitle: string): Promise<string |
   return resolveAnime3rbTitleUrl(animeTitle).catch(() => null);
 }
 
+// On-device diagnostic: walks the whole anime3rb chain for a title + episode and
+// returns a human-readable trace of each step, so a "no Anime3rb server" report
+// can be pinpointed on the actual phone/network (where it works from a desktop).
+// Surfaced on the /scraper-debug screen.
+export async function diagnoseAnime3rb(title: string, epNum: number): Promise<string> {
+  const log: string[] = [];
+  const stamp = (label: string, v: any) => log.push(`${label}: ${v}`);
+  try {
+    const t0 = Date.now();
+    const titleUrl = await resolveAnime3rbTitleUrl(title).catch((e) => `ERR ${e?.message || e}`);
+    stamp(`1) resolve title (${Date.now() - t0}ms)`, titleUrl || "NULL — title not found on anime3rb");
+    if (!titleUrl || typeof titleUrl !== "string" || !/^https?:/.test(titleUrl)) {
+      log.push("→ STOP: title resolution failed (slug guess + catalog + Jikan bridge all missed).");
+      return log.join("\n");
+    }
+    const slug = titleUrl.replace(/\/+$/, "").split("/").pop();
+    const episodeUrl = `https://anime3rb.com/episode/${slug}/${epNum}`;
+    stamp("2) episode url", episodeUrl);
+    const t1 = Date.now();
+    const servers = await scrapeAnime3rbEpisodeServers(episodeUrl).catch((e) => {
+      log.push(`   scrape ERR: ${e?.message || e}`);
+      return [] as RawServer[];
+    });
+    stamp(`3) servers built (${Date.now() - t1}ms)`, servers.length);
+    servers.forEach((s) => log.push(`   • ${s.name} [${s.provider}] ${s.iframeUrl.slice(0, 64)}`));
+    if (servers.length === 0) {
+      log.push("→ STOP: episode page reachable? player url / video_sources missing (CF block or wrong episode).");
+      return log.join("\n");
+    }
+    const t2 = Date.now();
+    const r = await resolveVideo(servers[0].iframeUrl, servers[0].provider).catch((e) => ({ success: false, error: e?.message || String(e) }));
+    stamp(`4) extract play url (${Date.now() - t2}ms)`, r.success ? (r as any).data?.videoUrl?.slice(0, 90) : `FAIL — ${(r as any).error}`);
+    log.push(r.success ? "→ OK: full chain works on this device/network." : "→ extraction failed (player page or CDN unreachable).");
+  } catch (e: any) {
+    log.push(`FATAL: ${e?.message || String(e)}`);
+  }
+  return log.join("\n");
+}
+
 // anime3rb's full episode list for an anime, for the detail page's cross-source
 // union — so episodes missing from witanime/anime4up still appear (and stay
 // playable, since each href is a real anime3rb episode URL). Cached 6h; a miss

@@ -714,6 +714,15 @@ export async function searchAnime3rbDirect(title: string): Promise<string | null
   return null;
 }
 
+// The EXACT, complete slug guesses for a title (the `full` variants only). The
+// watch path uses these to build an episode URL DIRECTLY and skip a separate
+// title-page fetch — the episode page itself proves the slug. Reduced/season
+// variants are intentionally excluded here (they could land on a different
+// anime, which only the title-score guard catches).
+export function anime3rbExactSlugs(title: string): string[] {
+  return a3rbSlugVariants(title).filter((v) => v.full).map((v) => v.slug);
+}
+
 /* ── anime3rb catalog (sitemap) matching ── */
 // /search sits behind a Cloudflare managed challenge, so free-text search is
 // effectively dead. But anime3rb publishes a daily titles sitemap (~6300

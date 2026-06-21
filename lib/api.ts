@@ -27,6 +27,7 @@ import {
   searchAnime3rbCatalog,
   scrapeAnime3rbEpisodeServers,
   scrapeAnime3rbTitlePage,
+  anime3rbExactSlugs,
   extractVid3rb,
   extractMp4upload,
 } from "./scraper/direct";
@@ -620,13 +621,30 @@ const A3RB_TITLE_PREFIX = "@a3rb_title_v1:";
 // call for transient resilience).
 const a3rbBridgeTried = new Set<string>();
 
-async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | null> {
-  if (!animeTitle) return null;
+// Cache-only lookup of an anime's resolved anime3rb title URL — no network.
+// Lets the watch path use a known slug instantly and otherwise fall through to
+// the fast direct-slug probe before paying for the full resolver.
+async function peekAnime3rbTitleUrl(animeTitle: string): Promise<string | null> {
   const key = animeTitle.toLowerCase().trim();
   const hit = a3rbTitleCache.get(key);
   if (hit && Date.now() - hit.ts < UP4_CACHE_TTL) return hit.url;
   const stored = await readCache<string>(A3RB_TITLE_PREFIX + key, UP4_CACHE_TTL);
   if (stored) { a3rbTitleCache.set(key, { url: stored, ts: Date.now() }); return stored; }
+  return null;
+}
+
+// Persist a confirmed title URL so later episodes of the same anime are instant.
+function rememberAnime3rbTitleUrl(animeTitle: string, url: string) {
+  const key = animeTitle.toLowerCase().trim();
+  a3rbTitleCache.set(key, { url, ts: Date.now() });
+  void writeCache(A3RB_TITLE_PREFIX + key, url);
+}
+
+async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | null> {
+  if (!animeTitle) return null;
+  const key = animeTitle.toLowerCase().trim();
+  const cached = await peekAnime3rbTitleUrl(animeTitle);
+  if (cached) return cached;
   // Slug guessing first: anime3rb's slugs derive cleanly from romaji titles,
   // so this lands in one or two cheap GETs for the vast majority of anime.
   let url = await searchAnime3rbDirect(animeTitle).catch(() => null);
@@ -689,12 +707,41 @@ async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | nul
 // the watch screen's retry loop decides whether to try again.
 export async function fetchAnime3rbServers(animeTitle: string, epNumber: number): Promise<RawServer[]> {
   if (!animeTitle || epNumber == null) return [];
+  const epUrlFor = (slug: string) => `https://anime3rb.com/episode/${slug}/${epNumber}`;
+
+  // 1) Known slug (cache hit) — one episode-page fetch, straight to servers.
+  const cachedTitle = await peekAnime3rbTitleUrl(animeTitle);
+  if (cachedTitle) {
+    const slug = cachedTitle.replace(/\/+$/, "").split("/").pop();
+    if (slug) {
+      const servers = await scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]);
+      if (servers.length) return servers;
+      // Cached slug yielded nothing (episode not on anime3rb yet, or stale
+      // mapping) — fall through to the guess/resolve paths below.
+    }
+  }
+
+  // 2) Fast direct-slug path: try the EXACT slug guesses' episode URLs directly.
+  // The episode page itself proves the slug (it carries video_url only for the
+  // right anime), so this skips a whole separate title-page fetch — which on
+  // device is frequently a slow WebView Cloudflare render. Wrong guesses 404 on
+  // a cheap raw GET (no WebView escalation), so the overhead is tiny. The first
+  // slug that produces servers is remembered so later episodes are instant.
+  for (const slug of anime3rbExactSlugs(animeTitle)) {
+    const servers = await scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]);
+    if (servers.length) {
+      rememberAnime3rbTitleUrl(animeTitle, `https://anime3rb.com/titles/${slug}`);
+      return servers;
+    }
+  }
+
+  // 3) Full resolver (catalog sitemap + Jikan cross-language bridge) for anime
+  // whose slug can't be guessed. Verifies the title page, then builds the URL.
   const titleUrl = await resolveAnime3rbTitleUrl(animeTitle);
   if (!titleUrl) return [];
   const slug = titleUrl.replace(/\/+$/, "").split("/").pop();
   if (!slug) return [];
-  const episodeUrl = `https://anime3rb.com/episode/${slug}/${epNumber}`;
-  return scrapeAnime3rbEpisodeServers(episodeUrl).catch(() => [] as RawServer[]);
+  return scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]);
 }
 
 // Servers for a KNOWN anime3rb episode URL (no title/number resolution needed).

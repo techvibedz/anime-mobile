@@ -1,6 +1,6 @@
 {
     "force_update": false,
-    "version": "1.5.3",
-    "release_notes": "إصلاح مهم: أصبحت سيرفرات Anime3rb تظهر وتعمل الآن على الشبكات ومزوّدي الإنترنت الذين كانوا يمنعونها (إصلاح على مستوى DNS)، مع التشغيل التلقائي بجودة 1080p داخل المشغّل المدمج.",
-    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.5.3/pantoufa-1.5.3.apk"
+    "version": "1.5.4",
+    "release_notes": "إصلاح إضافي لسيرفرات Anime3rb: تُجلب الآن صفحات Anime3rb عبر المتصفّح المدمج عندما يحجبها مزوّد الإنترنت (Cloudflare)، فتظهر السيرفرات وتُشغَّل تلقائيًا بجودة 1080p داخل المشغّل المدمج.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v1.5.4/pantoufa-1.5.4.apk"
 }

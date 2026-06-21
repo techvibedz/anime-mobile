@@ -11,6 +11,8 @@
 // electron/main.ts) with window.pantoufa.fetchHtml replaced by fetchHtml().
 
 import type { RawServer } from "./index";
+import { enqueue } from "./bus";
+import { EXTRACT_RENDERED_HTML } from "./scripts";
 
 const UP4_BASE = "https://w1.anime4up.rest";
 const A3RB_BASE = "https://anime3rb.com";
@@ -55,6 +57,91 @@ export async function fetchHtml(url: string, referer?: string): Promise<string |
     await new Promise((r) => setTimeout(r, 600 * attempt));
   }
   return null;
+}
+
+// ── anime3rb / vid3rb: CF-resilient HTML fetch ───────────────────────────────
+// anime3rb is the ONLY source scraped over raw fetch instead of the hidden
+// WebView. When Cloudflare challenges the on-device OkHttp client (its TLS/HTTP
+// fingerprint differs from a desktop browser, so the residential-IP allowance
+// isn't enough), the raw GET comes back as a 403/503 challenge page with NO real
+// content — so the episode page yields no video_url and the player page yields
+// no video_sources, and "no Anime3rb server shows up". The rest of the app dodges
+// this by loading pages in a real-browser WebView, which solves the challenge
+// naturally (see ScraperHost's 403/503 handling). These helpers give the
+// anime3rb path the same escape hatch: try the fast raw GET first, and on a
+// block/challenge fall through to a one-shot WebView render of the same URL.
+
+// Raw GET that surfaces the final HTTP status (so callers can tell a genuine
+// 404 "slug doesn't exist" apart from a 403/503 Cloudflare block — only the
+// latter is worth escalating to the WebView).
+async function rawGetA3rb(url: string): Promise<{ html: string | null; status: number }> {
+  const ATTEMPTS = 2;
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 9000);
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": BROWSER_UA,
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "ar,en;q=0.9",
+          Referer: A3RB_BASE + "/",
+        },
+      });
+      clearTimeout(t);
+      lastStatus = res.status;
+      if (res.ok) return { html: await res.text(), status: res.status };
+      // 404/410 won't change on retry — bail immediately so a wrong slug probe
+      // stays cheap and does NOT escalate to a WebView load.
+      if (res.status === 404 || res.status === 410) return { html: null, status: res.status };
+    } catch {
+      clearTimeout(t);
+    }
+    if (attempt < ATTEMPTS) await new Promise((r) => setTimeout(r, 500 * attempt));
+  }
+  return { html: null, status: lastStatus };
+}
+
+function looksLikeCfChallenge(html: string): boolean {
+  return /just a moment|cf-browser-verification|challenge-platform|cf_chl_opt|id="cf-please-wait"|Checking your browser|Attention Required/i.test(
+    html,
+  );
+}
+
+// One-shot WebView render: loads the URL in the hidden real-browser pool and
+// returns its fully-rendered HTML once `marker` appears (CF solved). Returns
+// null on timeout/error so callers degrade gracefully.
+async function fetchHtmlViaWebView(url: string, marker: string, priority = false, timeoutMs = 25000): Promise<string | null> {
+  try {
+    const r = (await enqueue({
+      url,
+      injectAfter: EXTRACT_RENDERED_HTML(marker),
+      timeoutMs,
+      priority,
+    })) as { html?: string } | null;
+    const html = r?.html || null;
+    return html && !looksLikeCfChallenge(html) ? html : null;
+  } catch {
+    return null;
+  }
+}
+
+// anime3rb/vid3rb HTML with automatic WebView escalation. `marker` is a
+// substring that proves the real content rendered (e.g. "video_url" on an
+// episode page, "video_sources" on a vid3rb player page, "og:title" on a title
+// page). Fast path: a raw GET whose body carries the marker and isn't a
+// challenge. Otherwise — block, challenge, timeout, or marker-missing — render
+// it in the WebView. A clean 404 short-circuits to null (genuine miss).
+async function fetchAnime3rbHtml(url: string, marker: string, priority = false): Promise<string | null> {
+  const { html, status } = await rawGetA3rb(url);
+  if (html && !looksLikeCfChallenge(html) && (!marker || html.indexOf(marker) >= 0)) return html;
+  if (status === 404 || status === 410) return null;
+  const viaWv = await fetchHtmlViaWebView(url, marker, priority);
+  if (viaWv) return viaWv;
+  // Last resort: hand back the raw body (may still parse) rather than nothing.
+  return html;
 }
 
 /* ── witanime: direct static-HTML listings & search ──
@@ -587,7 +674,7 @@ function a3rbSlugVariants(title: string): string[] {
 // coincidental slug can't hijack the match. Returns the page URL or null.
 async function probeA3rbTitlePage(slug: string, title: string): Promise<string | null> {
   const url = `${A3RB_BASE}/titles/${slug}`;
-  const html = await fetchHtml(url, A3RB_BASE + "/");
+  const html = await fetchAnime3rbHtml(url, "og:title");
   if (!html) return null; // 404 / fetch failure
   const tm =
     html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
@@ -825,7 +912,7 @@ function parseA3rbSynopsis(html: string): string {
 // Scrape a full anime3rb anime page (detail + episodes). Returns null on a
 // fetch/parse failure so callers degrade gracefully to the other sources.
 export async function scrapeAnime3rbTitlePage(titleUrl: string): Promise<A3rbDetail | null> {
-  const html = await fetchHtml(titleUrl, A3RB_BASE + "/");
+  const html = await fetchAnime3rbHtml(titleUrl, "og:title");
   if (!html) return null;
   const slug = decodeURIComponent(titleUrl.replace(/\/+$/, "").split("/").pop() || "");
   if (!slug) return null;
@@ -868,7 +955,7 @@ export async function scrapeAnime3rbTitlePage(titleUrl: string): Promise<A3rbDet
 // tokenized .mp4 qualities from — so the native player path works end-to-end
 // with two plain GETs.
 export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<RawServer[]> {
-  const html = await fetchHtml(episodeUrl, A3RB_BASE + "/");
+  const html = await fetchAnime3rbHtml(episodeUrl, "video_url");
   if (!html) return [];
   // The snapshot lives inside an HTML attribute, so quotes arrive as &quot;
   // and the URL as JSON-escaped https:\/\/… with &amp; between query params.
@@ -1013,7 +1100,7 @@ function parseVid3rbSources(html: string): { src: string; res: number }[] {
 // 480]) from its player page. Used to expose each quality as its own native
 // server. Returns [] on any fetch/parse miss so the caller can degrade.
 export async function listVid3rbResolutions(playerUrl: string): Promise<number[]> {
-  const html = await fetchHtml(playerUrl, A3RB_BASE + "/");
+  const html = await fetchAnime3rbHtml(playerUrl, "video_sources");
   if (!html) return [];
   return parseVid3rbSources(html).map((s) => s.res).filter((r) => r > 0);
 }
@@ -1031,7 +1118,7 @@ export async function extractVid3rb(playerUrlWithHint: string): Promise<{ url: s
   }
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));
-    const html = await fetchHtml(playerUrl, A3RB_BASE + "/");
+    const html = await fetchAnime3rbHtml(playerUrl, "video_sources", true);
     if (!html) continue;
     const free = parseVid3rbSources(html);
     if (free.length === 0) return null;

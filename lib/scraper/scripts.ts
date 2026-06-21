@@ -451,6 +451,32 @@ _waitFor(
 })();true;`;
 
 // ──────────────────────────────────────────────────────────────
+// RENDERED HTML — load a page in the real-browser WebView and return its fully
+// rendered HTML once a marker substring shows up (or after a bounded wait).
+// anime3rb / vid3rb pages are pulled this way when their raw-fetch path is
+// Cloudflare-challenged on-device: OkHttp (RN's fetch) receives the challenge
+// page instead of content, but the WebView solves the challenge like every
+// other source, so the real HTML (carrying video_url / video_sources) comes
+// back. Best-effort: returns whatever HTML exists even if the marker never
+// appears, so the caller can still try to parse it.
+// ──────────────────────────────────────────────────────────────
+export const EXTRACT_RENDERED_HTML = (marker: string) => `(function(){${HELPERS}
+var MARKER = ${JSON.stringify(marker || "")};
+_waitFor(
+  function(){
+    var html = document.documentElement ? document.documentElement.innerHTML : '';
+    if (MARKER) return html.indexOf(MARKER) >= 0;
+    return document.readyState === 'complete';
+  },
+  function(){
+    try { _send('result', { data: { html: document.documentElement.outerHTML } }); }
+    catch (e) { _send('error', { message: String(e) }); }
+  },
+  20000, 350
+);
+})();true;`;
+
+// ──────────────────────────────────────────────────────────────
 // RECENT — paginated episode archive (.anime-card-container with episode hrefs)
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_RECENT = `(function(){${HELPERS}

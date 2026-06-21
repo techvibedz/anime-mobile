@@ -873,12 +873,28 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
     html.match(/"video_url"\s*:\s*"(https:[\s\S]*?)"/)?.[1] ||
     null;
   if (!raw) return [];
-  const url = raw.replace(/\\\//g, "/").replace(/&amp;/g, "&");
+  const playerUrl = raw.replace(/\\\//g, "/").replace(/&amp;/g, "&");
   try {
-    const h = new URL(url).hostname.toLowerCase();
+    const h = new URL(playerUrl).hostname.toLowerCase();
     if (!h || h.indexOf(".") < 0) return [];
   } catch { return []; }
-  return [{ id: "0", name: "Anime3rb", iframeUrl: url, provider: "vid3rb" }];
+  // Expose each free quality as its own native server ("Anime3rb 1080p",
+  // "Anime3rb 720p", …), HIGHEST first so 1080p is the default that plays. The
+  // quality is encoded in a `#vid3rb=<res>` fragment; extractVid3rb re-reads
+  // the player page and re-resolves the CDN redirect for THAT quality at play
+  // time, so tokens are always fresh and every quality plays directly in the
+  // custom player. If the player page can't be enumerated, fall back to a
+  // single server that plays the highest quality.
+  const resolutions = await listVid3rbResolutions(playerUrl);
+  if (resolutions.length === 0) {
+    return [{ id: "a3rb", name: "Anime3rb", iframeUrl: playerUrl, provider: "vid3rb" }];
+  }
+  return resolutions.map((res) => ({
+    id: `a3rb_${res}`,
+    name: `Anime3rb ${res}p`,
+    iframeUrl: `${playerUrl}#vid3rb=${res}`,
+    provider: "vid3rb",
+  }));
 }
 
 // anime3rb's first-party video host (video.vid3rb.com). The /player/<uuid>
@@ -923,23 +939,121 @@ export async function extractMp4upload(iframeUrl: string): Promise<{ url: string
   return null;
 }
 
-export async function extractVid3rb(playerUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+// Resolve vid3rb's `/video` redirect to the FINAL files-N CDN URL, validating
+// that the edge actually serves bytes.
+//
+// A source src is `https://video.vid3rb.com/video/<uuid>?speed&token&expires`,
+// which 302-redirects to a per-request signed `https://files-N.vid3rb.com/…mp4?
+// e&t&noip=yes` URL. That intermediate endpoint INTERMITTENTLY routes to a hung
+// edge (measured live: ~1 in 6 requests never returns the files response and
+// just hangs) — and the native player follows the redirect only ONCE with no
+// retry, so it gets stuck buffering forever ("anime3rb not loading"). The final
+// files-N URL itself is reliable (noip=yes, ~4h expiry, answers Range), so we
+// follow + validate the redirect HERE and retry until an edge serves, then hand
+// the player the resolved direct URL. RN's fetch follows redirects and exposes
+// the final URL as `res.url`.
+async function resolveVid3rbCdnUrl(src: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 400 * attempt));
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(src, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": BROWSER_UA,
+          Referer: A3RB_BASE + "/",
+          // Tiny range: confirms the resolved edge answers with a body (a hung
+          // edge never gets here — the fetch aborts on the 8s timeout). Reading
+          // the 2-byte body inside the timeout window catches a header-then-
+          // hang edge too.
+          Range: "bytes=0-1",
+        },
+      });
+      const finalUrl = res.url || src;
+      const okStatus = res.status === 206 || res.status === 200;
+      if (okStatus && /vid3rb\.com/i.test(finalUrl)) {
+        const buf = await res.arrayBuffer();
+        clearTimeout(t);
+        if (buf.byteLength > 0) return finalUrl;
+        continue;
+      }
+      clearTimeout(t);
+    } catch {
+      clearTimeout(t);
+    }
+  }
+  return null;
+}
+
+// Parse the non-premium playable sources from a vid3rb player page, highest
+// resolution first. The page declares `video_sources` twice — an empty [] then
+// the real array — so match the non-empty form (starts with `[{`); accept a
+// trailing `;` or none (markup drift). The match is valid JSON as-is (URLs use
+// JSON's escaped https:\/\/… slashes). Premium-gated tiers ship an empty src
+// and are dropped.
+function parseVid3rbSources(html: string): { src: string; res: number }[] {
+  const m =
+    html.match(/video_sources\s*=\s*(\[\{[\s\S]*?\}\])\s*;/) ||
+    html.match(/video_sources\s*=\s*(\[\{[\s\S]*?\}\])/);
+  if (!m) return [];
+  let sources: { src?: string; res?: string; label?: string; premium?: boolean }[] = [];
+  try { sources = JSON.parse(m[1]); } catch { return []; }
+  return sources
+    .filter((s) => s.src && /^https?:\/\//.test(s.src) && !s.premium)
+    .map((s) => ({ src: s.src as string, res: parseInt(s.res || "0", 10) || 0 }))
+    .sort((a, b) => b.res - a.res); // highest resolution first (1080p preferred)
+}
+
+// List the available free resolutions for an anime3rb episode (e.g. [1080, 720,
+// 480]) from its player page. Used to expose each quality as its own native
+// server. Returns [] on any fetch/parse miss so the caller can degrade.
+export async function listVid3rbResolutions(playerUrl: string): Promise<number[]> {
+  const html = await fetchHtml(playerUrl, A3RB_BASE + "/");
+  if (!html) return [];
+  return parseVid3rbSources(html).map((s) => s.res).filter((r) => r > 0);
+}
+
+export async function extractVid3rb(playerUrlWithHint: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  // An optional `#vid3rb=<res>` fragment selects a specific quality (the
+  // multi-quality server list encodes it there); without one we take the
+  // highest. The fragment never reaches the network — strip it before the GET.
+  let desiredRes = 0;
+  let playerUrl = playerUrlWithHint;
+  const hashIdx = playerUrlWithHint.indexOf("#vid3rb=");
+  if (hashIdx >= 0) {
+    desiredRes = parseInt(playerUrlWithHint.slice(hashIdx + "#vid3rb=".length), 10) || 0;
+    playerUrl = playerUrlWithHint.slice(0, hashIdx);
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));
     const html = await fetchHtml(playerUrl, A3RB_BASE + "/");
     if (!html) continue;
-    // The page declares `video_sources` twice — an empty [] then the real
-    // array — so match the non-empty form. The match is valid JSON as-is
-    // (URLs use JSON's escaped https:\/\/… slashes).
-    const m = html.match(/video_sources\s*=\s*(\[\{[\s\S]*?\}\])\s*;/);
-    if (!m) continue;
-    let sources: { src?: string; res?: string; label?: string; premium?: boolean }[] = [];
-    try { sources = JSON.parse(m[1]); } catch { continue; }
-    const best = sources
-      .filter((s) => s.src && /^https?:\/\//.test(s.src) && !s.premium)
-      .sort((a, b) => (parseInt(b.res || "0", 10) || 0) - (parseInt(a.res || "0", 10) || 0))[0];
-    if (!best?.src) return null;
-    return { url: best.src, type: /\.m3u8(\?|$)/i.test(best.src) ? "hls" : "mp4" };
+    const free = parseVid3rbSources(html);
+    if (free.length === 0) return null;
+    // Put the requested quality first (exact, else the closest at-or-below it,
+    // else the highest). The rest stay as fallbacks for the rare case where the
+    // chosen tier's edge can't be coaxed into serving at all.
+    let ordered = free;
+    if (desiredRes > 0) {
+      const pick =
+        free.find((s) => s.res === desiredRes) ||
+        free.find((s) => s.res > 0 && s.res <= desiredRes) ||
+        free[0];
+      ordered = [pick, ...free.filter((s) => s !== pick)];
+    }
+    // Hand the native player the RESOLVED files-N CDN URL. The reliability
+    // problem was never the resolution — it was vid3rb's unretried redirect hop
+    // (see resolveVid3rbCdnUrl) — so resolving it here makes every quality,
+    // 1080p included, actually play.
+    for (const q of ordered) {
+      const cdn = await resolveVid3rbCdnUrl(q.src);
+      if (cdn) return { url: cdn, type: /\.m3u8(\?|$)/i.test(cdn) ? "hls" : "mp4" };
+    }
+    // No edge could be validated (network down?) — return the chosen src and
+    // let the native player / self-heal retry, rather than failing the server.
+    const top = ordered[0];
+    return { url: top.src, type: /\.m3u8(\?|$)/i.test(top.src) ? "hls" : "mp4" };
   }
   return null;
 }

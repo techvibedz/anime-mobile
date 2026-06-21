@@ -47,6 +47,7 @@ import { ScraperHost } from "../lib/scraper";
 import { initAds } from "../lib/ads";
 import { SidebarProvider } from "../components/Sidebar";
 import { setupNotifications, requestNotificationPermission, addNotificationTapListener } from "../lib/push";
+import { reportRecentEpisodes } from "../lib/notifications";
 import { startPresence, stopPresence } from "../lib/presence";
 import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
@@ -88,6 +89,21 @@ function AuthGate() {
     }
   }, [user?.id]);
 
+  // Keep the shared new-episode feed fresh from ANY screen: when signed in,
+  // report recently-available episodes on mount AND whenever the app returns to
+  // the foreground (throttled inside reportRecentEpisodes). Previously this only
+  // ran on the home tab mount, so a user who opened straight into the player —
+  // or just kept the app backgrounded — never contributed/triggered detection.
+  // The feed is global, so any one foregrounded device keeps push fresh for all.
+  useEffect(() => {
+    if (!user) return;
+    reportRecentEpisodes().catch(() => {});
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") reportRecentEpisodes().catch(() => {});
+    });
+    return () => sub.remove();
+  }, [user?.id]);
+
   // Notifications: configure channel + request permission once at startup
   // (only if the user hasn't disabled them), and route taps to the episode.
   useEffect(() => {
@@ -122,6 +138,24 @@ function AuthGate() {
   // Surface an update prompt at most once per app session, so the foreground
   // re-check below can't nag the user every time they resume the app.
   const updateSurfacedRef = useRef(false);
+
+  // Belt-and-suspenders for the background OTA download. With
+  // updates.checkAutomatically = "ON_LOAD" (app.json), expo-updates fetches a
+  // new bundle in the BACKGROUND and only swaps it in on the next *cold* start —
+  // which a warm resume from the recents list never triggers, so users report
+  // "I closed and reopened and still didn't get the update". The imperative
+  // checkForOtaUpdate() below also misses this window: once ON_LOAD has staged
+  // the update, checkForUpdateAsync() reports isAvailable:false. The
+  // useUpdates() hook flips isUpdatePending → true the instant a downloaded
+  // update is staged, so prompt for the restart right then — no cold start
+  // needed; "Restart now" calls Updates.reloadAsync() and applies it.
+  const { isUpdatePending } = Updates.useUpdates();
+  useEffect(() => {
+    if (isUpdatePending && !updateSurfacedRef.current) {
+      updateSurfacedRef.current = true;
+      setUpdateInfo({ type: "ota" });
+    }
+  }, [isUpdatePending]);
 
   useEffect(() => {
     if (!ready) return;
@@ -197,6 +231,7 @@ function AuthGate() {
         />
         <Stack.Screen name="see-all/[section]" />
         <Stack.Screen name="notifications" />
+        <Stack.Screen name="schedule" />
         <Stack.Screen name="profile" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="report" />

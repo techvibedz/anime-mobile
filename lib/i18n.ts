@@ -236,6 +236,21 @@ export const ar = {
   testNotifFailed: "تعذّر إرسال الإشعار التجريبي. تأكّد من تفعيل الإشعارات وتسجيل الدخول.",
   testNotifSignedOut: "سجّل الدخول أولًا لإرسال إشعار تجريبي.",
 
+  // Schedule / airing calendar
+  scheduleTitle: "جدول الحلقات",
+  scheduleToday: "اليوم",
+  scheduleAiringAt: (time: string) => `الساعة ${time}`,
+  scheduleEpisode: (n: number) => `الحلقة ${n}`,
+  scheduleCount: (n: number) => `${n} ${n === 1 ? "حلقة" : "حلقات"}`,
+  scheduleChecking: "نتحقّق من توفّر الحلقات في مصادرنا…",
+  scheduleEmptyDay: "لا حلقات في هذا اليوم",
+  scheduleEmptyDaySub: "لا توجد حلقات مجدولة لهذا اليوم. جرّب يومًا آخر.",
+  scheduleError: "تعذّر تحميل الجدول",
+  scheduleErrorSub: "تحقّق من اتصالك بالإنترنت وحاول مرة أخرى.",
+  // Sunday-first to match Date.getDay() (0 = Sunday).
+  weekdaysShort: ["أحد", "إثنين", "ثلاثاء", "أربعاء", "خميس", "جمعة", "سبت"] as const,
+  weekdaysLong: ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"] as const,
+
   // Live users (admin only)
   liveUsersTitle: "المتصلون الآن",
   liveUsersSub: "المستخدمون الذين يستعملون التطبيق مباشرةً في هذه اللحظة.",

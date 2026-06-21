@@ -220,8 +220,50 @@ Deno.serve(async (req) => {
     .limit(500);
   const queue = (queueRows ?? []) as QueueRow[];
 
+  // ── Flood guard: silently seed brand-new users ───────────────────
+  // A user with NO notification history (no notified_episodes rows) is brand new
+  // — e.g. a freshly signed-in account or a device that just registered its push
+  // token. Without a guard, the loop below would push the ENTIRE current queue
+  // backlog (up to QUEUE_TTL_HOURS old) to them at once: a flood of "already
+  // sent" episodes. So we record every current queue episode as already-notified
+  // for them WITHOUT pushing, then skip them this run. They only start receiving
+  // pushes for episodes that appear AFTER this point. This mirrors the in-app
+  // "seed silently on first run" flood-guard in lib/notifications.ts.
+  const relevantUserIds = new Set<string>([
+    ...allTokensByUser.keys(),
+    ...mylistTokensByUser.keys(),
+  ]);
+  const seededUsers = new Set<string>();
+  if (relevantUserIds.size > 0) {
+    const { data: seenRows } = await supabase
+      .from("notified_episodes")
+      .select("user_id")
+      .in("user_id", [...relevantUserIds]);
+    for (const r of (seenRows ?? []) as { user_id: string }[]) seededUsers.add(r.user_id);
+  }
+
+  if (queue.length > 0) {
+    const seedRows: { user_id: string; anime_key: string; episode_number: number }[] = [];
+    for (const userId of relevantUserIds) {
+      if (seededUsers.has(userId)) continue; // already has history → not brand new
+      for (const q of queue) {
+        seedRows.push({ user_id: userId, anime_key: q.anime_key, episode_number: q.episode_number });
+      }
+    }
+    // Bulk-record the backlog as already-seen (idempotent), in chunks.
+    for (let i = 0; i < seedRows.length; i += 500) {
+      await supabase
+        .from("notified_episodes")
+        .upsert(seedRows.slice(i, i + 500), {
+          onConflict: "user_id,anime_key,episode_number",
+          ignoreDuplicates: true,
+        });
+    }
+  }
+
   const messages: PushMessage[] = [];
   let pushedCount = 0;
+  const seededCount = relevantUserIds.size - seededUsers.size;
 
   // Claim (user, anime_key, episode) for dedup; true the first time only.
   async function claimEpisode(userId: string, animeKey: string, episode: number): Promise<boolean> {
@@ -244,8 +286,9 @@ Deno.serve(async (req) => {
   for (const q of queue) {
     const normTitle = norm(q.anime_title);
 
-    // "all" users → everyone.
+    // "all" users → everyone (except users seeded silently this run).
     for (const [userId, tokens] of allTokensByUser) {
+      if (!seededUsers.has(userId)) continue; // brand new → seeded silently above
       if (!(await claimEpisode(userId, q.anime_key, q.episode_number))) continue;
       for (const to of tokens) {
         messages.push(buildMessage(to, q));
@@ -255,6 +298,7 @@ Deno.serve(async (req) => {
 
     // "mylist" users → only if this anime is in their favorites.
     for (const [userId, tokens] of mylistTokensByUser) {
+      if (!seededUsers.has(userId)) continue; // brand new → seeded silently above
       const hrefs = favHrefsByUser.get(userId);
       const titles = favTitlesByUser.get(userId);
       const matches =
@@ -283,6 +327,7 @@ Deno.serve(async (req) => {
       queued: queue.length,
       allUsers: allTokensByUser.size,
       mylistUsers: mylistTokensByUser.size,
+      seededUsers: seededCount,
       pushed: pushedCount,
     }),
     { headers: { "Content-Type": "application/json" } },

@@ -31,6 +31,13 @@ const QUEUE_SEEN_KEY = "@queue_seen_v1"; // scope-independent keys already repor
 const MAX_STORED = 60;
 const MAX_SEEN_KEYS = 1000; // cap the dedup set (recent feed ages old keys out anyway)
 
+// Detection now runs on every app-foreground (see app/_layout.tsx), not just on
+// the home tab mount, so a user flicking in/out of the app would otherwise fire
+// redundant feed scrapes. Throttle to one report per device per window — the
+// feed is shared/global and the cron is the backstop, so this is plenty.
+const REPORT_THROTTLE_MS = 10 * 60 * 1000; // 10 min
+let lastReportAt = 0;
+
 export interface AppNotification {
   /** Stable id: `${animeHref}#${episodeNumber}` so the same episode never duplicates. */
   id: string;
@@ -329,12 +336,17 @@ interface QueueRow {
  *
  * Returns the number of NEW episodes uploaded (0 on any failure / no-op).
  */
-export async function reportRecentEpisodes(): Promise<number> {
+export async function reportRecentEpisodes(opts?: { force?: boolean }): Promise<number> {
   try {
     if (!isSupabaseConfigured) return 0;
+    if (!opts?.force && Date.now() - lastReportAt < REPORT_THROTTLE_MS) return 0;
+    // Mark immediately (optimistic) so two near-simultaneous triggers — e.g. the
+    // home mount and a cold-start app-foreground event — don't both scrape.
+    lastReportAt = Date.now();
     // Only signed-in users can write the shared feed (RLS); skip otherwise.
     const { data: auth } = await supabase.auth.getSession();
-    if (!auth?.session?.user?.id) return 0;
+    // Signed out → don't burn the throttle; let the next attempt try again.
+    if (!auth?.session?.user?.id) { lastReportAt = 0; return 0; }
 
     const episodes = await fetchRecentFeed();
     if (episodes.length === 0) return 0;

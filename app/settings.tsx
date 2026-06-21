@@ -290,13 +290,15 @@ function ToggleRow({
 }) {
   return (
     <View style={s.row}>
-      <Switch
-        value={value}
-        onValueChange={onChange}
-        trackColor={{ false: C.surfaceLight, true: C.accent }}
-        thumbColor="#fff"
-        ios_backgroundColor={C.surfaceLight}
-      />
+      <View style={s.rowControl}>
+        <Switch
+          value={value}
+          onValueChange={onChange}
+          trackColor={{ false: C.surfaceLight, true: C.accent }}
+          thumbColor="#fff"
+          ios_backgroundColor={C.surfaceLight}
+        />
+      </View>
       <View style={s.rowText}>
         <Text style={s.rowTitle}>{title}</Text>
         <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
@@ -357,7 +359,9 @@ function ActionRow({
 }) {
   return (
     <Pressable style={({ pressed }) => [s.row, pressed && { backgroundColor: C.glass }]} onPress={onPress}>
-      {right ?? <Ionicons name="chevron-back" size={18} color={C.textMuted} />}
+      <View style={s.rowControl}>
+        {right ?? <Ionicons name="chevron-back" size={18} color={C.textMuted} />}
+      </View>
       <View style={s.rowText}>
         <Text style={[s.rowTitle, danger && { color: C.accent }]}>{title}</Text>
         <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
@@ -379,23 +383,32 @@ const s = StyleSheet.create({
     borderRadius: R.xl, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     overflow: "hidden", ...ELEVATION_CARD,
   },
+  // No flexDirection — icon and control are absolutely pinned to the right/left
+  // edges and the text is a full-width right-aligned block. This avoids RN 0.81's
+  // Yoga collapse where a [control | flex text | icon] row reverses on an Arabic-
+  // locale device and stacks into a broken layout (RN ignores the `direction` style).
   row: {
-    flexDirection: "row", alignItems: "center",
-    paddingVertical: 15, paddingHorizontal: 14,
+    justifyContent: "center", minHeight: 64,
+    paddingVertical: 12, paddingHorizontal: 14,
   },
   rowIcon: {
-    width: 40, height: 40, borderRadius: R.md, marginLeft: 14,
+    position: "absolute", right: 14, top: "50%", marginTop: -20,
+    width: 40, height: 40, borderRadius: R.md,
     alignItems: "center", justifyContent: "center",
   },
-  rowText: { flex: 1, marginLeft: 14 },
+  // Left control (Switch / chevron / spinner), vertically centered.
+  rowControl: { position: "absolute", left: 14, top: 0, bottom: 0, justifyContent: "center" },
+  // Full-width text; paddingRight clears the icon, paddingLeft clears the control.
+  rowText: { paddingRight: 62, paddingLeft: 70 },
   rowTitle: { color: C.text, fontSize: 15, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   rowDesc: { color: C.textMuted, fontSize: 12, marginTop: 4, lineHeight: 17, fontFamily: "Cairo_500Medium", textAlign: "right" },
   // Indent the divider so it stops short of the icon rail on the right.
   divider: { height: 1, backgroundColor: C.border, marginLeft: 14, marginRight: 68 },
 
   scopeRow: { paddingVertical: 15, paddingHorizontal: 14 },
-  scopeHead: { flexDirection: "row", alignItems: "flex-start" },
-  scopeBody: { flex: 1 },
+  // Same absolute treatment: icon pinned right, body is full-width text.
+  scopeHead: { justifyContent: "center", minHeight: 44 },
+  scopeBody: { paddingRight: 56 },
   segment: {
     flexDirection: "row", marginTop: 14,
     padding: 4, borderRadius: R.pill,

@@ -613,6 +613,12 @@ export async function resolveUp4EpisodeUrl(animeTitle: string, epNumber: number)
 // for 24h would permanently block retries while the site is briefly flaky.
 const a3rbTitleCache = new Map<string, { url: string; ts: number }>();
 const A3RB_TITLE_PREFIX = "@a3rb_title_v1:";
+// Titles whose Jikan alt-name bridge has already been attempted this session.
+// The bridge hits Jikan + probes anime3rb with each alt name; a fundamental
+// name mismatch won't change between the watch screen's retries, so run it at
+// most once per title (the cheap slug/catalog probes above still retry every
+// call for transient resilience).
+const a3rbBridgeTried = new Set<string>();
 
 async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | null> {
   if (!animeTitle) return null;
@@ -633,6 +639,44 @@ async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | nul
   // NOTE: no /search fallback. anime3rb's /search sits behind a Cloudflare
   // managed challenge, so failing fast here lets the watch screen's retry
   // loop converge instead of pinning a doomed request.
+  if (!url && !a3rbBridgeTried.has(key)) {
+    // Cross-language bridge — the main reason anime3rb "sometimes doesn't show".
+    // witanime/anime4up may hand us an Arabic title, or a romanization anime3rb
+    // doesn't index under (King's Game ↔ Ousama Game, Re:Zero ↔ rezero). Ask
+    // Jikan for the anime's other names and retry the slug + catalog match with
+    // each Latin one (anime3rb's slugs are Latin). This is the SAME bridge the
+    // search screen uses, and getAltTitles caches its result so retries are free.
+    a3rbBridgeTried.add(key);
+    // getAltTitles cleans the season off the query before hitting Jikan, so its
+    // names are the BASE franchise names (season 1's). Bridging them as-is for a
+    // later season would match the WRONG season's page (wrong episode numbering).
+    // So detect the wanted season and, for season >= 2, RE-ATTACH it to each alt
+    // name — a3rbSlugVariants then builds the correct season's slugs and
+    // probeA3rbTitlePage's own season check keeps the match locked to that
+    // season. This lets later-season anime resolve their anime3rb page too
+    // (previously they were skipped entirely, the main reason "a lot of animes"
+    // never showed anime3rb servers).
+    const seasonM =
+      key.match(/\b(?:season|part|cour)\s*(\d+)\b/) ||
+      key.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:season|part|cour)\b/) ||
+      key.match(/الموسم\s*([0-9٠-٩]+)/) ||
+      key.match(/الجزء\s*([0-9٠-٩]+)/);
+    const seasonNum = seasonM
+      ? parseInt(seasonM[1].replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)), 10)
+      : 1;
+    const alts = await getAltTitles(animeTitle).catch(() => []);
+    for (const alt of alts) {
+      if (!/[a-z]/i.test(alt)) continue;            // need Latin script for the slug
+      // Re-attach the season marker for later seasons; season 1 / no-season
+      // titles probe the alt name as-is.
+      const altQ = seasonNum >= 2 ? `${alt} season ${seasonNum}` : alt;
+      if (altQ.toLowerCase().trim() === key) continue; // already tried as the primary
+      url =
+        (await searchAnime3rbDirect(altQ).catch(() => null)) ||
+        (await searchAnime3rbCatalog(altQ).catch(() => null));
+      if (url) break;
+    }
+  }
   if (url) {
     a3rbTitleCache.set(key, { url, ts: Date.now() });
     void writeCache(A3RB_TITLE_PREFIX + key, url);

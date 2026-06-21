@@ -157,6 +157,7 @@ function Sidebar() {
   const NAV: NavRow[] = [
     { icon: "person-outline", label: t.profile, onPress: () => go("/profile"), match: "/profile" },
     { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
+    { icon: "calendar-outline", label: t.scheduleTitle, onPress: () => go("/schedule"), match: "/schedule" },
     { icon: "notifications-outline", label: t.notifications, onPress: () => go("/notifications"), match: "/notifications" },
     { icon: "settings-outline", label: t.settingsTitle, onPress: () => go("/settings"), match: "/settings" },
     { icon: "bug-outline", label: t.reportIssue, onPress: () => go("/report"), match: "/report" },
@@ -189,22 +190,27 @@ function Sidebar() {
       <Animated.View
         style={[st.panel, { width: PANEL_W, paddingTop: insets.top + 16, transform: [{ translateX }] }]}
       >
-        {/* Layered ambient glow pinned to the top of the panel */}
+        {/* Layered ambient glow — spans the whole panel and fades smoothly to the
+            base (via `locations`) so there's no hard two-tone cut where a fixed
+            band would have ended. */}
         <View style={st.glow} pointerEvents="none">
           <LinearGradient
             colors={[C.violetSoft, "transparent"]}
+            locations={[0, 0.5]}
             start={{ x: 0.05, y: 0 }}
             end={{ x: 0.7, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
           <LinearGradient
             colors={[C.meshPink, "transparent"]}
+            locations={[0, 0.45]}
             start={{ x: 1, y: 0 }}
-            end={{ x: 0.2, y: 0.85 }}
+            end={{ x: 0.2, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
           <LinearGradient
             colors={[C.meshCyan, "transparent"]}
+            locations={[0, 0.55]}
             start={{ x: 0.5, y: 0 }}
             end={{ x: 0.5, y: 1 }}
             style={StyleSheet.absoluteFill}
@@ -309,17 +315,17 @@ function Sidebar() {
                     ]}
                   >
                     {active ? <View style={[st.activeBar, { backgroundColor: tint }]} /> : null}
-                    {/* Disclosure chevron only on the focused row — keeps the list
-                        calm instead of repeating a muted arrow on every item. */}
-                    {active ? (
-                      <Ionicons name={CHEVRON} size={15} color={tint} />
-                    ) : (
-                      <View style={st.chevronSpacer} />
-                    )}
-                    <Text style={[st.navLabel, active && st.navLabelActive, active && { color: tint }]} numberOfLines={1}>{item.label}</Text>
+                    {/* Icon is absolutely pinned to the right (reading edge) and the
+                        label is a plain full-width right-aligned text. There is NO
+                        flexDirection:"row" here, so an Arabic-locale device can't
+                        reverse the row and collapse it into a broken vertical stack
+                        (RN ignores the `direction` style; left/right stay physical). */}
                     <View style={[st.navIcon, active && { backgroundColor: tint + "1F", borderColor: tint + "33" }]}>
-                      <Ionicons name={item.icon} size={19} color={active ? tint : C.textSecondary} />
+                      <Ionicons name={item.icon} size={21} color={active ? tint : C.textSecondary} />
                     </View>
+                    <Text style={[st.navLabel, active && st.navLabelActive, active && { color: tint }]} numberOfLines={1}>{item.label}</Text>
+                    {/* Disclosure chevron only on the focused row, pinned far-left. */}
+                    {active ? <Ionicons style={st.navChevron} name={CHEVRON} size={15} color={tint} /> : null}
                   </Pressable>
                 );
               })}
@@ -333,11 +339,10 @@ function Sidebar() {
                   onPress={() => { closeSidebar(); setTimeout(() => signOut(), 80); }}
                   style={({ pressed }) => [st.navItem, st.signOutItem, pressed && st.navItemPressed]}
                 >
-                  <View style={{ width: 15 }} />
-                  <Text style={[st.navLabel, st.signOutLabel]}>{t.signOut}</Text>
                   <View style={[st.navIcon, st.navIconDanger]}>
-                    <Ionicons name="log-out-outline" size={19} color={C.accent} />
+                    <Ionicons name="log-out-outline" size={21} color={C.accent} />
                   </View>
+                  <Text style={[st.navLabel, st.signOutLabel]}>{t.signOut}</Text>
                 </Pressable>
               </>
             ) : null}
@@ -400,7 +405,7 @@ const st = StyleSheet.create({
     shadowOpacity: 0.6,
     shadowRadius: 32,
   },
-  glow: { position: "absolute", top: 0, left: 0, right: 0, height: 280 },
+  glow: { ...StyleSheet.absoluteFillObject },
   edgeLine: { position: "absolute", top: 36, bottom: 36, left: 0, width: 2.5, borderRadius: 2 },
 
   header: {
@@ -408,9 +413,18 @@ const st = StyleSheet.create({
     marginBottom: 20,
   },
   brandLockup: { flexDirection: "row", alignItems: "center" },
-  brandTextWrap: { alignItems: "flex-end", marginRight: 11 },
-  brandName: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Cairo_700Bold" },
-  brandTag: { color: C.textMuted, fontSize: 11, marginTop: 1, fontFamily: "Cairo_500Medium" },
+  brandTextWrap: { alignItems: "flex-end", justifyContent: "center", marginRight: 11 },
+  // includeFontPadding:false strips the extra top/bottom slab Android adds for
+  // Arabic (Cairo) glyphs — without it the title rides high and no longer sits
+  // inline with the logo mark. lineHeight keeps the two lines tight & centered.
+  brandName: {
+    color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Cairo_700Bold",
+    lineHeight: 24, includeFontPadding: false, textAlignVertical: "center",
+  },
+  brandTag: {
+    color: C.textMuted, fontSize: 11, marginTop: 1, fontFamily: "Cairo_500Medium",
+    lineHeight: 15, includeFontPadding: false, textAlignVertical: "center",
+  },
   logoWrap: {
     borderRadius: 15, padding: 2,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
@@ -479,23 +493,31 @@ const st = StyleSheet.create({
     letterSpacing: 0.4, textAlign: "right",
     marginTop: 4, marginBottom: 10, marginRight: 4,
   },
-  navList: { gap: 4 },
-  chevronSpacer: { width: 15 },
+  navList: { gap: 16 },
+  // No flexDirection here — the row is built from a centered full-width label
+  // plus an absolutely-pinned icon, so it can't be reversed/collapsed on an
+  // RTL-locale device. minHeight reserves room for the 44px icon.
   navItem: {
-    flexDirection: "row", alignItems: "center",
-    paddingVertical: 12, paddingHorizontal: 12, borderRadius: R.lg,
+    justifyContent: "center", minHeight: 64,
+    paddingHorizontal: 12, borderRadius: R.lg,
     borderWidth: 1, borderColor: "transparent",
   },
   navItemPressed: { backgroundColor: C.glass },
   // Accent bar pinned to the right edge of the active row (Arabic reading side).
   activeBar: { position: "absolute", right: 0, top: 9, bottom: 9, width: 3, borderRadius: 2, backgroundColor: C.accent },
   navIcon: {
-    width: 40, height: 40, borderRadius: R.md, marginLeft: 12,
+    position: "absolute", right: 12, top: "50%", marginTop: -22,
+    width: 44, height: 44, borderRadius: R.md,
     backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.border,
     alignItems: "center", justifyContent: "center",
   },
   navIconDanger: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
-  navLabel: { flex: 1, color: C.text, fontSize: 15, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  navChevron: { position: "absolute", left: 12, top: "50%", marginTop: -8 },
+  // Full-width right-aligned text; paddingRight clears the icon, paddingLeft the chevron.
+  navLabel: {
+    color: C.text, fontSize: 16.5, fontWeight: "600", fontFamily: "Cairo_600SemiBold",
+    textAlign: "right", paddingRight: 70, paddingLeft: 24,
+  },
   navLabelActive: { color: C.accent, fontFamily: "Cairo_700Bold" },
 
   divider: { height: 1, backgroundColor: C.border, marginVertical: 14, marginHorizontal: 12 },

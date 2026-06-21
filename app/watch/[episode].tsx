@@ -205,6 +205,14 @@ export default function WatchScreen() {
   // The fallback sources were also exhausted with nothing — only then do we
   // surface the "no servers" error instead of the still-searching spinner.
   const [noServersFinal, setNoServersFinal] = useState(false);
+  // anime3rb (vid3rb, direct 1080p) is the PREFERRED first-play source. While
+  // this hold is on, the primary (witanime/anime4up) server's playback is held
+  // back for a short window so anime3rb — which is scraped in parallel — gets a
+  // chance to land and play FIRST. The hold lifts as soon as an anime3rb server
+  // is auto-selected, or after a bounded timeout (so a missing/slow anime3rb
+  // never strands the user on a spinner — the primary then plays as fallback).
+  const [holdForA3rb, setHoldForA3rb] = useState(false);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Live mirror of `servers` readable from settled async handlers / timers.
   const serversRef = useRef<ServerState[]>([]);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -671,6 +679,17 @@ export default function WatchScreen() {
     setNoServersFinal(false);
     retryCountRef.current = {};
     pendingSeekRef.current = 0;
+    // Prefer anime3rb (1080p) as the first server to play. When the episode
+    // ISN'T already an anime3rb URL, hold the primary's playback for a short
+    // window so the parallel anime3rb enrichment can land and be auto-selected
+    // first. The hold self-releases on a timeout so a missing anime3rb can't
+    // strand playback.
+    if (holdTimerRef.current) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
+    const episodeIsA3rb = /anime3rb\.com\/episode\//i.test(decodeURIComponent(episode));
+    setHoldForA3rb(!episodeIsA3rb);
+    if (!episodeIsA3rb) {
+      holdTimerRef.current = setTimeout(() => setHoldForA3rb(false), 8000);
+    }
     try {
       const url = decodeURIComponent(episode);
       const u4Param = url4up ? decodeURIComponent(url4up) : undefined;
@@ -982,11 +1001,18 @@ export default function WatchScreen() {
     a3rbAutoSelectedRef.current = false;
     if (a3rbRetryTimer.current) { clearTimeout(a3rbRetryTimer.current); a3rbRetryTimer.current = null; }
   }, [episode]);
-  useEffect(() => () => { if (a3rbRetryTimer.current) clearTimeout(a3rbRetryTimer.current); }, []);
+  useEffect(() => () => {
+    if (a3rbRetryTimer.current) clearTimeout(a3rbRetryTimer.current);
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!episode) return;
-    if (!primaryDone) return;              // wait for the primary scrape (even if it was empty)
+    // No longer gated on `primaryDone`: anime3rb is fully independent of the
+    // witanime/anime4up scrape (it resolves from the title + episode number), so
+    // running it in PARALLEL with the primary lets its 1080p server land first
+    // and become the default. primaryDone stays in the deps only so the effect
+    // re-evaluates once the primary reports its (possibly empty) result.
     if (a3rbServerCount > 0) return;       // already enriched successfully
     if (a3rbInFlightRef.current) return;   // a run is already going
     if (a3rbStartedAtRef.current && Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) {
@@ -1036,6 +1062,12 @@ export default function WatchScreen() {
     a3rbAttemptsRef.current += 1;
     const attempt = a3rbAttemptsRef.current;
     const scheduleRetry = () => {
+      // anime3rb didn't produce a server on this attempt — stop holding the
+      // primary's playback so it isn't blocked while anime3rb keeps retrying in
+      // the background. If anime3rb lands later it's still auto-selected (the
+      // 12s guard lets it take over before the user has watched much).
+      if (holdTimerRef.current) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
+      setHoldForA3rb(false);
       if (Date.now() - a3rbStartedAtRef.current > A3RB_RETRY_DEADLINE_MS) {
         if (serversRef.current.length === 0) setNoServersFinal(true);
         return;
@@ -1080,24 +1112,37 @@ export default function WatchScreen() {
     if (a3rbAutoSelectedRef.current) return;
     if (userPickedServerRef.current) return;
     if (servers.length === 0) return;
-    const idx = servers.findIndex((s) => s.server.source === "anime3rb");
+    // Pick the HIGHEST-quality anime3rb server (1080p) — the server list is
+    // already highest-first, but score explicitly so it's the 1080p one
+    // regardless of ordering.
+    let idx = -1;
+    let bestQ = -1;
+    servers.forEach((s, i) => {
+      if (s.server.source !== "anime3rb") return;
+      const q = qualityScore(s.server.name);
+      if (q > bestQ) { bestQ = q; idx = i; }
+    });
     if (idx === -1) return;
     a3rbAutoSelectedRef.current = true;
-    // If another server already has video on screen (frames actually
-    // rendered, not just a resolved URL), switching now would restart
-    // playback — one of the "player keeps refreshing" reports. Keep
-    // whatever is playing; anime3rb stays available in the picker.
+    // Don't yank a user who's ALREADY been watching the primary for a while —
+    // switching after real playback would restart the video ("player keeps
+    // refreshing"). But within the first few seconds (the hold window) anime3rb
+    // is the preferred default, so switch freely. The hold normally keeps the
+    // primary from playing at all until this point.
     try {
       const act = servers[activeIdx];
       if (
         idx !== activeIdx &&
         act?.status === "playing" &&
         player &&
-        (player.currentTime > 0 || player.duration > 0)
+        player.currentTime > 12
       ) {
         return;
       }
     } catch {}
+    // anime3rb is the choice — release the primary-playback hold and select it.
+    if (holdTimerRef.current) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
+    setHoldForA3rb(false);
     setActiveIdx(idx);
   }, [servers, activeIdx, player]);
 
@@ -1149,6 +1194,12 @@ export default function WatchScreen() {
     const idxs = servers
       .map((s, i) => (s.status === "idle" ? i : -1))
       .filter((i) => i !== -1)
+      // During the anime3rb-preferred hold, skip pre-resolving the active
+      // primary server — resolving it would set it "playing" and start the
+      // primary before anime3rb lands. The resolve-active effect picks it up
+      // once the hold releases (it re-runs on holdForA3rb), so it still plays
+      // as a fallback when anime3rb never shows.
+      .filter((i) => !(holdForA3rb && i === activeIdx && servers[i].server.source !== "anime3rb"))
       .slice(0, 4);
     if (idxs.length === 0) return;
 
@@ -1249,6 +1300,11 @@ export default function WatchScreen() {
     if (servers.length === 0) return;
     const state = servers[activeIdx];
     if (!state || state.status !== "idle") return;
+    // Preferred-source hold: while waiting for anime3rb to land, don't start
+    // resolving (and therefore playing) the primary server. Releasing the hold
+    // re-runs this effect (it's in the deps) so the primary still plays as a
+    // fallback when anime3rb never shows.
+    if (holdForA3rb && state.server.source !== "anime3rb") return;
 
     const srv = state.server;
     const url = getIframeUrl(srv);
@@ -1288,7 +1344,7 @@ export default function WatchScreen() {
       setServers((p) => p.map((s, i) =>
         i === idx ? { ...s, status: failStatus(srv.provider) } : s));
     })();
-  }, [activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null]);
+  }, [activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null, holdForA3rb]);
 
   // Auto-advance to next server on failure
   useEffect(() => {

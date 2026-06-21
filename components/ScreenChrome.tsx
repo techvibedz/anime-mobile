@@ -18,31 +18,32 @@ import { LinearGradient } from "expo-linear-gradient";
 import { C, R, S, AR } from "../lib/theme";
 
 /* ── Aurora backdrop ─────────────────────────────
- * A single soft glow band pinned to the top of the screen (NOT a full-screen
- * wash). Bounded by a height-constrained container so the absolute-filled
- * gradients fill the band, not the whole page. */
+ * A FULL-SCREEN wash whose glow is concentrated at the top and fades smoothly to
+ * the base background over the whole page (via gradient `locations`). It used to
+ * be a 300px-tall band, which left a hard "two-tone cut" where the band ended
+ * and the flat base color began — and because it sat behind a transparent
+ * scroll view, that cut stayed locked on screen while content scrolled past it.
+ * Spanning the full height removes the boundary entirely. */
 export function Aurora() {
   return (
-    <View style={au.band} pointerEvents="none">
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <LinearGradient
         colors={[C.violetSoft, "transparent"]}
+        locations={[0, 0.55]}
         start={{ x: 0.15, y: 0 }}
         end={{ x: 0.5, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
       <LinearGradient
         colors={[C.meshPink, "transparent"]}
+        locations={[0, 0.45]}
         start={{ x: 1, y: 0 }}
-        end={{ x: 0.4, y: 0.9 }}
+        end={{ x: 0.4, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
     </View>
   );
 }
-
-const au = StyleSheet.create({
-  band: { position: "absolute", top: 0, left: 0, right: 0, height: 300 },
-});
 
 /* ── Circular glass icon button ───────────────── */
 export function GlassIconButton({

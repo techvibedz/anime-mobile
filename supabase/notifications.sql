@@ -86,6 +86,14 @@ alter table public.episode_queue enable row level security;
 create policy "episode_queue_insert_auth" on public.episode_queue
   for insert to authenticated with check (true);
 
+-- REQUIRED for the client upsert: `insert ... on conflict do nothing` (what
+-- supabase-js `.upsert({ ignoreDuplicates: true })` emits) needs SELECT on the
+-- arbiter index to evaluate the conflict. Without this, every client report
+-- failed with 42501 (RLS) and the queue stayed empty → no closed-app push ever
+-- fired. The rows are a shared/global feed, so reading them is not sensitive.
+create policy "episode_queue_select_auth" on public.episode_queue
+  for select to authenticated using (true);
+
 create index if not exists episode_queue_created_idx
   on public.episode_queue (created_at desc);
 

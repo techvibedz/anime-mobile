@@ -56,6 +56,15 @@ const SECTION_LABELS: Record<string, string> = {
   movies: "أفلام",
 };
 
+// Display order for the home sections: New Episodes first, then Most Popular,
+// then everything else in the API's original order (stable sort). Continue
+// Watching is rendered separately above and is unaffected.
+const SECTION_ORDER = ["recently_updated", "trending"];
+function sectionRank(id: string): number {
+  const i = SECTION_ORDER.indexOf(id);
+  return i === -1 ? SECTION_ORDER.length : i;
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { openSidebar } = useSidebar();
@@ -200,6 +209,13 @@ export default function HomeScreen() {
             <Text style={ss.logoText}>Pantoufa</Text>
           </View>
           <View style={ss.topBarActions}>
+            <Pressable onPress={() => router.push("/schedule")} hitSlop={8}>
+              <View style={ss.glassBtn}>
+                <GlassFill intensity={20} />
+                <Ionicons name="calendar-outline" size={18} color={C.text} />
+              </View>
+            </Pressable>
+
             <Pressable onPress={() => router.push("/notifications")} hitSlop={8}>
               <View>
                 <View style={ss.glassBtn}>
@@ -363,7 +379,10 @@ export default function HomeScreen() {
         )}
 
         {/* ── Sections ─────────────────────── */}
-        {sections.filter(s => s.id !== "tv_series").map((section, si) => {
+        {sections
+          .filter(s => s.id !== "tv_series")
+          .sort((a, b) => sectionRank(a.id) - sectionRank(b.id))
+          .map((section, si) => {
           const MAX_PREVIEW = 15;
           const previewItems = section.items.slice(0, MAX_PREVIEW);
           const hasMore = section.items.length > MAX_PREVIEW;

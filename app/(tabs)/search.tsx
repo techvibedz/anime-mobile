@@ -114,7 +114,7 @@ const ResultCard = memo(function ResultCard({ item }: { item: SearchResult }) {
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
-  const { genre: genreParam } = useLocalSearchParams<{ genre?: string }>();
+  const { genre: genreParam, q: qParam } = useLocalSearchParams<{ genre?: string; q?: string }>();
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -127,6 +127,7 @@ export default function SearchScreen() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<TextInput>(null);
   const lastGenreParam = useRef<string | undefined>(undefined);
+  const lastQParam = useRef<string | undefined>(undefined);
   const modeRef = useRef<"browse" | "search" | "genre">("browse");
   // Monotonically increasing request id — a slow stale response must never
   // overwrite the results of a newer query the user already typed.
@@ -285,6 +286,19 @@ export default function SearchScreen() {
       }
     }
   }, [genreParam, handleGenre]);
+
+  // Deep link from the airing calendar: ?q=<title> pre-fills the search box and
+  // runs a search so the viewer can find the just-aired anime on our sources.
+  useEffect(() => {
+    if (qParam && qParam !== lastQParam.current) {
+      lastQParam.current = qParam;
+      const decoded = decodeURIComponent(qParam);
+      setQuery(decoded);
+      setActiveGenre("All");
+      modeRef.current = "search";
+      doSearch(decoded);
+    }
+  }, [qParam, doSearch]);
 
   useEffect(() => {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };

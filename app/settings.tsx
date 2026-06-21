@@ -9,7 +9,7 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -164,6 +164,18 @@ export default function SettingsScreen() {
 
   const version = Constants.expoConfig?.version ?? "1.4.0";
 
+  // Hidden entry to the scraper diagnostics screen: tap the version 7×.
+  // (The old welcome-screen link was removed; this gives support a way to ask a
+  // user to run the anime3rb chain test on their own device/network.)
+  const [verTaps, setVerTaps] = useState(0);
+  const onVersionTap = useCallback(() => {
+    setVerTaps((n) => {
+      const next = n + 1;
+      if (next >= 7) { router.push("/scraper-debug"); return 0; }
+      return next;
+    });
+  }, []);
+
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <Aurora />
@@ -239,7 +251,9 @@ export default function SettingsScreen() {
           <LinearLogoMark />
           <Text style={s.brandName}>{t.settingsAppName}</Text>
           <Text style={s.brandTag}>{t.settingsTagline}</Text>
-          <Text style={s.brandVersion}>v{version}</Text>
+          <Pressable onPress={onVersionTap} hitSlop={10}>
+            <Text style={s.brandVersion}>v{version}</Text>
+          </Pressable>
         </View>
       </ScrollView>
     </View>

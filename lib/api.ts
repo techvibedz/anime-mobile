@@ -702,12 +702,40 @@ async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | nul
   return url;
 }
 
+// Built anime3rb server lists, keyed by `${titleKey}#${epNum}`. The playerUrl
+// embedded in each server carries a token (~expires), so the TTL is short. This
+// makes re-opening an episode — and, crucially, a PREFETCHED next episode while
+// binge-watching — play instantly with no fetch at all.
+const a3rbServersMem = new Map<string, { servers: RawServer[]; ts: number }>();
+const A3RB_SERVERS_TTL = 12 * 60 * 1000;
+function a3rbServersKey(animeTitle: string, epNumber: number) {
+  return `${animeTitle.toLowerCase().trim()}#${epNumber}`;
+}
+
+// Warm the caches for an episode the user is LIKELY to watch next (called from
+// the watch screen for epNum±1 while the current one plays). Fire-and-forget;
+// fetchAnime3rbServers stores the result, so the actual tap is instant.
+export function prefetchAnime3rbServers(animeTitle: string, epNumber: number): void {
+  if (!animeTitle || epNumber == null || epNumber < 1) return;
+  if (a3rbServersMem.has(a3rbServersKey(animeTitle, epNumber))) return;
+  void fetchAnime3rbServers(animeTitle, epNumber).catch(() => {});
+}
+
 // Servers for an episode by anime title + episode number. Returns [] on any
 // miss (unknown anime, episode not yet uploaded, transient fetch failure) —
 // the watch screen's retry loop decides whether to try again.
 export async function fetchAnime3rbServers(animeTitle: string, epNumber: number): Promise<RawServer[]> {
   if (!animeTitle || epNumber == null) return [];
   const epUrlFor = (slug: string) => `https://anime3rb.com/episode/${slug}/${epNumber}`;
+  const memKey = a3rbServersKey(animeTitle, epNumber);
+
+  // 0) Already built (re-open or prefetch hit) — instant, no network.
+  const mem = a3rbServersMem.get(memKey);
+  if (mem && Date.now() - mem.ts < A3RB_SERVERS_TTL) return mem.servers;
+  const remember = (servers: RawServer[]) => {
+    if (servers.length) a3rbServersMem.set(memKey, { servers, ts: Date.now() });
+    return servers;
+  };
 
   // 1) Known slug (cache hit) — one episode-page fetch, straight to servers.
   const cachedTitle = await peekAnime3rbTitleUrl(animeTitle);
@@ -715,7 +743,7 @@ export async function fetchAnime3rbServers(animeTitle: string, epNumber: number)
     const slug = cachedTitle.replace(/\/+$/, "").split("/").pop();
     if (slug) {
       const servers = await scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]);
-      if (servers.length) return servers;
+      if (servers.length) return remember(servers);
       // Cached slug yielded nothing (episode not on anime3rb yet, or stale
       // mapping) — fall through to the guess/resolve paths below.
     }
@@ -731,7 +759,7 @@ export async function fetchAnime3rbServers(animeTitle: string, epNumber: number)
     const servers = await scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]);
     if (servers.length) {
       rememberAnime3rbTitleUrl(animeTitle, `https://anime3rb.com/titles/${slug}`);
-      return servers;
+      return remember(servers);
     }
   }
 
@@ -741,7 +769,7 @@ export async function fetchAnime3rbServers(animeTitle: string, epNumber: number)
   if (!titleUrl) return [];
   const slug = titleUrl.replace(/\/+$/, "").split("/").pop();
   if (!slug) return [];
-  return scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]);
+  return remember(await scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]));
 }
 
 // Servers for a KNOWN anime3rb episode URL (no title/number resolution needed).

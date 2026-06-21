@@ -17,7 +17,7 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fetchAnime3rbServersByUrl } from "../../lib/api";
+import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fetchAnime3rbServersByUrl, prefetchAnime3rbServers } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
 import { getAutoplayNext } from "../../lib/settings";
@@ -1145,6 +1145,50 @@ export default function WatchScreen() {
     setHoldForA3rb(false);
     setActiveIdx(idx);
   }, [servers, activeIdx, player]);
+
+  // ── PREFETCH neighbouring episodes' anime3rb servers ──
+  // Once the CURRENT episode's anime3rb server is resolved, warm the caches for
+  // the next (and previous) episode in the background. fetchAnime3rbServers
+  // stores its result + the vid3rb player sources, so when the user hits
+  // next/prev the anime3rb server is already built and plays instantly. This is
+  // what makes binge-watching feel instant — only the first episode of a
+  // session pays the episode-page fetch.
+  const a3rbPrefetchedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (a3rbServerCount === 0) return; // wait until the current one resolved
+    if (!episode) return;
+    const currentHref = decodeURIComponent(episode);
+    // Same epNum derivation as the fetch effect.
+    let epNum: number | null = paramEpNum;
+    if (epNum == null) {
+      const um = currentHref.match(/الحلقة[\s\-_]*(\d+)/);
+      if (um) epNum = parseInt(um[1], 10);
+    }
+    if (epNum == null) {
+      const am = currentHref.match(/\/episode\/[^/]+\/(\d+)/);
+      if (am) epNum = parseInt(am[1], 10);
+    }
+    if (epNum == null) return;
+    // Same lookupTitle derivation as the fetch effect.
+    let lookupTitle = (animeTitleParam ? decodeURIComponent(animeTitleParam) : "") || animeTitle;
+    if (!lookupTitle) {
+      try {
+        const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
+        const animeUrl = animeParam || toAnimeUrl(currentHref);
+        if (animeUrl) {
+          const slug = decodeURIComponent(new URL(animeUrl).pathname.replace(/\/+$/, "").split("/").pop() || "");
+          lookupTitle = slug.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+        }
+      } catch {}
+    }
+    if (!lookupTitle) return;
+    const guard = `${lookupTitle}#${epNum}`;
+    if (a3rbPrefetchedRef.current === guard) return; // already prefetched for this ep
+    a3rbPrefetchedRef.current = guard;
+    // Next is the strong signal (autoplay/binge); previous is cheap insurance.
+    prefetchAnime3rbServers(lookupTitle, epNum + 1);
+    if (epNum > 1) prefetchAnime3rbServers(lookupTitle, epNum - 1);
+  }, [a3rbServerCount, episode, animeTitle, animeTitleParam, animeParam, paramEpNum]);
 
   // ── MANUAL REFRESH ──
   // Re-scrapes the server list with the cache bypassed and APPENDS whatever

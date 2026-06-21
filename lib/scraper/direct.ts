@@ -625,9 +625,20 @@ function a3rbOrdinal(n: number): string {
 // Parenthesized alternative names get their own variant set: witanime often
 // appends the romaji original in parens ("Blades of the Guardians Season 2
 // (Biao Ren 2)") and anime3rb may index the anime ONLY under that name.
-function a3rbSlugVariants(title: string): string[] {
-  const out: string[] = [];
-  const add = (s: string) => { const v = a3rbSlugify(s); if (v && !out.includes(v)) out.push(v); };
+// `full` = the slug is an EXACT, complete slugification of the whole title (or a
+// whole parenthesized alt name) — not a colon-split / season / truncation form.
+// An exact full slug landing on a live page is a confident match on its own
+// (anime3rb slugs are unique, so there's nothing to collide with), so the caller
+// can accept it WITHOUT the og:title language-match guard — which is what lets a
+// cross-language title resolve (English "one piece" → anime3rb's Arabic-og:title
+// /titles/one-piece page). Reduced forms keep the strict guard since a truncated
+// slug ("kanojo" for "Kanojo, Okarishimasu") could land on a different anime.
+function a3rbSlugVariants(title: string): { slug: string; full: boolean }[] {
+  const out: { slug: string; full: boolean }[] = [];
+  const add = (s: string, full: boolean) => {
+    const v = a3rbSlugify(s);
+    if (v && !out.some((o) => o.slug === v)) out.push({ slug: v, full });
+  };
   const forms: string[] = [title];
   const reParen = /[\(\[]([^\)\]]+)[\)\]]/g;
   let pm: RegExpExecArray | null;
@@ -643,11 +654,13 @@ function a3rbSlugVariants(title: string): string[] {
       .replace(/(?:%[0-9a-f]{2})+[\s\d]*$/gi, " ") // trailing junk drags its episode number along
       .replace(/(?:%[0-9a-f]{2})+/gi, " ")
       .replace(/\s+/g, " ").trim();
-    add(cleaned);
+    // Exact, complete slugifications of the full form — confident on existence.
+    add(cleaned, true);
     // Laravel's Str::slug DROPS a colon that touches both words instead of
     // dashing it: "Re:Zero kara…" lives at rezero-kara-…, not re-zero-kara-….
-    add(cleaned.replace(/(\S)[:：](\S)/g, "$1$2"));
-    add(cleaned.split(/\s*[:：]\s*/)[0]);
+    add(cleaned.replace(/(\S)[:：](\S)/g, "$1$2"), true);
+    // Reduced / truncated forms — keep the strict title-score guard.
+    add(cleaned.split(/\s*[:：]\s*/)[0], false);
     const seasonM =
       cleaned.match(/\b(\d+)(?:st|nd|rd|th)\s+season\b/i) ||
       cleaned.match(/\bseason\s+(\d+)\b/i) ||
@@ -658,11 +671,11 @@ function a3rbSlugVariants(title: string): string[] {
         .replace(/\b(?:the\s+)?(?:\d+(?:st|nd|rd|th)\s+season|season\s+\d+|part\s+\d+)\b/i, " ")
         .replace(/\s+/g, " ").trim();
       if (base && !isNaN(n)) {
-        add(`${base} ${a3rbOrdinal(n)} season`);
-        add(`${base} season ${n}`);
-        add(`${base} part ${n}`);
-        add(`${base} ${n}`);
-        if (n === 1) add(base);
+        add(`${base} ${a3rbOrdinal(n)} season`, false);
+        add(`${base} season ${n}`, false);
+        add(`${base} part ${n}`, false);
+        add(`${base} ${n}`, false);
+        if (n === 1) add(base, false);
       }
     }
   }
@@ -672,10 +685,14 @@ function a3rbSlugVariants(title: string): string[] {
 // Probe /titles/<slug> and verify the page's own title actually matches the
 // wanted anime (same >=34 threshold as the other cross-source matchers) so a
 // coincidental slug can't hijack the match. Returns the page URL or null.
-async function probeA3rbTitlePage(slug: string, title: string): Promise<string | null> {
+// `relaxed` skips the title-score guard for an exact full-title slug (see
+// a3rbSlugVariants): the page exists, the slug is unique, so it IS the anime —
+// even when its og:title is in a different language than the query.
+async function probeA3rbTitlePage(slug: string, title: string, relaxed = false): Promise<string | null> {
   const url = `${A3RB_BASE}/titles/${slug}`;
   const html = await fetchAnime3rbHtml(url, "og:title");
   if (!html) return null; // 404 / fetch failure
+  if (relaxed) return url; // exact full slug on a live page — confident match
   const tm =
     html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
     html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
@@ -690,8 +707,8 @@ async function probeA3rbTitlePage(slug: string, title: string): Promise<string |
 // Probe /titles/<slug> for each candidate slug shape derived from the title.
 export async function searchAnime3rbDirect(title: string): Promise<string | null> {
   if (!title) return null;
-  for (const slug of a3rbSlugVariants(title)) {
-    const url = await probeA3rbTitlePage(slug, title);
+  for (const { slug, full } of a3rbSlugVariants(title)) {
+    const url = await probeA3rbTitlePage(slug, title, full);
     if (url) return url;
   }
   return null;
@@ -1096,13 +1113,62 @@ function parseVid3rbSources(html: string): { src: string; res: number }[] {
     .sort((a, b) => b.res - a.res); // highest resolution first (1080p preferred)
 }
 
+// Order parsed sources so the requested quality (if any) is first, then the
+// rest as fallbacks (exact res → closest at-or-below → highest).
+function orderVid3rbSources(free: { src: string; res: number }[], desiredRes: number): { src: string; res: number }[] {
+  if (desiredRes > 0 && free.length) {
+    const pick =
+      free.find((s) => s.res === desiredRes) ||
+      free.find((s) => s.res > 0 && s.res <= desiredRes) ||
+      free[0];
+    return [pick, ...free.filter((s) => s !== pick)];
+  }
+  return free;
+}
+
+// Resolve the first source whose signed CDN redirect actually serves bytes.
+// Returns the validated direct URL, or null if NONE could be validated (so the
+// caller can decide whether to refetch fresh sources vs hand back a raw src).
+async function resolveVid3rbFromSources(
+  free: { src: string; res: number }[],
+  desiredRes: number,
+): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  for (const q of orderVid3rbSources(free, desiredRes)) {
+    const cdn = await resolveVid3rbCdnUrl(q.src);
+    if (cdn) return { url: cdn, type: /\.m3u8(\?|$)/i.test(cdn) ? "hls" : "mp4" };
+  }
+  return null;
+}
+
+// Building the server list already fetches+parses the vid3rb player page (to
+// enumerate qualities); the play-time extractor then fetched the SAME page
+// again — a wasted round-trip that, when Cloudflare challenges the raw GET,
+// escalates to a slow WebView render before the video can start. Cache the
+// parsed sources from the list-build so extraction reuses them and plays
+// (almost) immediately. The src URLs carry tokens that expire ~40min, so keep
+// the cache well under that and refetch if a cached source can't be validated.
+const _vid3rbSourcesCache = new Map<string, { sources: { src: string; res: number }[]; ts: number }>();
+const VID3RB_SOURCES_TTL = 25 * 60 * 1000;
+function cacheVid3rbSources(playerUrl: string, sources: { src: string; res: number }[]) {
+  if (sources.length) _vid3rbSourcesCache.set(playerUrl, { sources, ts: Date.now() });
+}
+function getCachedVid3rbSources(playerUrl: string): { src: string; res: number }[] | null {
+  const hit = _vid3rbSourcesCache.get(playerUrl);
+  if (hit && Date.now() - hit.ts < VID3RB_SOURCES_TTL) return hit.sources;
+  if (hit) _vid3rbSourcesCache.delete(playerUrl);
+  return null;
+}
+
 // List the available free resolutions for an anime3rb episode (e.g. [1080, 720,
 // 480]) from its player page. Used to expose each quality as its own native
-// server. Returns [] on any fetch/parse miss so the caller can degrade.
+// server. Returns [] on any fetch/parse miss so the caller can degrade. The
+// parsed sources are cached so extractVid3rb can skip re-fetching the page.
 export async function listVid3rbResolutions(playerUrl: string): Promise<number[]> {
   const html = await fetchAnime3rbHtml(playerUrl, "video_sources");
   if (!html) return [];
-  return parseVid3rbSources(html).map((s) => s.res).filter((r) => r > 0);
+  const free = parseVid3rbSources(html);
+  cacheVid3rbSources(playerUrl, free);
+  return free.map((s) => s.res).filter((r) => r > 0);
 }
 
 export async function extractVid3rb(playerUrlWithHint: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
@@ -1116,34 +1182,33 @@ export async function extractVid3rb(playerUrlWithHint: string): Promise<{ url: s
     desiredRes = parseInt(playerUrlWithHint.slice(hashIdx + "#vid3rb=".length), 10) || 0;
     playerUrl = playerUrlWithHint.slice(0, hashIdx);
   }
+  // Fast path: reuse the sources the server-list build already parsed for this
+  // player page — skips a full player-page re-fetch (and its potential WebView
+  // CF escalation), so playback starts in just the redirect-resolve time. If
+  // none of the cached sources can be validated (tokens expired), drop the
+  // cache and fall through to a fresh fetch.
+  const cached = getCachedVid3rbSources(playerUrl);
+  if (cached) {
+    const r = await resolveVid3rbFromSources(cached, desiredRes);
+    if (r) return r;
+    _vid3rbSourcesCache.delete(playerUrl);
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));
     const html = await fetchAnime3rbHtml(playerUrl, "video_sources", true);
     if (!html) continue;
     const free = parseVid3rbSources(html);
     if (free.length === 0) return null;
-    // Put the requested quality first (exact, else the closest at-or-below it,
-    // else the highest). The rest stay as fallbacks for the rare case where the
-    // chosen tier's edge can't be coaxed into serving at all.
-    let ordered = free;
-    if (desiredRes > 0) {
-      const pick =
-        free.find((s) => s.res === desiredRes) ||
-        free.find((s) => s.res > 0 && s.res <= desiredRes) ||
-        free[0];
-      ordered = [pick, ...free.filter((s) => s !== pick)];
-    }
+    cacheVid3rbSources(playerUrl, free);
     // Hand the native player the RESOLVED files-N CDN URL. The reliability
     // problem was never the resolution — it was vid3rb's unretried redirect hop
     // (see resolveVid3rbCdnUrl) — so resolving it here makes every quality,
     // 1080p included, actually play.
-    for (const q of ordered) {
-      const cdn = await resolveVid3rbCdnUrl(q.src);
-      if (cdn) return { url: cdn, type: /\.m3u8(\?|$)/i.test(cdn) ? "hls" : "mp4" };
-    }
+    const r = await resolveVid3rbFromSources(free, desiredRes);
+    if (r) return r;
     // No edge could be validated (network down?) — return the chosen src and
     // let the native player / self-heal retry, rather than failing the server.
-    const top = ordered[0];
+    const top = orderVid3rbSources(free, desiredRes)[0];
     return { url: top.src, type: /\.m3u8(\?|$)/i.test(top.src) ? "hls" : "mp4" };
   }
   return null;

@@ -21,7 +21,14 @@ import { getHistory, isCompleted } from "../lib/history";
 import { getFavorites } from "../lib/favorites";
 import { C, R, ELEVATION_CARD, ELEVATION_GLOW_VIOLET } from "../lib/theme";
 import { t } from "../lib/i18n";
-import appVersion from "../version.json";
+import Constants from "expo-constants";
+
+// Show the version of the bundle actually running, same source the Settings
+// screen uses. NOT the bundled version.json: the release flow bumps version.json
+// only AFTER the APK is built, so every build ships a version.json one release
+// behind its app.json — which made the sidebar show a stale version (e.g. 1.5.2
+// while Settings showed 1.5.3) until an OTA refreshed the bundle.
+const appVersion = { version: Constants.expoConfig?.version ?? "0.0.0" };
 
 const { width: SW } = Dimensions.get("window");
 const PANEL_W = Math.min(360, SW * 0.88);

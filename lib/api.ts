@@ -25,13 +25,16 @@ import {
   findUp4EpisodeAcrossPages,
   searchAnime3rbDirect,
   searchAnime3rbCatalog,
+  searchAnime3rbCatalogFuzzy,
   scrapeAnime3rbEpisodeServers,
   scrapeAnime3rbTitlePage,
   anime3rbExactSlugs,
   extractVid3rb,
   extractMp4upload,
+  fetchWitHomeDirect,
 } from "./scraper/direct";
 import { getAltTitles } from "./animeInfo";
+import { fuzzyScore } from "./fuzzy";
 
 // v2 cache keys: bumped to discard payloads written by the earlier build that
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
@@ -293,7 +296,14 @@ function buildHomePayload(
 }
 
 async function fetchHomeFresh(): Promise<HomePayload> {
-  const wit = await scrapeWitanimeHome();
+  // Fast path: parse the witanime home page straight from its static HTML (one
+  // plain GET, no WebView). This avoids the ~10-15s WebView cold-start + CF
+  // clear that made the home feed the slowest screen in the app. Fall back to
+  // the WebView scrape only when the direct fetch is empty (CF challenge / cold
+  // body) so the home is never blank.
+  let wit = await fetchWitHomeDirect().catch(() => null);
+  if (!wit) wit = await scrapeWitanimeHome().catch(() => null);
+  if (!wit) wit = { featured: [], animes: [], episodes: [] };
   // Skip anime4up on home — it doubles load time and the merge is only
   // really needed for cross-source matching on detail pages. Home shows
   // wit-only content; up4 fills in on demand later.
@@ -1029,7 +1039,17 @@ async function searchAnimeFresh(
 ): Promise<SearchPayload> {
   const results: SearchResult[] = [];
   const seen = new Set<string>();
-  const emit = () => { onPartial?.(results.slice()); };
+  // Re-rank by how close each result's title is to the query so the BEST match
+  // floats to the top — the source sites return matches in their own order
+  // (often burying the exact anime under loosely-related rows). Scores are
+  // computed once per pass and cached by href. A stable sort keeps same-score
+  // rows in source/arrival order.
+  const rank = () => {
+    const sc = new Map<string, number>();
+    for (const r of results) if (!sc.has(r.href)) sc.set(r.href, fuzzyScore(query, r.title));
+    results.sort((a, b) => (sc.get(b.href) ?? 0) - (sc.get(a.href) ?? 0));
+  };
+  const emit = () => { rank(); onPartial?.(results.slice()); };
   const mergeIn = (arr: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis?: string | null }[]) => {
     let added = false;
     for (const it of arr) {
@@ -1041,6 +1061,11 @@ async function searchAnimeFresh(
     }
     return added;
   };
+
+  // Kick off the typo-tolerant catalog scan now (local compute over the cached
+  // anime3rb sitemap). Awaited later only if the sources don't surface a strong
+  // match, so the common (correctly-spelled) query pays no extra cost.
+  const fuzzyCatalogP = searchAnime3rbCatalogFuzzy(query, 5).catch(() => [] as { slug: string; score: number }[]);
 
   // Primary: witanime's static-HTML search via a plain GET — near-instant, no
   // WebView render. Fall back to the WebView scrape only if the direct fetch
@@ -1081,6 +1106,31 @@ async function searchAnimeFresh(
     new Promise<void>((r) => setTimeout(r, results.length ? 6000 : 15000)),
   ]);
 
+  // Typo-tolerant recovery: when the sources didn't surface a clearly strong
+  // match (the user likely misspelled the title, dropped a colon, or spaced it
+  // oddly — "narto", "re zero", "full metal"), pull the closest titles from the
+  // anime3rb catalog and add the ones not already present. anime3rb anime are
+  // first-class detail pages, so each is a fully-playable result. Gated on the
+  // miss case + capped at 3 detail fetches so a well-spelled query stays cheap.
+  const hasStrong = results.some((r) => fuzzyScore(query, r.title) >= 0.9);
+  if (!hasStrong) {
+    const top = await fuzzyCatalogP;
+    let fetched = 0;
+    for (const { slug } of top) {
+      if (fetched >= 3) break;
+      const label = slug.replace(/[-_]+/g, " ");
+      // Skip a catalog hit an existing result already represents.
+      if (results.some((r) => fuzzyScore(label, r.title) >= 0.85)) continue;
+      const url = `https://anime3rb.com/titles/${slug}`;
+      const detail = await scrapeAnime3rbTitlePage(url).catch(() => null);
+      fetched++;
+      if (detail?.title && mergeIn([{
+        title: detail.title, href: url, image: detail.poster || null,
+        type: null, status: null, synopsis: detail.synopsis || null,
+      }])) emit();
+    }
+  }
+
   // Cross-language bridge: the source sites index each anime under a SINGLE
   // language, so an English query never finds a romaji-only title (and vice
   // versa). When everything above came up empty, ask Jikan for the title's
@@ -1108,6 +1158,7 @@ async function searchAnimeFresh(
     }
   }
 
+  rank();
   return { success: true, data: { query, totalResults: results.length, results } };
 }
 

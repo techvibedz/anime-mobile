@@ -13,6 +13,7 @@
 import type { RawServer } from "./index";
 import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
+import { fuzzyScore } from "../fuzzy";
 
 const UP4_BASE = "https://w1.anime4up.rest";
 const A3RB_BASE = "https://anime3rb.com";
@@ -226,6 +227,105 @@ export async function fetchWitListingDirect(url: string): Promise<WitCard[] | nu
   const html = await fetchHtml(url, WIT_BASE + "/");
   if (!html) return null;
   return parseWitCards(html);
+}
+
+/* ── witanime: direct static-HTML HOME ──
+ *
+ * The home page (witanime.you/) is the SAME static-HTML shape as the listing
+ * pages — featured slider, anime cards, and recent-episode cards all ship in
+ * the initial response (verified: residential IP passes CF). The app used to
+ * render it in the hidden WebView, which paid the ~10-15s cold-start +
+ * Cloudflare-clear tax on every launch (the single slowest screen). A plain
+ * GET + regex parse reads the whole page in well under a second, so this is the
+ * fast path for the home feed; the WebView scrape stays as the fallback. */
+
+export type WitHomeFeatured = { title: string; href: string; image: string | null; description: string | null; genres: string[] };
+export type WitHomeAnime = { title: string; href: string; image: string | null; type: string | null; status: string | null; description: string | null; isNew: boolean; rating: string | null };
+export type WitHomeEpisode = { title: string; href: string; image: string | null; animeTitle: string; animeHref: string; isNew: boolean };
+export type WitHome = { featured: WitHomeFeatured[]; animes: WitHomeAnime[]; episodes: WitHomeEpisode[] };
+
+// Parse the featured slider (<a class="lucodeia-slider-slide-item" …>). Static
+// HTML carries only the title/href/background-image — the genres/description
+// meta is injected by JS, so those come back empty (the hero still renders with
+// its image + title). De-duped by href since the carousel clones edge slides.
+function parseWitFeatured(html: string): WitHomeFeatured[] {
+  const out: WitHomeFeatured[] = [];
+  const seen = new Set<string>();
+  const re = /<a\b([^>]*\bclass=["'][^"']*lucodeia-slider-slide-item[^"']*["'][^>]*)>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const tag = m[1] || "";
+    const hrefM = tag.match(/\bhref=["']([^"']+)["']/i);
+    const href = hrefM ? hrefM[1].trim() : "";
+    if (!href || seen.has(href)) continue;
+    seen.add(href);
+    const titleM = tag.match(/\btitle=["']([^"']*)["']/i);
+    const bgM = tag.match(/url\(\s*['"]?([^'")]+)['"]?\s*\)/i);
+    out.push({
+      title: titleM ? htmlDecode(titleM[1]) : "",
+      href,
+      image: bgM ? witUpgradeImg(bgM[1].trim()) : null,
+      description: null,
+      genres: [],
+    });
+  }
+  return out.slice(0, 5);
+}
+
+// Parse the home anime cards into the home payload's anime shape. parseWitCards
+// already extracts every .anime-card-container (title/href/image/type/status),
+// so reuse it and derive isNew from the ongoing-status marker.
+function parseWitHomeAnimes(html: string): WitHomeAnime[] {
+  return parseWitCards(html).map((c) => ({
+    title: c.title,
+    href: c.href,
+    image: c.image,
+    type: c.type,
+    status: c.status,
+    description: null,
+    isNew: (c.status || "").indexOf("مستمر") >= 0,
+    rating: null,
+  }));
+}
+
+// Parse the recent-episode cards (.episodes-card-container). Each block carries
+// the episode link + label, a thumbnail, and the parent anime's title + URL.
+function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
+  const out: WitHomeEpisode[] = [];
+  const seen = new Set<string>();
+  const blocks = html.split("episodes-card-container");
+  for (let i = 1; i < blocks.length; i++) {
+    const b = blocks[i];
+    const epM = b.match(/episodes-card-title[^>]*>\s*<h3[^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    if (!epM) continue;
+    const href = (epM[1] || "").trim();
+    if (!href || seen.has(href)) continue;
+    seen.add(href);
+    const title = htmlDecode((epM[2] || "").replace(/<[^>]+>/g, ""));
+    const imM = b.match(/<img[^>]*\b(?:data-src|data-original|data-image|src)=["']([^"']+)["']/i);
+    const anM = b.match(/ep-card-anime-title[^>]*>\s*<h3[^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    out.push({
+      title,
+      href,
+      image: imM ? witUpgradeImg(imM[1]) : null,
+      animeTitle: anM ? htmlDecode((anM[2] || "").replace(/<[^>]+>/g, "")) : "",
+      animeHref: anM ? (anM[1] || "").trim() : "",
+      isNew: true,
+    });
+  }
+  return out;
+}
+
+// Fetch + parse the witanime home page directly (no WebView). Returns null on a
+// fetch failure OR when the page yielded no cards (a CF challenge / cold body),
+// so the caller falls back to the WebView home scrape.
+export async function fetchWitHomeDirect(): Promise<WitHome | null> {
+  const html = await fetchHtml(WIT_BASE + "/", WIT_BASE + "/");
+  if (!html) return null;
+  const animes = parseWitHomeAnimes(html);
+  const episodes = parseWitHomeEpisodes(html);
+  if (animes.length === 0 && episodes.length === 0) return null;
+  return { featured: parseWitFeatured(html), animes, episodes };
 }
 
 // Search witanime via its static-HTML results page.
@@ -829,6 +929,36 @@ export async function searchAnime3rbCatalog(title: string): Promise<string | nul
   if (!slug) return null;
   // Confirm against the real page's own title before trusting the match.
   return probeA3rbTitlePage(slug, title);
+}
+
+// Typo-tolerant catalog ranking for the SEARCH screen (not the watch path).
+// a3rbCatalogMatch above is deliberately strict — a wrong match there plays the
+// WRONG anime's episodes. But on the search screen the user PICKS from the
+// list, so we can afford to be lenient: fuzzy-rank every catalog slug against
+// the query (absorbing one-letter typos, dropped colons, and spacing
+// differences via fuzzyScore) and return the strongest candidates so a
+// misspelled / oddly-spaced query still surfaces the anime. Pure local compute
+// over the cached sitemap — no extra network until the caller fetches a result
+// it wants to show. The wanted-season is a soft preference (the user can pick a
+// different season), not a hard filter.
+export async function searchAnime3rbCatalogFuzzy(
+  title: string,
+  limit = 5,
+): Promise<{ slug: string; score: number }[]> {
+  if (!title) return [];
+  const slugs = await fetchA3rbCatalog();
+  if (!slugs.length) return [];
+  const wantSeason = a3rbSeasonOf(title.toLowerCase());
+  const scored: { slug: string; score: number }[] = [];
+  for (const slug of slugs) {
+    const label = slug.replace(/[-_]+/g, " ");
+    const score = fuzzyScore(title, label);
+    if (score < 0.62) continue;
+    const adj = a3rbSeasonOf(label) === wantSeason ? 0.04 : -0.08;
+    scored.push({ slug, score: score + adj });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
 }
 
 /* ── anime3rb: anime (title) page → detail + full episode list ──

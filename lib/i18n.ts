@@ -68,6 +68,9 @@ export const ar = {
   categories: "التصنيفات",
   seeAll: (n: number) => `عرض الكل (${n})`,
   seeAllShort: "عرض الكل",
+  // Source-direct home rails (scraped straight from our own sources)
+  railThisSeason: "أنمي هذا الموسم",
+  railMovies: "أفلام الأنمي",
   watchNow: "شاهد الآن",
   myList: "قائمتي",
   newBadge: "جديد",
@@ -97,6 +100,10 @@ export const ar = {
   unmarkedAsWatched: "أُلغي تحديد المشاهدة",
   watchedBadge: "مُشاهَدة",
   tapToToggleWatched: "اضغط مطوّلًا لتبديل حالة المشاهدة",
+  // Anime-card completion badges + newest-episode marker.
+  completedBadge: "مكتمل",
+  caughtUpBadge: "آخر حلقة",
+  latestEpBadge: "الأحدث",
   titleCopied: "تم نسخ العنوان",
 
   // Next-episode countdown
@@ -132,6 +139,28 @@ export const ar = {
   resolving: "جاري التحضير…",
   loadingPlayer: "جاري تحميل المشغّل…",
   fallbackPlayer: "المشغّل الاحتياطي",
+
+  // Downloads
+  downloadsTitle: "التنزيلات",
+  download: "تنزيل",
+  downloadEpisode: "تنزيل الحلقة",
+  downloadStarted: "بدأ التنزيل",
+  downloading: "جارٍ التنزيل…",
+  downloaded: "تم التنزيل",
+  downloadQueued: "في قائمة الانتظار",
+  downloadFailed: "فشل التنزيل",
+  downloadRetry: "إعادة التنزيل",
+  watchOffline: "مشاهدة بدون إنترنت",
+  playDownload: "تشغيل",
+  removeDownload: "حذف التنزيل",
+  confirmRemoveDownload: "هل تريد حذف هذه الحلقة المُنزَّلة؟",
+  downloadsEmpty: "لا توجد تنزيلات",
+  downloadsEmptySub: "نزّل الحلقات لمشاهدتها لاحقًا بدون إنترنت.",
+  downloadProgress: (p: number) => `${p}%`,
+  downloadNoServer: "تعذّر العثور على مصدر قابل للتنزيل لهذه الحلقة.",
+  downloadResolving: "جارٍ تحضير التنزيل…",
+  downloadOffline: "حلقة مُنزَّلة — تُشغَّل بدون إنترنت",
+  storageUsed: (s: string) => `المساحة المستخدمة: ${s}`,
 
   // Settings / sign out
   signOut: "تسجيل الخروج",
@@ -250,6 +279,41 @@ export const ar = {
   // Sunday-first to match Date.getDay() (0 = Sunday).
   weekdaysShort: ["أحد", "إثنين", "ثلاثاء", "أربعاء", "خميس", "جمعة", "سبت"] as const,
   weekdaysLong: ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"] as const,
+
+  // Upcoming anime
+  upcomingTitle: "أنميات قادمة",
+  upcomingSub: "أبرز الأنميات المنتظرة التي ستتوفّر في مصادرنا فور صدورها.",
+  upcomingSoon: "قريبًا",
+  upcomingFilterPopular: "الأكثر شعبية",
+  upcomingFilterSoon: "الأقرب صدورًا",
+  upcomingInDays: (n: number) => (n === 1 ? "بعد يوم" : n === 2 ? "بعد يومين" : n <= 10 ? `بعد ${n} أيام` : `بعد ${n} يومًا`),
+
+  // Seasons browser
+  seasonsTitle: "المواسم",
+  seasonsEmpty: "لا أنميات متوفّرة",
+  seasonsEmptySub: "لم نعثر على أنميات من هذا الموسم في مصادرنا. جرّب موسمًا آخر.",
+
+  // AniList title detail (Upcoming detail page)
+  titleStory: "القصة",
+  titleDetails: "تفاصيل",
+  titleLinks: "روابط وأخبار",
+  titleRelated: "أعمال ذات صلة",
+  watchTrailer: "مشاهدة الإعلان",
+  searchOnSources: "ابحث في مصادرنا",
+  translating: "جارٍ ترجمة القصة…",
+  titleNotReleased: "لم يصدر بعد",
+  titleAirsOn: (d: string) => `يبدأ العرض: ${d}`,
+  titleEpisodes: (n: number) => `${n} حلقة`,
+  titleStudio: "الاستوديو",
+  titleStatus: "الحالة",
+  titleFormat: "النوع",
+  titleAirDate: "موعد العرض",
+  titleDuration: (n: number) => `${n} دقيقة`,
+  statusReleasing: "يُعرض حالياً",
+  statusFinished: "مكتمل",
+  statusNotYet: "لم يُعرض بعد",
+  statusCancelled: "أُلغي",
+  statusHiatus: "متوقّف مؤقتاً",
 
   // Live users (admin only)
   liveUsersTitle: "المتصلون الآن",

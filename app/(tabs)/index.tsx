@@ -25,8 +25,10 @@ import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "
 import { useSidebar } from "../../components/Sidebar";
 import { Shimmer } from "../../components/Shimmer";
 import { GlassFill } from "../../components/GlassFill";
+import { SourceRail } from "../../components/SourceRail";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
+import { CompletionBadge } from "../../components/CompletionBadge";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -435,6 +437,10 @@ export default function HomeScreen() {
           );
         })}
 
+        {/* ── Source-direct rails (scraped from our own sources, no AniList) ── */}
+        <SourceRail kind="season" title={t.railThisSeason} order={0} />
+        <SourceRail kind="movies" title={t.railMovies} order={1} />
+
         {/* ── Categories ──────────────────────── */}
         <View style={ss.section}>
           <View style={ss.sectionHeader}>
@@ -566,6 +572,7 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
         <LinearGradient colors={["transparent", "rgba(6,7,26,0.95)"]} style={ss.cardGrad} />
         {/* Rank number with accent stroke effect */}
         <Text style={ss.cardRank}>{index + 1}</Text>
+        <CompletionBadge hrefs={[item.href, ...Object.values(item.sourceHrefs || {})]} titles={[item.title]} />
       </View>
       <Text style={ss.cardTitle} numberOfLines={1}>{item.title}</Text>
       {item.type && <Text style={ss.cardType}>{item.type}</Text>}
@@ -605,6 +612,7 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
             <Ionicons name="play" size={14} color="#fff" />
           </LinearGradient>
         </View>
+        <CompletionBadge hrefs={[item.animeHref]} titles={[item.animeTitle]} />
       </View>
       <Text style={ss.epTitle} numberOfLines={1}>{item.title}</Text>
       <Text style={ss.epSub} numberOfLines={1}>{item.animeTitle}</Text>

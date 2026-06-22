@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { searchAnime, fetchAllAnime, fetchGenre } from "../../lib/api";
 import type { SearchResult } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
+import { CompletionBadge } from "../../components/CompletionBadge";
 import { GlassFill } from "../../components/GlassFill";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
@@ -106,6 +107,12 @@ const ResultCard = memo(function ResultCard({ item }: { item: SearchResult }) {
             <Text style={ss.typeBadgeText}>{item.type}</Text>
           </View>
         ) : null}
+        {/* Completion badge — bottom-left, clear of the type pill (bottom-right) */}
+        <CompletionBadge
+          hrefs={[item.href]}
+          titles={[item.title]}
+          style={{ right: undefined as any, left: 6, bottom: 6 }}
+        />
       </View>
       <Text style={ss.resultTitle} numberOfLines={2}>{item.title}</Text>
     </Pressable>

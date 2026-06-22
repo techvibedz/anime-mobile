@@ -164,7 +164,10 @@ function Sidebar() {
   const NAV: NavRow[] = [
     { icon: "person-outline", label: t.profile, onPress: () => go("/profile"), match: "/profile" },
     { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
+    { icon: "download-outline", label: t.downloadsTitle, onPress: () => go("/downloads"), match: "/downloads" },
     { icon: "calendar-outline", label: t.scheduleTitle, onPress: () => go("/schedule"), match: "/schedule" },
+    { icon: "sparkles-outline", label: t.upcomingTitle, onPress: () => go("/upcoming"), match: "/upcoming" },
+    { icon: "albums-outline", label: t.seasonsTitle, onPress: () => go("/seasons"), match: "/seasons" },
     { icon: "notifications-outline", label: t.notifications, onPress: () => go("/notifications"), match: "/notifications" },
     { icon: "settings-outline", label: t.settingsTitle, onPress: () => go("/settings"), match: "/settings" },
     { icon: "bug-outline", label: t.reportIssue, onPress: () => go("/report"), match: "/report" },

@@ -21,6 +21,7 @@ import {
 } from "./scraper";
 import {
   searchAnime4upDirect,
+  searchAnime4upDirectList,
   scrapeAnime4upEpisodePageDirect,
   findUp4EpisodeAcrossPages,
   searchAnime3rbDirect,
@@ -35,6 +36,7 @@ import {
 } from "./scraper/direct";
 import { getAltTitles } from "./animeInfo";
 import { fuzzyScore } from "./fuzzy";
+import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 
 // v2 cache keys: bumped to discard payloads written by the earlier build that
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
@@ -223,6 +225,30 @@ function fuzzyMatch(a: string, b: string) {
 
 function imgOrEmpty(s: string | null | undefined): string {
   return s ?? "";
+}
+
+// Strip the SEO boilerplate the source sites bake into an anime page's "story"
+// field so the detail screen never shows junk like "تحميل ومشاهدة جميع حلقات
+// أنمي … اون لاين بجودة عالية … Anime3rb". A real Arabic synopsis is kept intact;
+// pure boilerplate collapses to "" and the synopsis block simply hides.
+const SYNOPSIS_JUNK =
+  /تحميل\s*و?\s*مشاهدة|مشاهدة\s*و?\s*تحميل|اون\s*لاين|أون\s*لاين|أونلاين|بجودة\s*عالية|جميع\s*حلقات|anime3rb|anime4up|witanime|أنمي\s*عرب|انمي\s*عرب|حصرياً\s*على/i;
+function cleanSynopsis(raw: string | null | undefined): string {
+  let s = (raw || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  // Drop a leading "قصة الأنمي:" / "القصة:" / "Story:" label.
+  s = s.replace(/^\s*(?:قصة\s*(?:الأنمي|الانمي)?|القصة|story|synopsis)\s*[:：\-–]?\s*/i, "").trim();
+  if (SYNOPSIS_JUNK.test(s)) {
+    // Remove only the sentences carrying the boilerplate markers; keep any real
+    // story sentences that may sit alongside them.
+    const kept = s
+      .split(/[.!؟\n]+/)
+      .map((p) => p.trim())
+      .filter((p) => p && !SYNOPSIS_JUNK.test(p));
+    s = kept.join(". ").trim();
+  }
+  // Anything shorter than a clause is almost certainly a leftover fragment.
+  return s.length < 25 ? "" : s;
 }
 
 /* ── proxy URL — DISABLED. We play the resolved URL directly in the native
@@ -479,7 +505,7 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
         title: a?.title || "",
         poster: a?.poster || "",
         banner: a?.poster || "",
-        synopsis: a?.synopsis || "",
+        synopsis: cleanSynopsis(a?.synopsis),
         genres: a?.genres || [],
         rating: null,
         metadata: {},
@@ -491,7 +517,14 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
         merged: null,
       },
     };
-    if (a) void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
+    if (a) {
+      void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
+      // Scout upload to the crowdsourced cloud cache so the next user of any
+      // device renders this anime3rb page instantly. Only a payload with real
+      // episodes is shared — never an empty/failed scrape.
+      if (payload.data.episodes.length > 0)
+        void writeCloudMetadata(animeUrl, payload, payload.data.episodes.length, payload.data.title);
+    }
     return payload;
   }
   // Fast path: primary source only. Cross-source enrichment is fetched in
@@ -503,7 +536,7 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
       title: d.title,
       poster: d.poster,
       banner: d.poster,
-      synopsis: d.synopsis,
+      synopsis: cleanSynopsis(d.synopsis),
       genres: d.genres,
       rating: null,
       metadata: {},
@@ -516,17 +549,33 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
     },
   };
   void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
+  // Scout upload to the crowdsourced cloud cache (only when the scrape actually
+  // produced episodes — a zero-episode detail page is usually a failed scrape
+  // and must not poison the shared cache).
+  if (payload.data.episodes.length > 0)
+    void writeCloudMetadata(animeUrl, payload, payload.data.episodes.length, payload.data.title);
   return payload;
 }
 
 export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> {
-  // Stale-while-revalidate. Cached payload renders instantly; a fresh
-  // scrape kicks off in the background so the next open is even fresher.
+  // Read-through cache, fastest tier first:
+  // 1) On-device cache — instant, offline-capable. Revalidate in the background.
   const cached = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
   if (cached) {
     void fetchEpisodesFresh(animeUrl).catch(() => {});
     return cached;
   }
+  // 2) Crowdsourced cloud cache — another device already scouted this anime, so
+  //    render instantly with NO live scrape. Seed the on-device cache so the
+  //    next open is offline-instant. Only when the shared entry is stale do we
+  //    pay for a background re-scrape (which upserts and refreshes it for all).
+  const cloud = await readCloudMetadata<EpisodesPayload>(animeUrl).catch(() => null);
+  if (cloud?.payload?.data) {
+    void writeCache(DETAIL_CACHE_PREFIX + animeUrl, cloud.payload);
+    if (cloud.stale) void fetchEpisodesFresh(animeUrl).catch(() => {});
+    return cloud.payload;
+  }
+  // 3) Cold path — live scrape on the residential IP, then scout-upload.
   return fetchEpisodesFresh(animeUrl);
 }
 
@@ -1074,11 +1123,20 @@ async function searchAnimeFresh(
   if (!wit) wit = await scrapeSearch(query).catch(() => null);
   if (wit?.results?.length && mergeIn(wit.results)) emit();
 
-  // Secondary: anime4up (WebView; its static HTML is blocked to plain fetches)
-  // and anime3rb (third source) run in parallel and append to the visible list.
-  const up4P = scrapeSearchUp4(query)
-    .then((up4) => { if (up4?.results?.length && mergeIn(up4.results)) emit(); })
-    .catch(() => {});
+  // Secondary: anime4up + anime3rb (third source) run in parallel and append to
+  // the visible list. anime4up is tried via a direct static-HTML GET FIRST
+  // (near-instant, no WebView) — its search cards ship in the page HTML, so the
+  // old WebView-only path was the main reason results from "other sources" took
+  // several extra seconds to appear. The WebView scrape stays as the fallback
+  // for the rare empty direct fetch (network / CF hiccup).
+  const up4P = (async () => {
+    let up4 = await searchAnime4upDirectList(query).catch(() => null);
+    if (!up4 || up4.length === 0) {
+      const wv = await scrapeSearchUp4(query).catch(() => null);
+      up4 = wv?.results ?? null;
+    }
+    if (up4?.length && mergeIn(up4)) emit();
+  })();
 
   // anime3rb: surface anime that live ONLY on anime3rb — its catalog matcher is
   // conservative (near-total token coverage + exact season), so a confident
@@ -1247,6 +1305,70 @@ export async function fetchAllAnime(page = 1): Promise<{
     },
     (d) => d.data.items.length > 0,
   );
+}
+
+/* ── downloads ──────────────────────────────────
+ * Resolve a DIRECT, progressive .mp4 URL for an episode so it can be saved to
+ * disk for offline viewing. HLS (.m3u8) sources are skipped — they're a playlist
+ * of segments, not a single downloadable file — so only providers proven to hand
+ * out a progressive .mp4 are considered: vid3rb (anime3rb's first-party host,
+ * direct 1080p) first, then mp4upload. Returns the URL plus the CDN headers the
+ * file fetch needs (the signed URLs are bound to the right Referer/UA). */
+const DL_UA =
+  "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+const DL_RANK: Record<string, number> = { vid3rb: 0, mp4upload: 1 };
+
+function dlQualityScore(name: string): number {
+  const n = (name || "").toLowerCase();
+  if (n.includes("fhd") || n.includes("1080")) return 3;
+  if (n.includes("hd") || n.includes("720")) return 2;
+  if (n.includes("sd") || n.includes("480") || n.includes("360")) return 0;
+  return 1;
+}
+
+function dlHeaders(provider: string): Record<string, string> {
+  const h: Record<string, string> = { "User-Agent": DL_UA };
+  if (provider === "mp4upload") h.Referer = "https://www.mp4upload.com/";
+  else if (provider === "vid3rb") h.Referer = "https://anime3rb.com/";
+  return h;
+}
+
+export async function resolveDownloadUrl(opts: {
+  episodeHref: string;
+  url4up?: string;
+  url3rb?: string;
+  epNum?: number | null;
+  animeTitle?: string | null;
+}): Promise<{ url: string; headers: Record<string, string>; type: "mp4" } | null> {
+  const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
+  const cands: { name: string; iframeUrl: string; provider: string }[] = [];
+
+  // anime3rb (vid3rb → direct 1080p .mp4) — the best download source.
+  try {
+    let a3: RawServer[] = [];
+    if (url3rb) a3 = await fetchAnime3rbServersByUrl(url3rb);
+    else if (animeTitle && epNum != null) a3 = await fetchAnime3rbServers(animeTitle, epNum);
+    for (const s of a3) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
+  } catch {}
+
+  // Primary (witanime/anime4up) — for the mp4upload server.
+  try {
+    const res = await fetchVideoServers(episodeHref, url4up);
+    if (res?.success) for (const s of res.data.servers) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
+  } catch {}
+
+  const downloadable = cands
+    .filter((c) => c.provider in DL_RANK && c.iframeUrl)
+    .sort((a, b) => (DL_RANK[a.provider] - DL_RANK[b.provider]) || (dlQualityScore(b.name) - dlQualityScore(a.name)));
+
+  for (const c of downloadable) {
+    const r = await resolveVideo(c.iframeUrl, c.provider).catch(() => null);
+    const url = r?.success ? r.data?.videoUrl : null;
+    if (url && r!.data!.type !== "hls" && !/\.m3u8(\?|$)/i.test(url)) {
+      return { url, headers: dlHeaders(c.provider), type: "mp4" };
+    }
+  }
+  return null;
 }
 
 /* ── /resolve-video ─────────────────────────── */

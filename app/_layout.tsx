@@ -40,12 +40,14 @@ if (I18nManager.isRTL) {
 import { AuthProvider, useAuth } from "../lib/auth";
 import { pullFavoritesFromCloud } from "../lib/favorites";
 import { pullHistoryFromCloud } from "../lib/history";
+import { pullCompletionFromCloud } from "../lib/completion";
 import { checkForApkUpdate, checkForOtaUpdate } from "../lib/updater";
 import type { UpdateInfo } from "../lib/updater";
 import { UpdateModal } from "../components/UpdateModal";
 import { ScraperHost } from "../lib/scraper";
 import { initAds } from "../lib/ads";
 import { SidebarProvider } from "../components/Sidebar";
+import { CompletionProvider } from "../lib/completion";
 import { setupNotifications, requestNotificationPermission, addNotificationTapListener } from "../lib/push";
 import { reportRecentEpisodes } from "../lib/notifications";
 import { startPresence, stopPresence } from "../lib/presence";
@@ -77,6 +79,7 @@ function AuthGate() {
     if (user) {
       pullFavoritesFromCloud().catch(() => {});
       pullHistoryFromCloud().catch(() => {});
+      pullCompletionFromCloud().catch(() => {});
     }
   }, [user?.id]);
 
@@ -232,6 +235,11 @@ function AuthGate() {
         <Stack.Screen name="see-all/[section]" />
         <Stack.Screen name="notifications" />
         <Stack.Screen name="schedule" />
+        <Stack.Screen name="upcoming" />
+        <Stack.Screen name="seasons" />
+        <Stack.Screen name="popular/[kind]" />
+        <Stack.Screen name="downloads" />
+        <Stack.Screen name="title/[id]" />
         <Stack.Screen name="profile" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="report" />
@@ -288,9 +296,11 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <StatusBar style="light" translucent backgroundColor="transparent" />
       <AuthProvider>
-        <SidebarProvider>
-          <AuthGate />
-        </SidebarProvider>
+        <CompletionProvider>
+          <SidebarProvider>
+            <AuthGate />
+          </SidebarProvider>
+        </CompletionProvider>
       </AuthProvider>
       <ScraperHost />
     </SafeAreaProvider>

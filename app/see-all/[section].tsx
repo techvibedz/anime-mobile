@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchHome, fetchRecent } from "../../lib/api";
 import type { AnimeItem, EpisodeItem, HomeSection } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
+import { CompletionBadge } from "../../components/CompletionBadge";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { LinearGradient } from "expo-linear-gradient";
 import { t } from "../../lib/i18n";
@@ -96,6 +97,17 @@ const GridCard = memo(function GridCard({
           </View>
         )}
         {!isEpisodeType && <MalCardBadge title={item.title} />}
+        {!isEpisodeType ? (
+          <CompletionBadge hrefs={[item.href]} titles={[item.title]} />
+        ) : (
+          // Episode cards keep their number pill at the bottom — pin the
+          // completion badge to the top-left so the two never overlap.
+          <CompletionBadge
+            hrefs={[(item as EpisodeItem).animeHref]}
+            titles={[(item as EpisodeItem).animeTitle]}
+            style={{ bottom: undefined as any, right: undefined as any, top: 6, left: 6 }}
+          />
+        )}
       </View>
       <Text style={s.title} numberOfLines={2}>
         {isEpisodeType ? (item as EpisodeItem).animeTitle || item.title : item.title}

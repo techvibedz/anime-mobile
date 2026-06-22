@@ -17,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { getFavorites, removeFavorite } from "../../lib/favorites";
 import type { FavoriteAnime, FavoriteList } from "../../lib/favorites";
 import { MalCardBadge } from "../../components/MalRating";
+import { CompletionBadge } from "../../components/CompletionBadge";
 import { useAuth } from "../../lib/auth";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
@@ -208,6 +209,9 @@ const MyListCard = memo(function MyListCard({
 
         {/* MAL rating (bottom-left, clear of the status/remove/play controls) */}
         <MalCardBadge title={item.title} style={{ top: undefined as any, right: undefined as any, bottom: 8, left: 8 }} />
+
+        {/* Completion badge (bottom-right) */}
+        <CompletionBadge hrefs={[item.href]} titles={[item.title]} />
       </View>
 
       {/* Title */}

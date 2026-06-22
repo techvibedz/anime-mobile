@@ -21,6 +21,9 @@ import type { AnimeDetail, Episode, SearchResult } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedEpisodeHrefs, isEpisodeCompleted, normHref, toggleWatched } from "../../lib/history";
+import { recordAnimeCompletion } from "../../lib/completion";
+import { fetchNextAiring } from "../../lib/airing";
+import { startDownload, getDownloads, subscribeDownloads, type DownloadStatus } from "../../lib/downloads";
 import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations } from "../../lib/animeInfo";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
 import { normLatin, seasonNum, formatCat } from "../../lib/relations";
@@ -143,6 +146,46 @@ export default function AnimeDetailScreen() {
   useFocusEffect(useCallback(() => {
     getCompletedEpisodeHrefs().then(setCompletedHrefs);
   }, []));
+
+  // Record this anime's completion state — the data behind the poster-card
+  // badges (lib/completion) and the profile's "completed" stat. Recomputed
+  // whenever the merged episode list or the watched-set changes, so watching the
+  // last available episode flips the badge on, and a newly-aired episode flips it
+  // back off. "finished" is gated on the series no longer airing, so a still-
+  // running show's latest episode reads as "caught up" rather than "completed".
+  useEffect(() => {
+    if (!data || !animeHref) return;
+    const all = [...data.episodes, ...episodes4up, ...episodes3rb];
+    if (all.length === 0) return;
+    let maxNum = 0;
+    let hasNum = false;
+    for (const e of all) {
+      if (e.number != null && e.number > maxNum) { maxNum = e.number; hasNum = true; }
+    }
+    if (!hasNum) return;
+    const lastHrefs = all.filter((e) => e.number === maxNum).map((e) => e.href);
+    const caughtUp = isEpisodeCompleted(completedHrefs, lastHrefs);
+    let cancelled = false;
+    (async () => {
+      // The series' finale is out when AniList reports no upcoming episode. A
+      // network miss defaults to "finished" — anime watched to the last
+      // available episode are overwhelmingly completed series.
+      let airing = false;
+      try { airing = !!(await fetchNextAiring(data.title)); } catch {}
+      if (cancelled) return;
+      // Record EVERY known source href + title so a card from any source rail
+      // (e.g. the anime4up-sourced "this season" rail) resolves the badge — not
+      // just the URL the anime happened to be opened under.
+      await recordAnimeCompletion({
+        hrefs: [animeHref, merged?.anime4up],
+        titles: [data.title],
+        lastEpNum: maxNum,
+        caughtUp,
+        finished: caughtUp && !airing,
+      }).catch(() => {});
+    })();
+    return () => { cancelled = true; };
+  }, [data, episodes4up, episodes3rb, completedHrefs, animeHref, merged]);
 
   const handleToggleWatched = useCallback(async (ep: GridEpisode) => {
     // Use whichever source href exists so source-only episodes (no witanime
@@ -483,6 +526,34 @@ function EpisodesTab({
   animeTitle: string;
 }) {
   const [sortDesc, setSortDesc] = useState(true); // true = newest first
+  // Live per-episode download state, keyed by the episode's primary href, so each
+  // grid card can show idle / progress / done and trigger an offline save.
+  const [downloads, setDownloads] = useState<Record<string, { status: DownloadStatus; progress: number }>>({});
+  useEffect(() => {
+    const sync = () => getDownloads().then((list) => {
+      const m: Record<string, { status: DownloadStatus; progress: number }> = {};
+      for (const d of list) m[d.episodeHref] = { status: d.status, progress: d.progress };
+      setDownloads(m);
+    });
+    sync();
+    return subscribeDownloads(sync);
+  }, []);
+
+  const onDownloadEp = useCallback((ep: GridEpisode) => {
+    const primary = ep.href || ep.href4up || ep.href3rb;
+    if (!primary) return;
+    startDownload({
+      animeTitle,
+      episodeTitle: ep.title || `${t.episode} ${ep.number}`,
+      epNum: ep.number ?? null,
+      image: poster,
+      animeHref,
+      episodeHref: primary,
+      url4up: ep.href4up || undefined,
+      url3rb: ep.href3rb || undefined,
+    });
+  }, [animeTitle, poster, animeHref]);
+
   // Render in chunks so anime with 500+ episodes don't freeze the JS thread.
   // Initial 80 covers most users; "show more" appends another 80 each tap.
   const PAGE = 80;
@@ -538,6 +609,13 @@ function EpisodesTab({
     const bn = b.number ?? 0;
     return sortDesc ? bn - an : an - bn;
   }), [mergedEps, sortDesc]);
+
+  // Highest episode number = the last available episode. Its card gets a
+  // "finale" tag so the user can see which episode finishes the anime.
+  const lastEpNum = useMemo(
+    () => mergedEps.reduce((m, e) => Math.max(m, e.number ?? 0), 0),
+    [mergedEps],
+  );
 
   // Ascending order, computed once — used to derive prev/next for the watch
   // screen. Previously re-sorted inside every card's onPress handler.
@@ -596,18 +674,24 @@ function EpisodesTab({
 
       {/* Episode grid: 2 columns for thumbnail cards */}
       <View style={ss.epGrid}>
-        {visible.map((ep, i) => (
-          <EpisodeGridCard
-            key={`${ep.number}-${i}`}
-            ep={ep}
-            watched={isEpisodeCompleted(completedHrefs, [ep.href, ep.href4up, ep.href3rb])}
-            poster={poster}
-            animeHref={animeHref}
-            animeTitle={animeTitle}
-            byNum={byNum}
-            onToggleWatched={onToggleWatched}
-          />
-        ))}
+        {visible.map((ep, i) => {
+          const primary = ep.href || ep.href4up || ep.href3rb || "";
+          return (
+            <EpisodeGridCard
+              key={`${ep.number}-${i}`}
+              ep={ep}
+              watched={isEpisodeCompleted(completedHrefs, [ep.href, ep.href4up, ep.href3rb])}
+              isLast={mergedEps.length > 1 && ep.number === lastEpNum}
+              poster={poster}
+              animeHref={animeHref}
+              animeTitle={animeTitle}
+              byNum={byNum}
+              onToggleWatched={onToggleWatched}
+              dl={downloads[primary]}
+              onDownload={onDownloadEp}
+            />
+          );
+        })}
       </View>
       {hasMore && (
         <Pressable
@@ -642,20 +726,29 @@ type GridEpisode = Episode & { href4up: string | null; href3rb: string | null };
 const EpisodeGridCard = memo(function EpisodeGridCard({
   ep,
   watched,
+  isLast,
   poster,
   animeHref,
   animeTitle,
   byNum,
   onToggleWatched,
+  dl,
+  onDownload,
 }: {
   ep: GridEpisode;
   watched: boolean;
+  isLast: boolean;
   poster: string;
   animeHref: string;
   animeTitle: string;
   byNum: GridEpisode[];
   onToggleWatched: (ep: GridEpisode) => void;
+  dl?: { status: DownloadStatus; progress: number };
+  onDownload: (ep: GridEpisode) => void;
 }) {
+  const dlDone = dl?.status === "completed";
+  const dlBusy = dl?.status === "downloading" || dl?.status === "resolving";
+  const dlPct = Math.round((dl?.progress ?? 0) * 100);
   return (
     <Pressable
       disabled={!ep.href && !ep.href4up && !ep.href3rb}
@@ -709,6 +802,12 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
         <View style={ss.epCardNumBadge}>
           <Text style={ss.epCardNumText}>{String(ep.number ?? '?').padStart(2, '0')}</Text>
         </View>
+        {isLast && (
+          <View style={ss.latestBadge}>
+            <Ionicons name="sparkles" size={9} color="#fff" />
+            <Text style={ss.latestBadgeText} numberOfLines={1}>{t.latestEpBadge}</Text>
+          </View>
+        )}
         {watched && (
           <View style={ss.watchedBadge}>
             <Ionicons name="checkmark-circle" size={11} color="#fff" />
@@ -720,6 +819,23 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
             <Text style={ss.epCardSourceText}>2X</Text>
           </View>
         )}
+        {/* Download button — top-left. Stops propagation so it never opens the
+            player; shows idle / progress / done state. */}
+        <Pressable
+          onPress={() => { if (!dlBusy && !dlDone) onDownload(ep); else router.push("/downloads"); }}
+          hitSlop={8}
+          style={ss.epDownloadBtn}
+        >
+          {dl?.status === "downloading" ? (
+            <Text style={ss.epDownloadPct}>{dlPct}%</Text>
+          ) : (
+            <Ionicons
+              name={dlDone ? "checkmark-circle" : dlBusy ? "cloud-download" : "download-outline"}
+              size={15}
+              color={dlDone ? C.success : C.white}
+            />
+          )}
+        </Pressable>
       </View>
       <Text style={[ss.epCardTitle, watched && { color: C.textMuted }]} numberOfLines={1}>
         {`${t.episode} ${ep.number ?? ''}`.trim()}
@@ -1104,6 +1220,13 @@ const ss = StyleSheet.create({
     backgroundColor: C.accent,
   },
   epCardSourceText: { color: "#000", fontSize: 9, fontWeight: "800", fontFamily: "Outfit_700Bold" },
+  epDownloadBtn: {
+    position: "absolute", top: 6, left: 6,
+    minWidth: 26, height: 26, paddingHorizontal: 5, borderRadius: R.pill,
+    backgroundColor: "rgba(0,0,0,0.6)", alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+  },
+  epDownloadPct: { color: "#fff", fontSize: 9, fontWeight: "800", fontFamily: "Outfit_700Bold" },
   hint: {
     color: C.textMuted, fontSize: 11, marginBottom: 10,
     fontFamily: "Cairo_500Medium", textAlign: "right", writingDirection: "rtl",
@@ -1121,6 +1244,16 @@ const ss = StyleSheet.create({
   },
   watchedBadgeText: {
     color: "#fff", fontSize: 9, fontWeight: "800",
+    fontFamily: "Cairo_700Bold",
+  },
+  latestBadge: {
+    position: "absolute", bottom: 6, right: 8,
+    flexDirection: "row", alignItems: "center", gap: 3,
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: R.pill,
+    backgroundColor: C.violet,
+  },
+  latestBadgeText: {
+    color: "#fff", fontSize: 8, fontWeight: "800",
     fontFamily: "Cairo_700Bold",
   },
   epCardTitle: {

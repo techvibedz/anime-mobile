@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fetchAnime3rbServersByUrl, prefetchAnime3rbServers } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
+import { startDownload, getDownloadByEpisode, subscribeDownloads, type DownloadStatus } from "../../lib/downloads";
 import { getAutoplayNext } from "../../lib/settings";
 import { maybeShowInterstitial } from "../../lib/ads";
 import { C } from "../../lib/theme";
@@ -170,10 +171,14 @@ true;
 `;
 
 export default function WatchScreen() {
-  const { episode, url4up, url3rb, epNum: epNumParam, animeTitle: animeTitleParam, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam } = useLocalSearchParams<{
-    episode: string; url4up?: string; url3rb?: string; epNum?: string; animeTitle?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string;
+  const { episode, url4up, url3rb, epNum: epNumParam, animeTitle: animeTitleParam, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam, local: localParam } = useLocalSearchParams<{
+    episode: string; url4up?: string; url3rb?: string; epNum?: string; animeTitle?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string; local?: string;
   }>();
   const insets = useSafeAreaInsets();
+
+  // Offline playback: when `local` is a downloaded file:// URI, the whole
+  // scraping/enrichment pipeline is bypassed — we just play the local file.
+  const localUri = localParam ? decodeURIComponent(localParam) : null;
 
   // Episode number passed explicitly from the detail page (works for any
   // source's URL shape, unlike the الحلقة-N regex which only matches
@@ -264,6 +269,9 @@ export default function WatchScreen() {
   // actually depends on.
   const videoSource = useMemo(() => {
     if (!videoUrl) return "";
+    // Local downloaded file — hand the URI straight to the player; no CDN
+    // headers / content-type sniffing needed for an on-disk .mp4.
+    if (videoUrl.startsWith("file://")) return videoUrl;
     try {
       const videoHost = new URL(videoUrl).hostname.toLowerCase();
       let referer: string;
@@ -672,6 +680,21 @@ export default function WatchScreen() {
   // ── LOAD SERVERS ──
   const loadServers = useCallback(async () => {
     if (!episode) return;
+    // Offline: play the downloaded file directly, skipping all scraping.
+    if (localUri) {
+      setServers([{
+        server: { id: "local", name: t.downloaded, iframeUrl: "", provider: "local", source: "local" },
+        status: "playing",
+        videoUrl: localUri,
+      }]);
+      setTitle(animeTitleParam ? decodeURIComponent(animeTitleParam) : "");
+      setAnimeTitle(animeTitleParam ? decodeURIComponent(animeTitleParam) : "");
+      if (animeParam) setAnimeHref(decodeURIComponent(animeParam));
+      setLoading(false);
+      setPrimaryDone(true);
+      setHoldForA3rb(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     setServers([]);
@@ -813,6 +836,7 @@ export default function WatchScreen() {
   // For the no-anime-param case we fall back to deriving the anime URL
   // from the episode slug (strip الحلقة-N tail + swap /episode/→/anime/).
   useEffect(() => {
+    if (localUri) return; // offline file — no prev/next scraping
     if (nextEpisodeHref && prevEpisodeHref) return;
     if (!episode) return;
     const currentHref = decodeURIComponent(episode);
@@ -869,6 +893,7 @@ export default function WatchScreen() {
   // from the player keeps the cross-source servers. Matches by episode
   // number against the anime4up episode list (fetchEpisodesUp4).
   useEffect(() => {
+    if (localUri) return; // offline file — no cross-source enrichment
     if (!episode) return;
     setCurrentUp4Href(null);
     const currentHref = decodeURIComponent(episode);
@@ -1007,6 +1032,7 @@ export default function WatchScreen() {
   }, []);
 
   useEffect(() => {
+    if (localUri) return; // offline file — no anime3rb enrichment
     if (!episode) return;
     // No longer gated on `primaryDone`: anime3rb is fully independent of the
     // witanime/anime4up scrape (it resolves from the title + episode number), so
@@ -1698,6 +1724,65 @@ export default function WatchScreen() {
   tapToToggleRef.current = tapToToggle;
   scheduleHideRef.current = scheduleHide;
 
+  // ── DOWNLOAD (offline) ──
+  // Live download state for the CURRENT episode, so the top-bar button can show
+  // idle / progress / done and tapping it starts a save or opens the manager.
+  const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
+  const [downloadPct, setDownloadPct] = useState(0);
+  useEffect(() => {
+    if (localUri || !episode) { setDownloadStatus(null); return; }
+    const href = decodeURIComponent(episode);
+    let alive = true;
+    const sync = () =>
+      getDownloadByEpisode(href).then((d) => {
+        if (!alive) return;
+        setDownloadStatus(d ? d.status : null);
+        setDownloadPct(d ? Math.round((d.progress || 0) * 100) : 0);
+      });
+    sync();
+    const unsub = subscribeDownloads(sync);
+    return () => { alive = false; unsub(); };
+  }, [episode, localUri]);
+
+  const onDownload = useCallback(() => {
+    if (!episode) return;
+    // Already saved or in flight → jump to the Downloads manager.
+    if (downloadStatus === "completed" || downloadStatus === "downloading" || downloadStatus === "resolving") {
+      router.push("/downloads");
+      return;
+    }
+    startDownload({
+      animeTitle: animeTitle || (animeTitleParam ? decodeURIComponent(animeTitleParam) : ""),
+      episodeTitle: title || "",
+      epNum: paramEpNum,
+      image: imgParam ? decodeURIComponent(imgParam) : "",
+      animeHref: animeParam ? decodeURIComponent(animeParam) : animeHref,
+      episodeHref: decodeURIComponent(episode),
+      url4up: (url4up ? decodeURIComponent(url4up) : undefined) || currentUp4Href || undefined,
+      url3rb: url3rb ? decodeURIComponent(url3rb) : undefined,
+    });
+    setDownloadStatus("resolving");
+  }, [episode, downloadStatus, animeTitle, animeTitleParam, title, paramEpNum, imgParam, animeParam, animeHref, url4up, url3rb, currentUp4Href]);
+
+  const renderDownloadBtn = () => {
+    if (localUri) return null; // already offline
+    const inFlight = downloadStatus === "downloading" || downloadStatus === "resolving";
+    const done = downloadStatus === "completed";
+    return (
+      <Pressable onPress={onDownload} style={ss.iconBtn} hitSlop={6}>
+        {downloadStatus === "downloading" ? (
+          <Text style={ss.speedBtnText}>{downloadPct}%</Text>
+        ) : (
+          <Ionicons
+            name={done ? "checkmark-circle" : inFlight ? "cloud-download" : "download-outline"}
+            size={18}
+            color={done ? C.success : C.white}
+          />
+        )}
+      </Pressable>
+    );
+  };
+
   // ── RENDER ──
 
   if (loading) {
@@ -1906,6 +1991,7 @@ export default function WatchScreen() {
                 color={C.white}
               />
             </Pressable>
+            {renderDownloadBtn()}
             <Pressable onPress={() => setPickerOpen(true)} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="server-outline" size={18} color={C.white} />
             </Pressable>
@@ -2029,6 +2115,7 @@ export default function WatchScreen() {
                 <Ionicons name="play-skip-forward" size={18} color={C.white} />
               </Pressable>
             )}
+            {renderDownloadBtn()}
             <Pressable onPress={() => setPickerOpen(true)} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="server-outline" size={18} color={C.white} />
             </Pressable>

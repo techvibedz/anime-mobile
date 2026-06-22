@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../lib/auth";
 import { getHistory, isCompleted, type WatchEntry } from "../lib/history";
+import { countCompletedAnime } from "../lib/completion";
 import { getFavorites, toAnimeUrl } from "../lib/favorites";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
@@ -26,12 +27,13 @@ interface Stats {
   watching: number;
   planned: number;
   distinctAnime: number;
+  completedAnime: number;
   recent: WatchEntry[];
 }
 
 const EMPTY: Stats = {
   episodesWatched: 0, watchHours: 0, watchMins: 0, animeInList: 0,
-  watching: 0, planned: 0, distinctAnime: 0, recent: [],
+  watching: 0, planned: 0, distinctAnime: 0, completedAnime: 0, recent: [],
 };
 
 function arMonthYear(iso?: string): string | null {
@@ -52,8 +54,8 @@ export default function ProfileScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      Promise.all([getHistory(), getFavorites()])
-        .then(([history, favs]) => {
+      Promise.all([getHistory(), getFavorites(), countCompletedAnime()])
+        .then(([history, favs, completedAnime]) => {
           const completed = history.filter(isCompleted);
           const totalMs = history.reduce((sum, e) => sum + (e.positionMs || 0), 0);
           const totalMin = Math.floor(totalMs / 60000);
@@ -66,6 +68,7 @@ export default function ProfileScreen() {
             watching: favs.filter((f) => f.list === "watching").length,
             planned: favs.filter((f) => f.list === "planned").length,
             distinctAnime: distinct,
+            completedAnime,
             recent: history.slice(0, 6),
           });
         })
@@ -90,7 +93,7 @@ export default function ProfileScreen() {
   const miniStats = [
     { icon: "play", value: stats.watching, label: t.statsWatching, color: C.success },
     { icon: "bookmark", value: stats.planned, label: t.statsPlanned, color: C.violet },
-    { icon: "tv", value: stats.distinctAnime, label: t.statsCompleted, color: C.gold },
+    { icon: "checkmark-done", value: stats.completedAnime, label: t.statsCompleted, color: C.success },
   ] as const;
 
   return (

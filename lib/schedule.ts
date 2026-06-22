@@ -207,71 +207,96 @@ export async function fetchWeeklySchedule(force = false): Promise<ScheduleDay[]>
  * romaji-friendly sources, both plain-GET / no WebView) and hide anything that
  * resolves on neither. Results are cached in memory + on disk for a week so a
  * given title is only ever checked once. */
-const AVAIL_PREFIX = "@anime_avail_v1:";
-const AVAIL_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
-const availMem = new Map<string, boolean>();
-const availInflight = new Map<string, Promise<boolean>>();
+const SRCURL_PREFIX = "@anime_srcurl_v1:";
+const SRCURL_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+// The resolved SOURCE URL for a title (or null = checked, not found). Caching the
+// URL — not just a boolean — lets the popular/seasons screens open the anime's
+// real detail page directly instead of bouncing through Discover.
+const srcUrlMem = new Map<string, string | null>();
+const srcUrlInflight = new Map<string, Promise<string | null>>();
 
 function availKey(title: string): string {
   return title.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-async function isAnimeAvailable(title: string): Promise<boolean> {
+/**
+ * Resolve a title to a playable source anime URL (anime4up preferred for its
+ * rich TV pages + cross-source enrichment, then anime3rb). Both are plain-GET /
+ * no-WebView and the anime3rb catalog is a shared pre-warmed sitemap, so this is
+ * cheap. Returns null when neither source carries the title. Cached in memory +
+ * on disk for a week (positive hits only — a null may be a transient miss).
+ */
+export async function resolveSourceUrl(title: string): Promise<string | null> {
   const key = availKey(title);
-  if (!key) return false;
-  if (availMem.has(key)) return availMem.get(key)!;
-  const pending = availInflight.get(key);
+  if (!key) return null;
+  if (srcUrlMem.has(key)) return srcUrlMem.get(key)!;
+  const pending = srcUrlInflight.get(key);
   if (pending) return pending;
 
   const p = (async () => {
     try {
-      const raw = await AsyncStorage.getItem(AVAIL_PREFIX + key);
+      const raw = await AsyncStorage.getItem(SRCURL_PREFIX + key);
       if (raw) {
-        const parsed = JSON.parse(raw) as { ts: number; ok: boolean };
-        if (Date.now() - parsed.ts < AVAIL_TTL) {
-          availMem.set(key, parsed.ok);
-          return parsed.ok;
+        const parsed = JSON.parse(raw) as { ts: number; url: string };
+        if (Date.now() - parsed.ts < SRCURL_TTL && parsed.url) {
+          srcUrlMem.set(key, parsed.url);
+          return parsed.url;
         }
       }
     } catch {}
 
-    // Two CHEAP checks, run in PARALLEL (first positive wins):
-    //   • anime4up direct  — one GET.
-    //   • anime3rb catalog — one shared sitemap GET (pre-warmed + cached), then
-    //     an in-memory match; a confirm GET only fires on a hit.
-    // The old path also tried searchAnime3rbDirect, which slug-probes several
-    // URLs per title and was the main reason verification dragged — the catalog
-    // already covers anime3rb, so it's dropped here. Bounded by a per-item
-    // deadline (fetchHtml retries 3×9s, so a flaky site could otherwise stall a
-    // title ~80s); a timeout counts as "unknown" (false), which the caller's
-    // all-empty guard treats as "sources unreachable, show the raw list".
+    // anime4up first (preferred), anime3rb concurrently as the fallback. Each is
+    // bounded so a flaky site can't stall the per-item resolution.
     const ITEM_TIMEOUT_MS = 6000;
-    const check = new Promise<boolean>((resolve) => {
-      let pending = 2;
-      const settle = (hit: boolean) => {
-        if (hit) return resolve(true);
-        if (--pending === 0) resolve(false);
-      };
-      searchAnime4upDirect(title).then((u) => settle(!!u)).catch(() => settle(false));
-      searchAnime3rbCatalog(title).then((u) => settle(!!u)).catch(() => settle(false));
-    });
-    const ok = await Promise.race([
-      check,
-      new Promise<boolean>((r) => setTimeout(() => r(false), ITEM_TIMEOUT_MS)),
-    ]).catch(() => false);
+    const withTo = <T,>(pr: Promise<T>, ms: number): Promise<T | null> =>
+      Promise.race([pr.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+    const u3p = withTo(searchAnime3rbCatalog(title), ITEM_TIMEOUT_MS); // run in parallel
+    let url: string | null = await withTo(searchAnime4upDirect(title), ITEM_TIMEOUT_MS);
+    if (!url) url = await u3p;
 
-    availMem.set(key, ok);
-    // Only persist positive hits long-term. A negative could be a transient
-    // search/CF miss; letting it re-check next week is cheaper than wrongly
-    // hiding an anime the sites actually carry.
+    srcUrlMem.set(key, url ?? null);
     try {
-      if (ok) await AsyncStorage.setItem(AVAIL_PREFIX + key, JSON.stringify({ ts: Date.now(), ok: true }));
+      if (url) await AsyncStorage.setItem(SRCURL_PREFIX + key, JSON.stringify({ ts: Date.now(), url }));
     } catch {}
-    availInflight.delete(key);
-    return ok;
+    return url ?? null;
   })();
-  availInflight.set(key, p);
+  srcUrlInflight.set(key, p);
+  p.finally(() => srcUrlInflight.delete(key));
   return p;
+}
+
+async function isAnimeAvailable(title: string): Promise<boolean> {
+  return !!(await resolveSourceUrl(title).catch(() => null));
+}
+
+// Like filterAvailableItems but ATTACHES the resolved source URL to each kept
+// item (so the caller can open its detail page directly). Streams via onProgress
+// as each title resolves. Lower default concurrency than the boolean filter —
+// it's used on the home screen where it must not saturate the network.
+export async function resolveAvailableItems<T extends { title: string }>(
+  items: T[],
+  onProgress?: (soFar: (T & { sourceHref: string })[]) => void,
+  concurrency = 6,
+): Promise<(T & { sourceHref: string })[]> {
+  if (items.length === 0) return [];
+  await searchAnime3rbCatalog(items[0]?.title || "").catch(() => {});
+  const urls = new Array<string | null>(items.length).fill(null);
+  const build = () =>
+    items
+      .map((it, i) => (urls[i] ? { ...it, sourceHref: urls[i]! } : null))
+      .filter((x): x is T & { sourceHref: string } => !!x);
+  const emit = () => onProgress?.(build());
+
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      urls[i] = await resolveSourceUrl(items[i].title).catch(() => null);
+      if (urls[i]) emit();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return build();
 }
 
 // Run a list through `isAnimeAvailable` with bounded concurrency and return only
@@ -280,10 +305,10 @@ async function isAnimeAvailable(title: string): Promise<boolean> {
 // `onProgress` fires after every resolution with the available items found SO
 // FAR (in original order), so the screen can stream rows in as they're confirmed
 // instead of waiting for the whole day — most of the perceived speed-up.
-export async function filterAvailableItems(
-  items: ScheduleItem[],
-  onProgress?: (availableSoFar: ScheduleItem[]) => void,
-): Promise<ScheduleItem[]> {
+export async function filterAvailableItems<T extends { title: string }>(
+  items: T[],
+  onProgress?: (availableSoFar: T[]) => void,
+): Promise<T[]> {
   if (items.length === 0) return [];
 
   // Pre-warm the anime3rb catalog sitemap ONCE (one ~6300-slug GET). Without

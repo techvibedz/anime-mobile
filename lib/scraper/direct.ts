@@ -487,6 +487,109 @@ export async function searchAnime4upDirect(
   return best.score >= 34 ? best.url : null;
 }
 
+// Search anime4up via a direct GET and return the FULL card list (not just the
+// best match), shaped like the WebView scraper's results. anime4up's search page
+// ships its cards in the static HTML, so a plain GET + regex parse returns them
+// in well under a second — the WebView render takes many seconds and often trips
+// anime4up's ad gates. The caller uses this as the fast path and only falls back
+// to the WebView scrape when it comes back empty (network / CF hiccup).
+export async function searchAnime4upDirectList(
+  query: string,
+): Promise<{ title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: string | null }[] | null> {
+  if (!query) return null;
+  const url = `${UP4_BASE}/?search_param=animes&s=${encodeURIComponent(query)}`;
+  const html = await fetchHtml(url, UP4_BASE + "/");
+  if (!html) return null;
+  const out: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: string | null }[] = [];
+  const seen = new Set<string>();
+  const blocks = html.split("anime-card-container");
+  for (let i = 1; i < blocks.length; i++) {
+    const b = blocks[i];
+    const tm = b.match(/anime-card-title[^>]*>\s*<h3[^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    if (!tm) continue;
+    let href = (tm[1] || "").trim();
+    if (href.indexOf("/anime/") < 0) continue;
+    if (href.indexOf("http") !== 0) href = UP4_BASE + (href.charAt(0) === "/" ? "" : "/") + href;
+    if (seen.has(href)) continue;
+    const title = htmlDecode((tm[2] || "").replace(/<[^>]+>/g, ""));
+    if (!title) continue;
+    seen.add(href);
+    const im = b.match(/<img[^>]*\b(?:data-src|data-original|data-image|src)=["']([^"']+)["']/i);
+    const ty = b.match(/anime-card-type[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i);
+    const st = b.match(/anime-card-status[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i);
+    out.push({
+      title,
+      href,
+      image: im ? witUpgradeImg(im[1]) : null,
+      type: ty ? htmlDecode(ty[1].replace(/<[^>]+>/g, "")) : null,
+      status: st ? htmlDecode(st[1].replace(/<[^>]+>/g, "")) : null,
+      synopsis: null,
+    });
+  }
+  return out;
+}
+
+/* ── Source-direct home rails (no AniList, no verification sweep) ──
+ *
+ * The "most popular" home rails used to pull AniList's global ranking and then
+ * source-verify every title (50 searches × 3 rails) on the home screen — the
+ * single biggest launch-time cost. These read a source's OWN listing page in
+ * ONE static GET instead: each card already carries its real source URL, so the
+ * rail opens the detail page directly with zero per-tap resolution. */
+
+// Parse anime4up's standard .anime-card-container cards (season / movie listing
+// pages and home widgets all use this markup) from static HTML. Same block-split
+// shape as searchAnime4upDirectList.
+function parseAnime4upCards(
+  html: string,
+): { title: string; href: string; image: string | null; type: string | null }[] {
+  const out: { title: string; href: string; image: string | null; type: string | null }[] = [];
+  const seen = new Set<string>();
+  const blocks = html.split("anime-card-container");
+  for (let i = 1; i < blocks.length; i++) {
+    const b = blocks[i];
+    const tm = b.match(/anime-card-title[^>]*>\s*<h3[^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    if (!tm) continue;
+    let href = (tm[1] || "").trim();
+    if (href.indexOf("/anime/") < 0) continue;
+    if (href.indexOf("http") !== 0) href = UP4_BASE + (href.charAt(0) === "/" ? "" : "/") + href;
+    if (seen.has(href)) continue;
+    const title = htmlDecode((tm[2] || "").replace(/<[^>]+>/g, ""));
+    if (!title) continue;
+    seen.add(href);
+    const im = b.match(/<img[^>]*\b(?:data-src|data-original|data-image|src)=["']([^"']+)["']/i);
+    const ty = b.match(/anime-card-type[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i);
+    out.push({ title, href, image: im ? witUpgradeImg(im[1]) : null, type: ty ? htmlDecode(ty[1].replace(/<[^>]+>/g, "")) : null });
+  }
+  return out;
+}
+
+// witanime's full movie listing — every movie in ONE static GET (no server
+// pagination), parsed by the shared card parser.
+export async function fetchWitMoviesListing(): Promise<WitCard[] | null> {
+  return fetchWitListingDirect(`${WIT_BASE}/anime-type/movie/`);
+}
+
+// The anime4up current-season catalogue, scraped directly. anime4up's main menu
+// links the live season page (e.g. "ربيع 2026" → /anime-season/<slug>/), and the
+// site's notion of "current" tracks the airing calendar — which disagrees with a
+// device-clock season at the boundary (mid-June is still Spring on the site) — so
+// read the link off the home page rather than constructing the slug. fetchHtml
+// follows anime4up's home redirect (…/ → /home8/) automatically. One menu GET +
+// one listing GET, both plain static HTML.
+export async function fetchAnime4upSeasonListing(): Promise<
+  { title: string; href: string; image: string | null; type: string | null }[] | null
+> {
+  const home = await fetchHtml(UP4_BASE + "/", UP4_BASE + "/");
+  if (!home) return null;
+  const m = home.match(/href=["'](https?:\/\/[^"']*\/anime-season\/[^"']+)["']/i);
+  if (!m) return null;
+  const html = await fetchHtml(m[1], UP4_BASE + "/");
+  if (!html) return null;
+  const cards = parseAnime4upCards(html);
+  return cards.length ? cards : null;
+}
+
 // Episode number for an anime4up link. The URL slug is NOT reliable: anime4up
 // uses random hash slugs (…-الحلقة-wtgjd/), so the number must come from the
 // anchor's title attribute ("… الحلقة 20"). Falls back to the slug only when a

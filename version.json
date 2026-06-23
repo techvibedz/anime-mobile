@@ -1,6 +1,6 @@
 {
     "force_update": false,
-    "version": "2.1.0",
-    "release_notes": "إصدار 2.1.0:\n• تصميم جديد كليًا للتطبيق بطابع سينمائي أنيق، مع أيقونة جديدة.\n• تشغيل أكثر سلاسة وتقليل التقطيع أثناء المشاهدة من Anime3rb.\n• زر قفل الشاشة في المشغّل، وإمكانية فتح صفحة الأنمي مباشرةً من المشغّل.\n• دعم تقليل الحركة وتحسينات في الوضوح وسهولة القراءة.",
-    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v2.1.0/pantoufa-2.1.0.apk"
+    "version": "2.2.0",
+    "release_notes": "إصدار 2.2.0:\n• أيقونة جديدة كليًا للتطبيق بحرف P أنيق مع مثلّث تشغيل مدمج.\n• شاشة بداية جديدة بملء الشاشة بتصميم متناسق.\n• تحسينات في وضوح الأيقونات على مختلف الأجهزة.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v2.2.0/pantoufa-2.2.0.apk"
 }

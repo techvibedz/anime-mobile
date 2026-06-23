@@ -156,7 +156,7 @@ export default function Login() {
             disabled={loading || !email || !password}
           >
             <LinearGradient
-              colors={[C.accent, "#FF457A", C.violet]}
+              colors={[C.ember, C.emberDeep]}
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               style={ss.submitBtn}
             >
@@ -232,8 +232,8 @@ const ss = StyleSheet.create({
   inputBox: {
     flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
     alignItems: "center", gap: 10,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    borderRadius: R.lg, paddingHorizontal: 14, height: S.inputHeight,
+    backgroundColor: C.inkHigh, borderWidth: 1, borderColor: C.line,
+    borderRadius: R.md, paddingHorizontal: 14, height: S.inputHeight,
   },
   input: {
     flex: 1, color: C.text, fontSize: 14, height: S.inputHeight,

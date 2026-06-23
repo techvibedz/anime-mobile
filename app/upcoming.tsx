@@ -16,7 +16,8 @@ import { fetchUpcomingAnime, type CatalogAnime } from "../lib/seasons";
 import { CatalogCard, type CatalogCardData } from "../components/CatalogCard";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
-import { Aurora, ScreenHeader } from "../components/ScreenChrome";
+import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
+import { useOnlineStatus } from "../lib/net";
 
 type SortMode = "popular" | "soon";
 
@@ -75,6 +76,7 @@ function sortItems(items: CatalogAnime[], mode: SortMode): CatalogAnime[] {
 
 export default function UpcomingScreen() {
   const insets = useSafeAreaInsets();
+  const { online } = useOnlineStatus();
   const [items, setItems] = useState<CatalogAnime[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   // Default to "most popular" — the filter the user asked for.
@@ -150,13 +152,7 @@ export default function UpcomingScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
           }
-          ListEmptyComponent={
-            <View style={s.empty}>
-              <View style={s.emptyIcon}><Ionicons name="cloud-offline-outline" size={32} color={C.accent} /></View>
-              <Text style={s.emptyTitle}>{t.scheduleError}</Text>
-              <Text style={s.emptySub}>{t.scheduleErrorSub}</Text>
-            </View>
-          }
+          ListEmptyComponent={<OfflineNotice offline={online === false} onRetry={onRefresh} />}
           renderItem={({ item }) => <CatalogCard item={toCard(item)} width={CARD_W} onPress={openItem} />}
         />
       )}

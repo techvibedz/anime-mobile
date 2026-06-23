@@ -110,7 +110,7 @@ const s = StyleSheet.create({
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center", justifyContent: "center",
-    backgroundColor: "rgba(6,7,26,0.55)",
+    backgroundColor: "rgba(10,10,11,0.55)",
   },
 
   title: {

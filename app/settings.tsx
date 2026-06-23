@@ -35,7 +35,7 @@ import {
 } from "../lib/push";
 import { supabase } from "../lib/supabase";
 import { checkForApkUpdate, checkForOtaUpdate, openApkDownload, applyOtaUpdate } from "../lib/updater";
-import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
+import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, SectionLabel } from "../components/ScreenChrome";
 
@@ -432,7 +432,7 @@ const s = StyleSheet.create({
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
     paddingVertical: 10, borderRadius: R.pill,
   },
-  segmentBtnActive: { backgroundColor: C.accent, ...ELEVATION_GLOW },
+  segmentBtnActive: { backgroundColor: C.accent },
   segmentText: { color: C.textSecondary, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold", marginLeft: 6 },
   segmentTextActive: { color: C.textOnAccent },
 

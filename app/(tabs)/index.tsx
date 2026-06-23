@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, memo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, memo } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  AppState,
 } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -31,6 +32,8 @@ import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { checkOnline } from "../../lib/net";
+import { useReducedMotion } from "../../lib/motion";
 
 const { width: SW } = Dimensions.get("window");
 const HERO_H = 440;
@@ -41,14 +44,14 @@ const EP_H = 112;
 const PAD = S.paddingContent;
 
 const CATEGORIES = [
-  { name: "Action", label: "أكشن", icon: "flash", colors: [C.accent, "#FF6B3D"] as [string, string] },
-  { name: "Romance", label: "رومانسي", icon: "heart", colors: ["#FF6B9D", C.accent] as [string, string] },
-  { name: "Comedy", label: "كوميدي", icon: "happy", colors: ["#FFB800", "#FF8C00"] as [string, string] },
-  { name: "Fantasy", label: "خيال", icon: "sparkles", colors: [C.violet, "#9B6BFF"] as [string, string] },
-  { name: "Horror", label: "رعب", icon: "skull", colors: ["#6B2D5B", "#FF2D55"] as [string, string] },
-  { name: "Sci-Fi", label: "خيال علمي", icon: "planet", colors: ["#00C6FF", C.violet] as [string, string] },
-  { name: "Drama", label: "دراما", icon: "sad", colors: ["#667EEA", "#764BA2"] as [string, string] },
-  { name: "Adventure", label: "مغامرة", icon: "compass", colors: ["#11998E", "#38EF7D"] as [string, string] },
+  { name: "Action", label: "أكشن", icon: "flash" },
+  { name: "Romance", label: "رومانسي", icon: "heart" },
+  { name: "Comedy", label: "كوميدي", icon: "happy" },
+  { name: "Fantasy", label: "خيال", icon: "sparkles" },
+  { name: "Horror", label: "رعب", icon: "skull" },
+  { name: "Sci-Fi", label: "خيال علمي", icon: "planet" },
+  { name: "Drama", label: "دراما", icon: "sad" },
+  { name: "Adventure", label: "مغامرة", icon: "compass" },
 ];
 
 const SECTION_LABELS: Record<string, string> = {
@@ -67,6 +70,157 @@ function sectionRank(id: string): number {
   return i === -1 ? SECTION_ORDER.length : i;
 }
 
+/* ── Hero Carousel (isolated) ──────────────────────────────────
+   Owns its OWN paging index + 5s auto-advance timer, so a hero tick or swipe
+   re-renders only the carousel — not the entire home feed (every rail +
+   categories). Previously heroIndex lived on HomeScreen, so each 5s auto-advance
+   reconciled the whole tree on the JS thread and stuttered an in-progress
+   vertical scroll. Memoized: re-renders only when `featured` changes. */
+const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: FeaturedItem[] }) {
+  const heroRef = useRef<ScrollView>(null);
+  const [heroIndex, setHeroIndex] = useState(0);
+  const heroTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Accessibility: honor the OS "Reduce Motion" switch. When on, the hero does
+  // NOT auto-advance (self-moving carousels are a classic reduced-motion
+  // offender) — the user pages it manually. Content is never gated on motion,
+  // so every slide stays reachable.
+  const reduced = useReducedMotion();
+
+  const startAuto = useCallback(() => {
+    if (heroTimer.current) clearInterval(heroTimer.current);
+    if (featured.length <= 1) return;
+    if (reduced) return;
+    // Don't run the auto-advance while the app is backgrounded — a 5s timer that
+    // keeps firing in the user's pocket wakes the JS thread and animates an
+    // off-screen ScrollView for nothing. It restarts on foreground (below).
+    if (AppState.currentState !== "active") return;
+    heroTimer.current = setInterval(() => {
+      setHeroIndex((prev) => {
+        const next = (prev + 1) % featured.length;
+        heroRef.current?.scrollTo({ x: next * SW, animated: true });
+        return next;
+      });
+    }, 5000);
+  }, [featured.length, reduced]);
+
+  useEffect(() => {
+    startAuto();
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") startAuto();
+      else if (heroTimer.current) { clearInterval(heroTimer.current); heroTimer.current = null; }
+    });
+    return () => {
+      if (heroTimer.current) clearInterval(heroTimer.current);
+      sub.remove();
+    };
+  }, [startAuto]);
+
+  const onHeroScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const idx = Math.round(e.nativeEvent.contentOffset.x / SW);
+    setHeroIndex((cur) => (idx !== cur ? idx : cur));
+  };
+
+  return (
+    <View>
+      <ScrollView
+        ref={heroRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={(e) => { onHeroScroll(e); startAuto(); }}
+        scrollEventThrottle={16}
+      >
+        {featured.map((item, i) => (
+          <View key={i} style={ss.heroSlide}>
+            {/* Mesh gradient background */}
+            <View style={ss.meshBg}>
+              <LinearGradient
+                colors={[C.meshViolet, "transparent"]}
+                start={{ x: 0.2, y: 0.5 }}
+                end={{ x: 0.8, y: 0.5 }}
+                style={[StyleSheet.absoluteFill, { opacity: 0.8 }]}
+              />
+              <LinearGradient
+                colors={[C.meshPink, "transparent"]}
+                start={{ x: 0.8, y: 0.2 }}
+                end={{ x: 0.2, y: 0.8 }}
+                style={[StyleSheet.absoluteFill, { opacity: 0.6 }]}
+              />
+            </View>
+            {item.image && (
+              <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
+            )}
+            {/* Protection scrim — deepened so the title / synopsis / CTAs always
+                clear WCAG AA against the darkened plate, never against raw art. */}
+            <LinearGradient
+              colors={["transparent", "rgba(10,10,11,0.5)", "rgba(10,10,11,0.93)", C.bg]}
+              locations={[0, 0.35, 0.72, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+            {/* Hero content */}
+            <View style={ss.heroContent}>
+              {/* Genre chips */}
+              <View style={ss.chipRow}>
+                {item.genres.slice(0, 3).map((g, gi) => (
+                  <View key={gi} style={ss.chip}>
+                    <Text style={ss.chipText}>{g}</Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={ss.heroTitle} numberOfLines={2}>{item.title}</Text>
+              {item.description && (
+                <Text style={ss.heroDesc} numberOfLines={2}>{item.description}</Text>
+              )}
+              <View style={ss.heroButtons}>
+                <Pressable
+                  style={ss.btnPrimary}
+                  onPress={() => {
+                    if (!item.href) return;
+                    if (item.href.includes("/episode/")) {
+                      const animeUrl = toAnimeUrl(item.href);
+                      // Defer a frame so the press feedback paints before
+                      // the heavy watch-screen mount blocks the thread.
+                      requestAnimationFrame(() => router.push({
+                        pathname: `/watch/${encodeURIComponent(item.href)}`,
+                        params: animeUrl ? { anime: animeUrl } : {},
+                      }));
+                    } else {
+                      router.push(`/anime/${encodeURIComponent(item.href)}`);
+                    }
+                  }}
+                >
+                  <Ionicons name="play" size={16} color={C.textOnAccent} />
+                  <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
+                </Pressable>
+                <Pressable
+                  style={ss.btnGlass}
+                  onPress={() => {
+                    if (!item.href) return;
+                    addFavorite({ title: item.title, href: item.href, image: item.image || "" });
+                  }}
+                >
+                  <Ionicons name="heart-outline" size={18} color={C.text} />
+                  <Text style={ss.btnGlassText}>{t.myList}</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        ))}
+      </ScrollView>
+      {/* Dot pagination */}
+      {featured.length > 1 && (
+        <View style={ss.dots}>
+          {featured.map((_, i) => (
+            <View key={i} style={[ss.dot, i === heroIndex && ss.dotActive]} />
+          ))}
+        </View>
+      )}
+      {/* Accent glow line */}
+      <View style={ss.glowLine} />
+    </View>
+  );
+});
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { openSidebar } = useSidebar();
@@ -76,10 +230,9 @@ export default function HomeScreen() {
   const [sections, setSections] = useState<HomeSection[]>([]);
   const [history, setHistory] = useState<WatchEntry[]>([]);
   const [unread, setUnread] = useState(0);
-
-  const heroRef = useRef<ScrollView>(null);
-  const [heroIndex, setHeroIndex] = useState(0);
-  const heroTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // True once a connectivity probe confirms the device is offline AND we have no
+  // content to show — drives the offline home state (funnels to Downloads).
+  const [offline, setOffline] = useState(false);
 
   // Cold-start resilience: the first scrape can come back empty while the
   // WebView is still warming up / clearing Cloudflare. Instead of dropping the
@@ -106,19 +259,38 @@ export default function HomeScreen() {
         setSections(secs);
         hasContent.current = true;
         emptyRetry.current = 0;
-      } else if (!hasContent.current && emptyRetry.current < MAX_EMPTY_RETRIES) {
-        // Empty scrape and nothing on screen yet — likely a cold WebView or an
-        // un-cleared Cloudflare challenge. Keep the skeleton and retry shortly.
-        emptyRetry.current += 1;
-        retryTimer.current = setTimeout(() => { void load(); }, 3000);
-        return; // don't drop out of the loading state
+        setOffline(false);
+      } else if (!hasContent.current) {
+        // Empty scrape with nothing on screen yet. Distinguish a genuine offline
+        // device from a cold WebView / un-cleared Cloudflare challenge: probe
+        // reachability. Offline → stop retrying and show the offline state
+        // immediately (funnels to Downloads) instead of spinning for ~15s.
+        if (!(await checkOnline())) {
+          setOffline(true);
+          setLoading(false);
+          setRefreshing(false);
+          return;
+        }
+        if (emptyRetry.current < MAX_EMPTY_RETRIES) {
+          emptyRetry.current += 1;
+          retryTimer.current = setTimeout(() => { void load(); }, 3000);
+          return; // don't drop out of the loading state
+        }
       }
     } catch (e) {
       console.error("Home load failed:", e);
-      if (!hasContent.current && emptyRetry.current < MAX_EMPTY_RETRIES) {
-        emptyRetry.current += 1;
-        retryTimer.current = setTimeout(() => { void load(); }, 3000);
-        return;
+      if (!hasContent.current) {
+        if (!(await checkOnline())) {
+          setOffline(true);
+          setLoading(false);
+          setRefreshing(false);
+          return;
+        }
+        if (emptyRetry.current < MAX_EMPTY_RETRIES) {
+          emptyRetry.current += 1;
+          retryTimer.current = setTimeout(() => { void load(); }, 3000);
+          return;
+        }
       }
     }
     setLoading(false);
@@ -155,33 +327,15 @@ export default function HomeScreen() {
     getUnreadCount().then(setUnread).catch(() => {});
   }, []));
 
-  useEffect(() => {
-    if (featured.length <= 1) return;
-    heroTimer.current = setInterval(() => {
-      setHeroIndex((prev) => {
-        const next = (prev + 1) % featured.length;
-        heroRef.current?.scrollTo({ x: next * SW, animated: true });
-        return next;
-      });
-    }, 5000);
-    return () => { if (heroTimer.current) clearInterval(heroTimer.current); };
-  }, [featured.length]);
-
-  function onHeroScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    const idx = Math.round(e.nativeEvent.contentOffset.x / SW);
-    if (idx !== heroIndex) setHeroIndex(idx);
-  }
-
-  function resetAutoScroll() {
-    if (heroTimer.current) clearInterval(heroTimer.current);
-    heroTimer.current = setInterval(() => {
-      setHeroIndex((prev) => {
-        const next = (prev + 1) % featured.length;
-        heroRef.current?.scrollTo({ x: next * SW, animated: true });
-        return next;
-      });
-    }, 5000);
-  }
+  // Filter + order the section rails once per `sections` change, not on every
+  // re-render (focus history/unread updates) — keeps unrelated state changes off
+  // the work of rebuilding the rail list.
+  const visibleSections = useMemo(
+    () => sections
+      .filter((s) => s.id !== "tv_series")
+      .sort((a, b) => sectionRank(a.id) - sectionRank(b.id)),
+    [sections],
+  );
 
   if (loading) return <HomeSkeleton />;
 
@@ -191,6 +345,7 @@ export default function HomeScreen() {
     return (
       <HomeEmpty
         insets={insets}
+        offline={offline}
         onMenu={openSidebar}
         onRetry={() => { setLoading(true); reload(); }}
       />
@@ -202,7 +357,7 @@ export default function HomeScreen() {
       {/* ── Top Bar (floating glass) ────────── */}
       <View style={[ss.topBar, { paddingTop: insets.top + 8 }]}>
         <LinearGradient
-          colors={[C.bg, "rgba(6,7,26,0.85)", "transparent"]}
+          colors={[C.bg, "rgba(10,10,11,0.85)", "transparent"]}
           style={StyleSheet.absoluteFill}
         />
         <View style={ss.topBarInner}>
@@ -255,103 +410,8 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* ── Hero Carousel ────────────────── */}
-        {featured.length > 0 && (
-          <View>
-            <ScrollView
-              ref={heroRef}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              onMomentumScrollEnd={(e) => { onHeroScroll(e); resetAutoScroll(); }}
-              scrollEventThrottle={16}
-            >
-              {featured.map((item, i) => (
-                <View key={i} style={ss.heroSlide}>
-                  {/* Mesh gradient background */}
-                  <View style={ss.meshBg}>
-                    <LinearGradient
-                      colors={[C.meshViolet, "transparent"]}
-                      start={{ x: 0.2, y: 0.5 }}
-                      end={{ x: 0.8, y: 0.5 }}
-                      style={[StyleSheet.absoluteFill, { opacity: 0.8 }]}
-                    />
-                    <LinearGradient
-                      colors={[C.meshPink, "transparent"]}
-                      start={{ x: 0.8, y: 0.2 }}
-                      end={{ x: 0.2, y: 0.8 }}
-                      style={[StyleSheet.absoluteFill, { opacity: 0.6 }]}
-                    />
-                  </View>
-                  {item.image && (
-                    <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
-                  )}
-                  {/* Protection gradient */}
-                  <LinearGradient
-                    colors={["transparent", "rgba(6,7,26,0.3)", "rgba(6,7,26,0.85)", C.bg]}
-                    locations={[0, 0.4, 0.7, 1]}
-                    style={StyleSheet.absoluteFill}
-                  />
-                  {/* Hero content */}
-                  <View style={ss.heroContent}>
-                    {/* Genre chips */}
-                    <View style={ss.chipRow}>
-                      {item.genres.slice(0, 3).map((g, gi) => (
-                        <View key={gi} style={ss.chip}>
-                          <Text style={ss.chipText}>{g}</Text>
-                        </View>
-                      ))}
-                    </View>
-                    <Text style={ss.heroTitle} numberOfLines={2}>{item.title}</Text>
-                    {item.description && (
-                      <Text style={ss.heroDesc} numberOfLines={2}>{item.description}</Text>
-                    )}
-                    <View style={ss.heroButtons}>
-                      <Pressable
-                        style={ss.btnPrimary}
-                        onPress={() => {
-                          if (!item.href) return;
-                          if (item.href.includes("/episode/")) {
-                            const animeUrl = toAnimeUrl(item.href);
-                            router.push({
-                              pathname: `/watch/${encodeURIComponent(item.href)}`,
-                              params: animeUrl ? { anime: animeUrl } : {},
-                            });
-                          } else {
-                            router.push(`/anime/${encodeURIComponent(item.href)}`);
-                          }
-                        }}
-                      >
-                        <Ionicons name="play" size={16} color={C.textOnAccent} />
-                        <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
-                      </Pressable>
-                      <Pressable
-                        style={ss.btnGlass}
-                        onPress={() => {
-                          if (!item.href) return;
-                          addFavorite({ title: item.title, href: item.href, image: item.image || "" });
-                        }}
-                      >
-                        <Ionicons name="heart-outline" size={18} color={C.text} />
-                        <Text style={ss.btnGlassText}>{t.myList}</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                </View>
-              ))}
-            </ScrollView>
-            {/* Dot pagination */}
-            {featured.length > 1 && (
-              <View style={ss.dots}>
-                {featured.map((_, i) => (
-                  <View key={i} style={[ss.dot, i === heroIndex && ss.dotActive]} />
-                ))}
-              </View>
-            )}
-            {/* Accent glow line */}
-            <View style={ss.glowLine} />
-          </View>
-        )}
+        {/* ── Hero Carousel (state isolated — see HeroCarousel) ─────── */}
+        {featured.length > 0 && <HeroCarousel featured={featured} />}
 
         {/* ── Continue Watching ─────────────── */}
         {history.length > 0 && (
@@ -381,10 +441,7 @@ export default function HomeScreen() {
         )}
 
         {/* ── Sections ─────────────────────── */}
-        {sections
-          .filter(s => s.id !== "tv_series")
-          .sort((a, b) => sectionRank(a.id) - sectionRank(b.id))
-          .map((section, si) => {
+        {visibleSections.map((section, si) => {
           const MAX_PREVIEW = 15;
           const previewItems = section.items.slice(0, MAX_PREVIEW);
           const hasMore = section.items.length > MAX_PREVIEW;
@@ -403,7 +460,7 @@ export default function HomeScreen() {
                   }}
                 >
                   <Text style={ss.seeAllText}>{t.seeAll(section.items.length)}</Text>
-                  <Ionicons name="chevron-back" size={12} color={C.accent} />
+                  <Ionicons name="chevron-back" size={12} color={C.textSecondary} />
                 </Pressable>
               </View>
               <ScrollView
@@ -456,15 +513,10 @@ export default function HomeScreen() {
                 style={({ pressed }) => [ss.catCard, { opacity: pressed ? 0.8 : 1 }]}
                 onPress={() => router.push(`/(tabs)/search?genre=${encodeURIComponent(cat.name)}`)}
               >
-                <LinearGradient
-                  colors={cat.colors}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={ss.catGrad}
-                >
-                  <Ionicons name={cat.icon as any} size={20} color="rgba(255,255,255,0.7)" />
+                <View style={ss.catGrad}>
+                  <Ionicons name={cat.icon as any} size={19} color={C.ember} />
                   <Text style={ss.catName}>{cat.label}</Text>
-                </LinearGradient>
+                </View>
               </Pressable>
             ))}
           </View>
@@ -512,10 +564,12 @@ function EpisodeActionModal({ episode, onClose }: { episode: EpisodeItem | null;
                 ? rawAnime
                 : (toAnimeUrl(rawAnime) ?? '');
               if (animeUrl) params.anime = animeUrl;
-              router.push({
+              // Defer one frame so the modal-close + button feedback paint
+              // before the heavy watch-screen mount blocks the JS thread.
+              requestAnimationFrame(() => router.push({
                 pathname: `/watch/${encodeURIComponent(episode.href)}`,
                 params,
-              });
+              }));
             }}
           >
             <Ionicons name="play" size={16} color={C.textOnAccent} />
@@ -569,7 +623,7 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
           </View>
         )}
         <MalCardBadge title={item.title} />
-        <LinearGradient colors={["transparent", "rgba(6,7,26,0.95)"]} style={ss.cardGrad} />
+        <LinearGradient colors={["transparent", "rgba(10,10,11,0.95)"]} style={ss.cardGrad} />
         {/* Rank number with accent stroke effect */}
         <Text style={ss.cardRank}>{index + 1}</Text>
         <CompletionBadge hrefs={[item.href, ...Object.values(item.sourceHrefs || {})]} titles={[item.title]} />
@@ -738,9 +792,10 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
 /* ── Empty / error state ──────────────────────── */
 
 function HomeEmpty({
-  insets, onRetry, onMenu,
+  insets, offline, onRetry, onMenu,
 }: {
   insets: { top: number; bottom: number };
+  offline: boolean;
   onRetry: () => void;
   onMenu: () => void;
 }) {
@@ -761,13 +816,18 @@ function HomeEmpty({
       </View>
       <View style={ss.emptyWrap}>
         <View style={ss.emptyIcon}>
-          <Ionicons name="cloud-offline-outline" size={40} color={C.accent} />
+          <Ionicons name={offline ? "cloud-offline-outline" : "alert-circle-outline"} size={40} color={C.accent} />
         </View>
-        <Text style={ss.emptyTitle}>{t.homeEmptyTitle}</Text>
-        <Text style={ss.emptyDesc}>{t.homeEmptySub}</Text>
-        <Pressable style={ss.emptyBtn} onPress={onRetry}>
-          <Ionicons name="refresh" size={16} color={C.textOnAccent} />
-          <Text style={ss.emptyBtnText}>{t.retry}</Text>
+        <Text style={ss.emptyTitle}>{offline ? t.offlineTitle : t.homeEmptyTitle}</Text>
+        <Text style={ss.emptyDesc}>{offline ? t.offlineSub : t.homeEmptySub}</Text>
+        {/* Downloaded episodes play with no connection — always offer them. */}
+        <Pressable style={ss.emptyBtn} onPress={() => router.push("/downloads")}>
+          <Ionicons name="download" size={16} color={C.textOnAccent} />
+          <Text style={ss.emptyBtnText}>{t.watchDownloads}</Text>
+        </Pressable>
+        <Pressable style={ss.emptyBtnGhost} onPress={onRetry}>
+          <Ionicons name="refresh" size={15} color={C.text} />
+          <Text style={ss.emptyBtnGhostText}>{t.retry}</Text>
         </Pressable>
       </View>
     </View>
@@ -825,6 +885,12 @@ const ss = StyleSheet.create({
     ...ELEVATION_GLOW,
   },
   emptyBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  emptyBtnGhost: {
+    flexDirection: "row", alignItems: "center", gap: 7, marginTop: 2,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    borderRadius: R.pill, paddingVertical: 11, paddingHorizontal: 24,
+  },
+  emptyBtnGhostText: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Top bar
   topBar: {
@@ -834,14 +900,14 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: PAD, paddingBottom: 12,
   },
-  logoRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  logoRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  // Editorial masthead: bone wordmark led by an ember spark mark.
   logoDot: {
-    width: 8, height: 8, borderRadius: 2, backgroundColor: C.accent,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 8,
+    width: 7, height: 7, borderRadius: 1.5, backgroundColor: C.ember,
   },
   logoText: {
-    fontSize: 24, fontWeight: "800", color: C.accent, letterSpacing: -0.7,
-    fontFamily: "Outfit_800ExtraBold",
+    fontSize: 23, fontWeight: "900", color: C.bone, letterSpacing: -0.9,
+    fontFamily: "Outfit_900Black",
   },
   glassBtn: {
     width: 36, height: 36, borderRadius: R.circle, overflow: "hidden",
@@ -866,33 +932,34 @@ const ss = StyleSheet.create({
     position: "absolute", bottom: 0, left: 0, right: 0,
     paddingHorizontal: PAD, paddingBottom: 44, gap: 14,
   },
-  chipRow: { flexDirection: "row", gap: 6 },
+  chipRow: { flexDirection: "row", gap: 7 },
+  // Editorial outline tags — hairline border, no fill.
   chip: {
-    paddingHorizontal: 12, paddingVertical: 5, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    paddingHorizontal: 11, paddingVertical: 4, borderRadius: R.sm,
+    borderWidth: 1, borderColor: C.borderLight,
   },
-  chipText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
   heroTitle: {
-    color: C.text, fontSize: 32, fontWeight: "800", lineHeight: 36, letterSpacing: -0.6,
+    color: C.bone, fontSize: 36, fontWeight: "900", lineHeight: 40, letterSpacing: -1.0,
     fontFamily: "Cairo_700Bold",
   },
   heroDesc: {
     color: C.textSecondary, fontSize: 14, lineHeight: 22, fontFamily: "Cairo_500Medium",
-    maxWidth: 300,
+    maxWidth: 320,
   },
-  heroButtons: { flexDirection: "row", gap: 10, marginTop: 4 },
+  heroButtons: { flexDirection: "row", gap: 10, marginTop: 6 },
   btnPrimary: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 14,
-    ...ELEVATION_GLOW,
+    backgroundColor: C.ember, borderRadius: R.pill, paddingVertical: 15,
   },
-  btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  // Editorial ghost — hairline outline, bone label (no frosted glass).
   btnGlass: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    borderRadius: R.pill, paddingVertical: 14,
-    backgroundColor: C.surfaceGlass, borderWidth: 1, borderColor: C.glassBorder,
+    borderRadius: R.pill, paddingVertical: 15,
+    backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
   },
-  btnGlassText: { color: C.text, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  btnGlassText: { color: C.bone, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Dots
   dots: {
@@ -902,14 +969,12 @@ const ss = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "rgba(255,255,255,0.2)" },
   dotActive: {
     width: 24, backgroundColor: C.accent,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 8,
   },
 
-  // Glow line
+  // Hairline divider under the hero — a quiet seam, not a glowing strip.
   glowLine: {
     height: 1, marginHorizontal: "10%",
     backgroundColor: C.glowLine,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 8,
   },
 
   // Sections
@@ -918,16 +983,17 @@ const ss = StyleSheet.create({
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: PAD, marginBottom: 14,
   },
-  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 9 },
+  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  // Editorial marginal rule — a crisp ember stroke leading the title.
   sectionTick: {
-    width: 4, height: 18, borderRadius: 2, backgroundColor: C.accent,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 8,
+    width: 3, height: 20, borderRadius: 0, backgroundColor: C.ember,
   },
   sectionTitle: {
-    color: C.text, fontSize: 20, fontWeight: "700", fontFamily: "Cairo_700Bold",
+    color: C.bone, fontSize: 22, fontWeight: "900", letterSpacing: -0.4, fontFamily: "Cairo_700Bold",
   },
-  seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
-  seeAllText: { color: C.accent, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  // "See all" stays ash — ember is reserved for the primary action.
+  seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 3 },
+  seeAllText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // "See All" tail card in horizontal list
   seeAllCard: {
@@ -948,14 +1014,15 @@ const ss = StyleSheet.create({
     paddingHorizontal: PAD,
   },
   catCard: {
-    width: (SW - PAD * 2 - 10) / 2, height: 64, borderRadius: R.lg, overflow: "hidden",
+    width: (SW - PAD * 2 - 10) / 2, height: 60, borderRadius: R.lg, overflow: "hidden",
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
   },
   catGrad: {
-    flex: 1, flexDirection: "row", alignItems: "center", gap: 10,
+    flex: 1, flexDirection: "row", alignItems: "center", gap: 11,
     paddingHorizontal: 16,
   },
   catName: {
-    color: "#fff", fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold",
+    color: C.bone, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold",
   },
 
   // Progress bar (continue watching)
@@ -1010,7 +1077,6 @@ const ss = StyleSheet.create({
   newBadge: {
     position: "absolute", top: 8, left: 8, zIndex: 2,
     backgroundColor: C.accent, borderRadius: R.xs, paddingHorizontal: 7, paddingVertical: 3,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 12,
   },
   badgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "700", letterSpacing: 0.8,
@@ -1020,7 +1086,6 @@ const ss = StyleSheet.create({
     position: "absolute", top: 8, left: 8, zIndex: 2,
     backgroundColor: C.accent, borderRadius: R.sm,
     paddingHorizontal: 8, paddingVertical: 4,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8,
     borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
   },
   epNumBadgeText: {

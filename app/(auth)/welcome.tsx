@@ -1,111 +1,69 @@
-import { View, Text, Pressable, StyleSheet, Dimensions, I18nManager } from "react-native";
+import { View, Text, Pressable, StyleSheet, I18nManager } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import { C, R, S, ELEVATION_GLOW } from "../../lib/theme";
+import { C, R, S } from "../../lib/theme";
 import { t } from "../../lib/i18n";
-
-const { width: SW, height: SH } = Dimensions.get("window");
 
 export default function Welcome() {
   const insets = useSafeAreaInsets();
 
   return (
     <View style={ss.root}>
-      {/* Layered ambient backdrop */}
+      {/* SUMI backdrop: ink with a single faint ember wash at the top — no orbs,
+          no starfield, no gradient blobs. The restraint IS the premium. */}
       <LinearGradient
-        colors={["#1a0a2e", C.bg, "#0a0a1f"]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+        colors={["rgba(255,90,44,0.10)", "transparent"]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 0.5 }}
         style={StyleSheet.absoluteFill}
       />
-      <LinearGradient
-        colors={[C.accent + "44", "transparent", C.violet + "33"]}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
-        style={[StyleSheet.absoluteFill, { opacity: 0.9 }]}
-      />
-      <View style={ss.glowOrb1} />
-      <View style={ss.glowOrb2} />
-      <View style={ss.glowOrb3} />
-
-      {/* Soft starfield dots */}
-      {Array.from({ length: 18 }).map((_, i) => {
-        const x = (i * 137) % SW;
-        const y = ((i * 251) % SH) - 40;
-        const size = (i % 3) + 2;
-        return (
-          <View
-            key={i}
-            style={{
-              position: "absolute", left: x, top: y, width: size, height: size,
-              borderRadius: size / 2, backgroundColor: "#fff", opacity: 0.18,
-            }}
-          />
-        );
-      })}
 
       <View style={[ss.content, { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 18 }]}>
-        {/* Logo mark */}
+        {/* Brand — solid ember mark, bone wordmark, no glow */}
         <View style={ss.brand}>
-          <View style={ss.markRing}>
-            <LinearGradient
-              colors={[C.accent, C.violet, "#5B6BFF"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={ss.logoMark}
-            >
-              <Ionicons name="play" size={40} color="#fff" style={{ marginLeft: 4 }} />
-            </LinearGradient>
+          <View style={ss.logoMark}>
+            <Ionicons name="play" size={38} color={C.bone} style={{ marginLeft: 4 }} />
           </View>
-          <Text style={ss.appName}>{t.appName}</Text>
+          <View style={ss.wordmarkRow}>
+            <View style={ss.spark} />
+            <Text style={ss.appName}>{t.appName}</Text>
+          </View>
           <Text style={ss.tagline}>{t.welcomeTagline}</Text>
         </View>
 
-        {/* Feature highlights with gradient icon tiles */}
+        {/* Feature list — ember icon on a hairline tile, editorial rows */}
         <View style={ss.features}>
           {[
-            { icon: "cloud-done" as const, text: t.feature1, colors: [C.accent, "#FF6B3D"] as [string, string] },
-            { icon: "heart" as const, text: t.feature2, colors: ["#FF6B9D", C.violet] as [string, string] },
-            { icon: "shield-checkmark" as const, text: t.feature3, colors: ["#00C6FF", C.violet] as [string, string] },
+            { icon: "cloud-done-outline" as const, text: t.feature1 },
+            { icon: "heart-outline" as const, text: t.feature2 },
+            { icon: "shield-checkmark-outline" as const, text: t.feature3 },
           ].map((f, i) => (
             <View key={i} style={ss.featureRow}>
-              <LinearGradient
-                colors={f.colors}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={ss.featureIcon}
-              >
-                <Ionicons name={f.icon} size={16} color="#fff" />
-              </LinearGradient>
+              <View style={ss.featureIcon}>
+                <Ionicons name={f.icon} size={17} color={C.ember} />
+              </View>
               <Text style={ss.featureText}>{f.text}</Text>
             </View>
           ))}
         </View>
 
-        {/* CTA stack */}
+        {/* CTA — solid ember primary, outline ghost secondary */}
         <View style={ss.cta}>
           <Pressable
-            style={({ pressed }) => [ss.btnPrimaryWrap, pressed && { transform: [{ scale: 0.98 }], opacity: 0.92 }]}
+            style={({ pressed }) => [ss.btnPrimary, pressed && { transform: [{ scale: 0.98 }], opacity: 0.92 }]}
             onPress={() => router.push("/(auth)/register")}
           >
-            <LinearGradient
-              colors={[C.accent, "#FF457A", C.violet]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={ss.btnPrimary}
-            >
-              <Ionicons name="sparkles" size={16} color="#fff" />
-              <Text style={ss.btnPrimaryText}>{t.ctaCreate}</Text>
-            </LinearGradient>
+            <Ionicons name="sparkles" size={16} color={C.bone} />
+            <Text style={ss.btnPrimaryText}>{t.ctaCreate}</Text>
           </Pressable>
 
           <Pressable
             style={({ pressed }) => [ss.btnSecondary, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
             onPress={() => router.push("/(auth)/login")}
           >
-            <Ionicons name="log-in-outline" size={16} color={C.text} />
+            <Ionicons name="log-in-outline" size={16} color={C.bone} />
             <Text style={ss.btnSecondaryText}>{t.ctaHaveAccount}</Text>
           </Pressable>
         </View>
@@ -116,77 +74,59 @@ export default function Welcome() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  glowOrb1: {
-    position: "absolute", width: 360, height: 360, borderRadius: 180,
-    backgroundColor: C.accent + "33", top: -90, right: -90,
-  },
-  glowOrb2: {
-    position: "absolute", width: 320, height: 320, borderRadius: 160,
-    backgroundColor: C.violet + "33", bottom: 80, left: -100,
-  },
-  glowOrb3: {
-    position: "absolute", width: 220, height: 220, borderRadius: 110,
-    backgroundColor: "#5B6BFF" + "22", top: SH * 0.3, right: -60,
-  },
   content: { flex: 1, paddingHorizontal: S.paddingContent, justifyContent: "space-between" },
 
-  brand: { alignItems: "center", marginTop: 32, gap: 14 },
-  markRing: {
-    width: 124, height: 124, borderRadius: 36,
-    alignItems: "center", justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.08)",
-  },
+  brand: { alignItems: "center", marginTop: 40, gap: 18 },
   logoMark: {
-    width: 96, height: 96, borderRadius: 28,
+    width: 92, height: 92, borderRadius: 26,
     alignItems: "center", justifyContent: "center",
-    ...ELEVATION_GLOW,
+    backgroundColor: C.ember,
   },
+  wordmarkRow: { flexDirection: "row", alignItems: "center", gap: 9, marginTop: 4 },
+  spark: { width: 8, height: 8, borderRadius: 2, backgroundColor: C.ember },
   appName: {
-    color: C.text, fontSize: 44, fontWeight: "800",
-    letterSpacing: -0.8, fontFamily: "Cairo_700Bold",
-    textShadowColor: C.accent + "55",
-    textShadowRadius: 14,
+    color: C.bone, fontSize: 42, fontWeight: "900",
+    letterSpacing: -1.0, fontFamily: "Cairo_700Bold",
   },
   tagline: {
     color: C.textSecondary, fontSize: 15,
     fontFamily: "Cairo_500Medium",
-    writingDirection: "rtl",
+    writingDirection: "rtl", textAlign: "center",
   },
 
-  features: { gap: 18, marginVertical: 24, paddingHorizontal: 4 },
+  features: { gap: 16, marginVertical: 24, paddingHorizontal: 4 },
   featureRow: { flexDirection: I18nManager.isRTL ? "row" : "row-reverse", alignItems: "center", gap: 14 },
   featureIcon: {
-    width: 40, height: 40, borderRadius: 12,
+    width: 42, height: 42, borderRadius: R.md,
     alignItems: "center", justifyContent: "center",
-    ...ELEVATION_GLOW,
+    backgroundColor: C.inkHigh, borderWidth: 1, borderColor: C.line,
   },
   featureText: {
-    color: C.text, fontSize: 14, flex: 1, lineHeight: 20,
+    color: C.textSoft, fontSize: 14, flex: 1, lineHeight: 20,
     fontFamily: "Cairo_500Medium", textAlign: "right",
     writingDirection: "rtl",
   },
 
   cta: { gap: 12 },
-  btnPrimaryWrap: { borderRadius: R.pill, ...ELEVATION_GLOW },
   btnPrimary: {
     flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
     alignItems: "center", justifyContent: "center", gap: 8,
     borderRadius: R.pill, paddingVertical: 17,
+    backgroundColor: C.ember,
   },
   btnPrimaryText: {
-    color: "#fff", fontSize: 16, fontWeight: "800",
+    color: C.bone, fontSize: 16, fontWeight: "800",
     fontFamily: "Cairo_700Bold", letterSpacing: 0.2,
   },
   btnSecondary: {
     flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
     alignItems: "center", justifyContent: "center", gap: 8,
     paddingVertical: 15, borderRadius: R.pill,
-    backgroundColor: C.surfaceGlass,
-    borderWidth: 1, borderColor: C.glassBorder,
+    backgroundColor: "transparent",
+    borderWidth: 1, borderColor: C.borderLight,
   },
   btnSecondaryText: {
-    color: C.text, fontSize: 14, fontWeight: "700",
+    color: C.bone, fontSize: 14, fontWeight: "700",
     fontFamily: "Cairo_600SemiBold",
   },
 });

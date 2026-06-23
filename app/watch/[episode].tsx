@@ -237,7 +237,7 @@ export default function WatchScreen() {
 
   // Load the autoplay preference once; reset the per-episode guard on change.
   useEffect(() => { getAutoplayNext().then((v) => { autoplayRef.current = v; }); }, []);
-  useEffect(() => { autoAdvancedRef.current = false; }, [episode]);
+  useEffect(() => { autoAdvancedRef.current = false; setLocked(false); }, [episode]);
 
   // Fire auto-advance when playback nears the end (≥97%) and a next episode
   // exists. Shared by the native + WebView progress timers.
@@ -332,6 +332,10 @@ export default function WatchScreen() {
         // bind the signed URL to the IP+UA that generated it.
         "User-Agent":
           "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        // Reuse the TCP/TLS connection across chunk requests. vid3rb serves a
+        // progressive MP4 over many ranged GETs — re-handshaking per chunk
+        // added latency that surfaced as micro-stalls on a throttled stream.
+        Connection: "keep-alive",
       };
       if (sendOrigin) headers.Origin = origin;
       // Tell the native player the stream type. expo-video needs
@@ -362,9 +366,19 @@ export default function WatchScreen() {
     // capped long before 300s.
     p.bufferOptions = {
       preferredForwardBufferDuration: 300,
-      minBufferForPlayback: 2,
+      // After a pause/stall, accumulate a bigger cushion before resuming so the
+      // throttled vid3rb CDN doesn't drop us straight into another stall (the
+      // classic stutter→resume→stutter loop). expo-video conflates the
+      // start-buffer and rebuffer-resume thresholds into this one Android knob,
+      // so 5s is the documented analog of ExoPlayer's
+      // bufferForPlaybackAfterRebufferMs. Costs ~2s of extra wait at the
+      // throttled rate on first start; pays for itself within one stall.
+      minBufferForPlayback: 5,
       maxBufferBytes: 0,
       prioritizeTimeOverSizeThreshold: true,
+      // iOS: let AVPlayer delay playback to build a stall-proof buffer instead
+      // of starting on a thread-bare one and rebuffering immediately.
+      waitsToMinimizeStalling: true,
     };
     if (videoUrl && resumeMs > 0) {
       p.currentTime = resumeMs / 1000;
@@ -1512,6 +1526,23 @@ export default function WatchScreen() {
     });
   }, [prevEpisodeHref, prevUp4Href, animeParam, imgParam, animeTitleParam, paramEpNum]);
 
+  // Jump to the parent anime's detail page from inside the player. Prefer the
+  // explicit anime param, then the scraped href, then derive the anime URL from
+  // the episode slug (strip الحلقة-N + swap /episode/→/anime/) so the button
+  // works even when the episode was opened cold (home / history / deep link).
+  const goToAnimePage = useCallback(() => {
+    let href = (animeParam ? decodeURIComponent(animeParam) : "") || animeHref || "";
+    if (!href && episode) {
+      try {
+        const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
+        href = toAnimeUrl(decodeURIComponent(episode)) || "";
+      } catch {}
+    }
+    if (!href) return;
+    try { player?.pause(); } catch {}
+    router.push(`/anime/${encodeURIComponent(href)}`);
+  }, [animeParam, animeHref, episode, player]);
+
   // Resize mode toggle
   // contain: fits whole video (may have black bars on non-16:9 sources)
   // fill:    stretches to use every pixel of the screen (slight distortion
@@ -1520,6 +1551,10 @@ export default function WatchScreen() {
 
   // Custom player state
   const [isPlayerPaused, setIsPlayerPaused] = useState(false);
+  // Screen lock: when on, all gestures (tap-to-toggle, seek, brightness, the
+  // whole control chrome) are suppressed so a pocket/accidental touch can't
+  // pause or scrub. A single floating unlock button is the only live control.
+  const [locked, setLocked] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [seekValue, setSeekValue] = useState(0);
@@ -1930,11 +1965,31 @@ export default function WatchScreen() {
           hidden, tapping ANYWHERE shows it (like YouTube / Netflix). Once
           the chrome is visible we remove this overlay so taps reach
           expo-video's native controls. */}
-      {isPlaying && !pickerOpen && !controlsVisible && (
+      {isPlaying && !pickerOpen && !controlsVisible && !locked && (
         <View
           style={[StyleSheet.absoluteFill, { zIndex: 2 }]}
           {...brightnessPan.panHandlers}
         />
+      )}
+
+      {/* LOCKED: every gesture is dead except this floating unlock button. A
+          tap anywhere reveals it (auto-hides with the chrome timer); tapping it
+          lifts the lock and restores the normal controls. */}
+      {isPlaying && locked && (
+        <Pressable style={[StyleSheet.absoluteFill, { zIndex: 7 }]} onPress={showControls}>
+          {controlsVisible && (
+            <View style={ss.lockLayer} pointerEvents="box-none">
+              <Pressable
+                onPress={() => { setLocked(false); showControls(); }}
+                style={ss.lockBtn}
+                hitSlop={12}
+              >
+                <Ionicons name="lock-closed" size={22} color={C.white} />
+                <Text style={ss.lockBtnText}>{t.unlock}</Text>
+              </Pressable>
+            </View>
+          )}
+        </Pressable>
       )}
 
       {/* Buffering spinner — floats above the video even when chrome is hidden */}
@@ -1945,7 +2000,7 @@ export default function WatchScreen() {
       )}
 
       {/* Custom Controls Overlay */}
-      {isPlaying && !pickerOpen && controlsVisible && (
+      {isPlaying && !pickerOpen && controlsVisible && !locked && (
         <View style={ss.controlsOverlay} pointerEvents="box-none">
           {/* Tap on empty space hides the chrome; vertical swipe adjusts brightness */}
           <View style={StyleSheet.absoluteFill} {...brightnessPan.panHandlers} />
@@ -1965,7 +2020,7 @@ export default function WatchScreen() {
             <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
-            <View style={ss.titleArea} pointerEvents="none">
+            <Pressable onPress={goToAnimePage} style={ss.titleArea} hitSlop={6}>
               <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
               {active && (
                 <View style={ss.metaRow}>
@@ -1978,7 +2033,17 @@ export default function WatchScreen() {
                   </Text>
                 </View>
               )}
-            </View>
+            </Pressable>
+            <Pressable onPress={goToAnimePage} style={ss.iconBtn} hitSlop={6}>
+              <Ionicons name="information-circle-outline" size={20} color={C.white} />
+            </Pressable>
+            <Pressable
+              onPress={() => { setLocked(true); setControlsVisible(false); if (hideTimer.current) clearTimeout(hideTimer.current); }}
+              style={ss.iconBtn}
+              hitSlop={6}
+            >
+              <Ionicons name="lock-open-outline" size={18} color={C.white} />
+            </Pressable>
             <Pressable onPress={cycleSpeed} style={ss.speedBtn} hitSlop={6}>
               <Text style={ss.speedBtnText}>{SPEEDS[speedIdx]}x</Text>
             </Pressable>
@@ -2094,7 +2159,7 @@ export default function WatchScreen() {
             <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
-            <View style={ss.titleArea}>
+            <Pressable onPress={goToAnimePage} style={ss.titleArea} hitSlop={6}>
               <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
               {active && (
                 <View style={ss.metaRow}>
@@ -2108,7 +2173,10 @@ export default function WatchScreen() {
                   </Text>
                 </View>
               )}
-            </View>
+            </Pressable>
+            <Pressable onPress={goToAnimePage} style={ss.iconBtn} hitSlop={6}>
+              <Ionicons name="information-circle-outline" size={20} color={C.white} />
+            </Pressable>
             <Pressable onPress={skipForward} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="play-forward" size={18} color={C.white} />
             </Pressable>
@@ -2249,7 +2317,7 @@ const ss = StyleSheet.create({
   actionBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: C.accent, borderRadius: 24, paddingHorizontal: 22, paddingVertical: 11,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 16, elevation: 6,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.22, shadowRadius: 14, elevation: 6,
   },
   actionBtnText: { color: C.white, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
@@ -2261,6 +2329,16 @@ const ss = StyleSheet.create({
   // Controls overlay
   controlsOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between", zIndex: 3 },
   bufferOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", zIndex: 2 },
+
+  // Screen-lock overlay
+  lockLayer: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
+  lockBtn: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 26,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+  },
+  lockBtnText: { color: C.white, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   // Top bar
   ctrlTopBar: {
@@ -2274,8 +2352,8 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   iconBtnAccent: {
-    backgroundColor: "rgba(255,45,85,0.25)",
-    borderColor: "rgba(255,45,85,0.5)",
+    backgroundColor: "rgba(255,90,44,0.25)",
+    borderColor: "rgba(255,90,44,0.5)",
   },
   speedBtn: {
     height: 38, minWidth: 48, borderRadius: 19, paddingHorizontal: 10,
@@ -2305,10 +2383,10 @@ const ss = StyleSheet.create({
   },
   playBtn: {
     width: 76, height: 76, borderRadius: 38,
-    backgroundColor: "rgba(255,45,85,0.9)",
+    backgroundColor: "rgba(255,90,44,0.9)",
     alignItems: "center", justifyContent: "center",
     borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 24, elevation: 10,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 18, elevation: 10,
   },
   skipBtn: {
     width: 54, height: 54, borderRadius: 27,
@@ -2337,7 +2415,7 @@ const ss = StyleSheet.create({
     position: "absolute", top: 9, marginLeft: -7,
     width: 14, height: 14, borderRadius: 7,
     backgroundColor: C.accent, borderWidth: 2, borderColor: C.white,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 8, elevation: 4,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.35, shadowRadius: 6, elevation: 4,
   },
   seekThumbActive: { top: 6, marginLeft: -10, width: 20, height: 20, borderRadius: 10 },
   seekTouchArea: { position: "absolute", left: 0, right: 0, top: -12, bottom: -12 },
@@ -2360,7 +2438,7 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: 6,
     backgroundColor: C.accent,
     borderRadius: 100, paddingHorizontal: 16, paddingVertical: 8,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 14, elevation: 6,
+    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.22, shadowRadius: 12, elevation: 6,
   },
   chipBtnAccentText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Cairo_700Bold" },
 
@@ -2377,7 +2455,7 @@ const ss = StyleSheet.create({
   pickerHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
   pickerHeaderIcon: {
     width: 34, height: 34, borderRadius: 17,
-    backgroundColor: "rgba(255,45,85,0.14)", borderWidth: 1, borderColor: "rgba(255,45,85,0.3)",
+    backgroundColor: "rgba(255,90,44,0.14)", borderWidth: 1, borderColor: "rgba(255,90,44,0.3)",
     alignItems: "center", justifyContent: "center",
   },
   pickerTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
@@ -2392,8 +2470,8 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.05)",
   },
   serverItemActive: {
-    backgroundColor: "rgba(255,45,85,0.12)",
-    borderColor: "rgba(255,45,85,0.45)",
+    backgroundColor: "rgba(255,90,44,0.12)",
+    borderColor: "rgba(255,90,44,0.45)",
   },
   serverAvatar: {
     width: 34, height: 34, borderRadius: 17,

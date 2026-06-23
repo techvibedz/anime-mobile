@@ -93,8 +93,7 @@ const s = StyleSheet.create({
   },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 9 },
   tick: {
-    width: 4, height: 18, borderRadius: 2, backgroundColor: C.accent,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 8,
+    width: 3, height: 16, borderRadius: 2, backgroundColor: C.accent,
   },
   title: { color: C.text, fontSize: 20, fontWeight: "700", fontFamily: "Cairo_700Bold" },
   seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 4 },

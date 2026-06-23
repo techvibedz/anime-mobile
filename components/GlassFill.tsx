@@ -19,7 +19,7 @@ import { C } from "../lib/theme";
 export function GlassFill({
   intensity = 20,
   iosColor = C.surfaceGlass,
-  androidColor = "rgba(14,16,40,0.82)",
+  androidColor = "rgba(16,16,18,0.82)",
 }: {
   intensity?: number;
   iosColor?: string;

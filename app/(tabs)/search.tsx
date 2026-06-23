@@ -24,6 +24,7 @@ import { CompletionBadge } from "../../components/CompletionBadge";
 import { GlassFill } from "../../components/GlassFill";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { useReducedMotion } from "../../lib/motion";
 
 const { width: SW } = Dimensions.get("window");
 const PAD = S.paddingContent;
@@ -56,7 +57,10 @@ const GENRES = Object.keys(GENRE_LABELS);
 /* ── Skeleton card (pulsing placeholder while the grid loads) ── */
 function SkeletonGrid() {
   const pulse = useRef(new Animated.Value(0.35)).current;
+  const reduced = useReducedMotion();
   useEffect(() => {
+    // Reduced motion: hold a calm static opacity instead of pulsing.
+    if (reduced) { pulse.setValue(0.5); return; }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.8, duration: 700, useNativeDriver: true, isInteraction: false }),
@@ -65,7 +69,7 @@ function SkeletonGrid() {
     );
     loop.start();
     return () => loop.stop();
-  }, [pulse]);
+  }, [pulse, reduced]);
   return (
     <View style={ss.skeletonWrap}>
       {Array.from({ length: 12 }).map((_, i) => (
@@ -97,7 +101,7 @@ const ResultCard = memo(function ResultCard({ item }: { item: SearchResult }) {
           </View>
         )}
         <LinearGradient
-          colors={["transparent", "rgba(6,7,26,0.55)"]}
+          colors={["transparent", "rgba(10,10,11,0.6)"]}
           style={ss.resultGrad}
           pointerEvents="none"
         />
@@ -463,7 +467,7 @@ const ss = StyleSheet.create({
     paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 8,
   },
   heading: {
-    color: C.text, fontSize: 26, fontWeight: "700", letterSpacing: -0.4,
+    color: C.bone, fontSize: 30, fontWeight: "900", letterSpacing: -0.8,
     fontFamily: "Cairo_700Bold",
   },
   countPill: {
@@ -476,8 +480,8 @@ const ss = StyleSheet.create({
   searchWrap: { paddingHorizontal: PAD, paddingBottom: 12 },
   searchBar: {
     flexDirection: "row", alignItems: "center", gap: 10,
-    borderRadius: R.xxl, height: S.inputHeight, paddingHorizontal: 16,
-    overflow: "hidden", borderWidth: 1, borderColor: C.glassBorder,
+    borderRadius: R.xl, height: S.inputHeight, paddingHorizontal: 16,
+    overflow: "hidden", borderWidth: 1, borderColor: C.line,
   },
   searchBarActive: { borderColor: C.borderAccent },
   input: {
@@ -489,19 +493,18 @@ const ss = StyleSheet.create({
   chipContainer: { height: 52, overflow: "visible" },
   chipScroll: { paddingHorizontal: PAD, gap: 8, paddingBottom: 16, alignItems: "center" as const },
   chip: {
-    paddingHorizontal: 16, paddingVertical: 8, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    paddingHorizontal: 15, paddingVertical: 8, borderRadius: R.pill,
+    backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
   },
-  chipActive: { backgroundColor: C.accent, borderColor: "transparent" },
+  chipActive: { backgroundColor: C.ember, borderColor: "transparent" },
   chipText: { color: C.textSecondary, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   chipTextActive: { color: C.textOnAccent },
 
-  // Glow line + progress strip
+  // Hairline divider + search-progress strip
   glowLineWrap: { height: 2, marginHorizontal: PAD, justifyContent: "center" },
   glowLine: {
     height: 0.5,
-    backgroundColor: C.violetGlow,
-    shadowColor: C.violet, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 8,
+    backgroundColor: C.violetSoft,
   },
   progressStrip: { ...StyleSheet.absoluteFillObject, overflow: "hidden", borderRadius: 1 },
 

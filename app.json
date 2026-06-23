@@ -2,15 +2,15 @@
   "expo": {
     "name": "Pantoufa",
     "slug": "injaz",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "anime-mobile",
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash.png",
-      "resizeMode": "cover",
-      "backgroundColor": "#080c25"
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0A0B"
     },
     "ios": {
       "supportsTablet": true,
@@ -19,7 +19,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#080c25"
+        "backgroundColor": "#0A0A0B"
       },
       "package": "com.anime.mobile",
       "googleServicesFile": "./google-services.json",
@@ -38,7 +38,7 @@
       "fallbackToCacheTimeout": 0,
       "url": "https://u.expo.dev/54f0baee-f81b-4de2-89f1-825251f0547d"
     },
-    "runtimeVersion": "2.0.0",
+    "runtimeVersion": "2.1.0",
     "extra": {
       "versionJsonUrl": "https://raw.githubusercontent.com/techvibedz/anime-mobile/master/version.json",
       "router": {},

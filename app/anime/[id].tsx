@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, memo } from "react";
+import { useEffect, useState, useCallback, useMemo, memo, startTransition } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   I18nManager,
   ActivityIndicator,
   RefreshControl,
+  InteractionManager,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
@@ -329,8 +330,8 @@ export default function AnimeDetailScreen() {
             />
           ) : null}
           <LinearGradient
-            colors={["rgba(0,0,0,0.2)", "transparent", "rgba(6,7,26,0.5)", C.bg]}
-            locations={[0, 0.25, 0.6, 1]}
+            colors={["rgba(10,10,11,0.35)", "transparent", "rgba(10,10,11,0.6)", C.bg]}
+            locations={[0, 0.28, 0.62, 1]}
             style={StyleSheet.absoluteFill}
           />
         </View>
@@ -561,9 +562,13 @@ function EpisodesTab({
   }, [animeTitle, poster, animeHref]);
 
   // Render in chunks so anime with 500+ episodes don't freeze the JS thread.
-  // Initial 80 covers most users; "show more" appends another 80 each tap.
+  // FIRST is a cheap first paint that mounts the moment data lands — so building
+  // the grid never janks the screen-open transition or starves touch feedback
+  // while the user is mid-tap. Once interactions settle we expand to PAGE (the
+  // full first window); "show more" appends another PAGE each tap.
+  const FIRST = 12;
   const PAGE = 80;
-  const [visibleCount, setVisibleCount] = useState(PAGE);
+  const [visibleCount, setVisibleCount] = useState(FIRST);
 
   // Union the episode lists across ALL THREE sources, keyed by episode number,
   // so the grid is as complete as the *most up-to-date* source — not just
@@ -639,9 +644,21 @@ function EpisodesTab({
     [completed, animeTitle],
   );
 
-  // Reset window when sort flips so user always sees the FIRST page of the
-  // new order (not a weird middle chunk).
-  useEffect(() => { setVisibleCount(PAGE); }, [sortDesc, mergedEps.length]);
+  // Reset to the cheap first batch when the sort flips so the user sees the top
+  // of the NEW order instantly; the expansion effect below re-fills the page.
+  useEffect(() => { setVisibleCount(FIRST); }, [sortDesc]);
+
+  // Expand from the cheap first batch to the full page once the screen
+  // transition + first paint have settled — so the heavy 80-card build runs
+  // off the critical path and never blocks the navigation animation or taps.
+  // Re-runs when the merged list grows (enrichment sources land after the UI
+  // is already showing). startTransition keeps the expansion interruptible.
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      startTransition(() => setVisibleCount((n) => Math.max(n, PAGE)));
+    });
+    return () => task.cancel();
+  }, [mergedEps.length]);
 
   const visible = sorted.slice(0, visibleCount);
   const hasMore = visibleCount < sorted.length;
@@ -717,7 +734,7 @@ function EpisodesTab({
       </View>
       {hasMore && (
         <Pressable
-          onPress={() => setVisibleCount((n) => n + PAGE)}
+          onPress={() => startTransition(() => setVisibleCount((n) => n + PAGE))}
           style={{
             marginTop: 12,
             paddingVertical: 14,
@@ -789,7 +806,10 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
         const myIdx = byNum.findIndex((e) => (e.href || e.href4up || e.href3rb) === primary);
         const nextE = myIdx >= 0 ? sib(byNum[myIdx + 1]) : '';
         const prevE = myIdx >= 0 ? sib(byNum[myIdx - 1]) : '';
-        router.push({
+        // Defer the push one frame so the Pressable's pressed style (opacity +
+        // scale) paints first — the watch screen's mount (video player + WebView
+        // + server scrape) is heavy enough to otherwise swallow the tap feedback.
+        requestAnimationFrame(() => router.push({
           pathname: `/watch/${encodeURIComponent(primary)}`,
           params: {
             url4up: up4IsPrimary ? '' : (ep.href4up || ''),
@@ -801,7 +821,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
             prevEp: prevE,
             anime: animeHref,
           },
-        });
+        }));
       }}
       onLongPress={() => onToggleWatched(ep)}
       delayLongPress={300}
@@ -1116,7 +1136,7 @@ const ss = StyleSheet.create({
   // Info
   infoSection: { marginTop: -48, paddingHorizontal: PAD },
   title: {
-    color: C.text, fontSize: 24, fontWeight: "800", lineHeight: 30, letterSpacing: -0.4,
+    color: C.bone, fontSize: 28, fontWeight: "900", lineHeight: 33, letterSpacing: -0.7,
     textAlign: "center", fontFamily: "Cairo_700Bold",
   },
   copiedPill: {
@@ -1152,42 +1172,43 @@ const ss = StyleSheet.create({
   },
 
   // Synopsis
-  synopsis: { color: C.textSecondary, fontSize: 14, lineHeight: 22, marginTop: 20, fontFamily: "Cairo_500Medium" },
+  synopsis: { color: C.textSoft, fontSize: 14, lineHeight: 23, marginTop: 20, fontFamily: "Cairo_500Medium" },
   readMore: { color: C.accent, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "Cairo_600SemiBold" },
 
   // Chips
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 16 },
   chip: {
-    paddingHorizontal: 12, paddingVertical: 5, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    paddingHorizontal: 11, paddingVertical: 5, borderRadius: R.sm,
+    borderWidth: 1, borderColor: C.borderLight,
   },
-  chipText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
 
-  // Glow line
+  // Section divider — a faint brand-violet hairline, no glow.
   glowLine: {
     height: 1, marginTop: 20, marginHorizontal: PAD,
-    backgroundColor: C.violetGlow,
-    shadowColor: C.violet, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 8,
+    backgroundColor: C.violetSoft,
   },
 
   // Tabs
+  // Editorial underline tabs — an ember stroke marks the active tab, no filled pill.
   tabBar: {
-    flexDirection: "row", marginTop: 16, marginHorizontal: PAD, gap: 4,
+    flexDirection: "row", marginTop: 18, marginHorizontal: PAD, gap: 0,
+    borderBottomWidth: 1, borderBottomColor: C.line,
   },
   tabItem: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 12, borderRadius: R.default,
+    paddingVertical: 13, borderBottomWidth: 2, borderBottomColor: "transparent", marginBottom: -1,
   },
-  tabItemActive: { backgroundColor: C.accentSoft },
+  tabItemActive: { borderBottomColor: C.ember },
   tabText: { color: C.textMuted, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-  tabTextActive: { color: C.accent },
+  tabTextActive: { color: C.bone, fontFamily: "Cairo_700Bold" },
   tabCount: {
     backgroundColor: C.glass, borderRadius: R.pill,
     paddingHorizontal: 8, paddingVertical: 2,
   },
-  tabCountActive: { backgroundColor: "rgba(255,45,85,0.1)" },
+  tabCountActive: { backgroundColor: C.accentSoft },
   tabCountText: { color: C.textMuted, fontSize: 10, fontWeight: "500" },
-  tabCountTextActive: { color: C.accent },
+  tabCountTextActive: { color: C.ember },
 
   // Tab content
   tabContent: { paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 100 },
@@ -1303,7 +1324,7 @@ const ss = StyleSheet.create({
   },
   relatedOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(6,7,26,0.72)",
+    backgroundColor: "rgba(10,10,11,0.72)",
     alignItems: "center", justifyContent: "center", gap: 6,
   },
   relatedOverlayText: { color: "#fff", fontSize: 10, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },

@@ -191,7 +191,7 @@ const MyListCard = memo(function MyListCard({
         </View>
 
         {/* Status badge (top-left) */}
-        <View style={[ss.statusBadge, { backgroundColor: watching ? "rgba(0,230,118,0.92)" : "rgba(255,45,85,0.92)" }]}>
+        <View style={[ss.statusBadge, { backgroundColor: watching ? "rgba(0,230,118,0.92)" : "rgba(255,90,44,0.92)" }]}>
           <Ionicons
             name={watching ? "play-circle" : "bookmark"}
             size={11}
@@ -229,7 +229,7 @@ const ss = StyleSheet.create({
     paddingHorizontal: S.paddingContent, paddingTop: 16, paddingBottom: 8,
   },
   heading: {
-    color: C.text, fontSize: 26, fontWeight: "700", letterSpacing: -0.4,
+    color: C.bone, fontSize: 30, fontWeight: "900", letterSpacing: -0.8,
     fontFamily: "Cairo_700Bold",
   },
   countLabel: { color: C.textMuted, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
@@ -250,18 +250,18 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", flexShrink: 0,
     marginHorizontal: 3,
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
   },
   filterPillActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
   filterText: { color: C.textSecondary, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0 },
-  filterTextActive: { color: C.accent },
+  filterTextActive: { color: C.ember },
   filterCount: {
     backgroundColor: C.glass, borderRadius: R.circle,
     minWidth: 20, alignItems: "center",
     paddingHorizontal: 6, paddingVertical: 1,
     marginStart: 8,
   },
-  filterCountActive: { backgroundColor: "rgba(255,45,85,0.1)" },
+  filterCountActive: { backgroundColor: "rgba(255,90,44,0.1)" },
   filterCountText: { color: C.textMuted, fontSize: 10, fontWeight: "500" },
   filterCountTextActive: { color: C.accent },
 
@@ -301,7 +301,7 @@ const ss = StyleSheet.create({
   },
   playCircle: {
     width: 32, height: 32, borderRadius: R.circle,
-    backgroundColor: "rgba(255,45,85,0.95)",
+    backgroundColor: "rgba(255,90,44,0.95)",
     alignItems: "center", justifyContent: "center",
   },
   statusBadge: {

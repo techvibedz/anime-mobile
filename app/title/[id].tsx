@@ -111,7 +111,7 @@ export default function TitleDetailScreen() {
             <View style={[{ width: SW, height: BANNER_H }, { backgroundColor: C.surface }]} />
           )}
           <LinearGradient
-            colors={["rgba(0,0,0,0.25)", "transparent", "rgba(6,7,26,0.6)", C.bg]}
+            colors={["rgba(0,0,0,0.25)", "transparent", "rgba(10,10,11,0.6)", C.bg]}
             locations={[0, 0.3, 0.7, 1]}
             style={StyleSheet.absoluteFill}
           />

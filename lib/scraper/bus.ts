@@ -31,6 +31,17 @@ const _queue: Pending[] = [];
 const _inFlight = new Map<string, Pending>(); // job id → pending
 let _onChange: (() => void) | null = null;
 
+// Rapid-navigation backlog guard. Each detail/watch screen enqueues background
+// scrape jobs; hopping through many pages quickly piles up jobs for screens the
+// user has already left, and because the WebView slots are finite those dead
+// jobs starve the CURRENT screen's scrape — the app "gets stuck". When the
+// non-priority backlog exceeds this, the OLDEST background job (almost certainly
+// from an abandoned screen) is dropped so the freshest screen's work runs soon.
+// Priority (user-initiated video) jobs are never dropped. Callers treat a
+// rejection as a soft miss (cancelled flags / .catch), so this only degrades
+// already-abandoned requests.
+const MAX_BG_QUEUE = 12;
+
 export function _subscribe(cb: () => void) {
   _onChange = cb;
   return () => { _onChange = null; };
@@ -78,6 +89,16 @@ export function enqueue(job: Omit<ScrapeJob, "id">): Promise<any> {
       else _queue.splice(at, 0, entry);
     } else {
       _queue.push(entry);
+      // Shed the oldest background job(s) once the backlog is too deep, so a
+      // flood of abandoned-screen scrapes can't block the current screen.
+      let bg = _queue.reduce((n, p) => n + (p.job.priority ? 0 : 1), 0);
+      while (bg > MAX_BG_QUEUE) {
+        const oldIdx = _queue.findIndex((p) => !p.job.priority);
+        if (oldIdx === -1) break;
+        const [dropped] = _queue.splice(oldIdx, 1);
+        dropped.reject(new Error("superseded: scrape queue overflow"));
+        bg--;
+      }
     }
     _onChange?.();
   });

@@ -10,12 +10,12 @@ import {
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
 import { getRail, type RailItem, type RailKind } from "../../lib/sourceRails";
 import { CatalogCard, type CatalogCardData } from "../../components/CatalogCard";
 import { C, S, R } from "../../lib/theme";
 import { t } from "../../lib/i18n";
-import { Aurora, ScreenHeader } from "../../components/ScreenChrome";
+import { Aurora, ScreenHeader, OfflineNotice } from "../../components/ScreenChrome";
+import { useOnlineStatus } from "../../lib/net";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
@@ -35,6 +35,7 @@ function toCard(item: RailItem): CatalogCardData {
 
 export default function PopularScreen() {
   const insets = useSafeAreaInsets();
+  const { online } = useOnlineStatus();
   const { kind: kindParam, title: titleParam } = useLocalSearchParams<{ kind: string; title?: string }>();
   const kind: RailKind = (VALID.includes(kindParam as RailKind) ? kindParam : "season") as RailKind;
   const heading = titleParam ? decodeURIComponent(titleParam) : titleFor(kind);
@@ -85,13 +86,7 @@ export default function PopularScreen() {
               <Text style={s.listHeadCount}>{t.scheduleCount(data.length)}</Text>
             </View>
           }
-          ListEmptyComponent={
-            <View style={s.empty}>
-              <View style={s.emptyIcon}><Ionicons name="flame-outline" size={30} color={C.textMuted} /></View>
-              <Text style={s.emptyTitle}>{t.scheduleError}</Text>
-              <Text style={s.emptySub}>{t.scheduleErrorSub}</Text>
-            </View>
-          }
+          ListEmptyComponent={<OfflineNotice offline={online === false} onRetry={onRefresh} />}
           renderItem={({ item }) => (
             <CatalogCard
               item={toCard(item)}

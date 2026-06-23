@@ -20,7 +20,8 @@ import { filterAvailableItems } from "../lib/schedule";
 import { CatalogCard, type CatalogCardData } from "../components/CatalogCard";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
-import { Aurora, ScreenHeader } from "../components/ScreenChrome";
+import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
+import { useOnlineStatus } from "../lib/net";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
@@ -34,6 +35,7 @@ function toCard(item: CatalogAnime): CatalogCardData {
 
 export default function SeasonsScreen() {
   const insets = useSafeAreaInsets();
+  const { online } = useOnlineStatus();
   const options = useMemo(() => seasonOptions(8), []);
   const [selected, setSelected] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -97,11 +99,17 @@ export default function SeasonsScreen() {
   }, [key, verify]);
 
   const openItem = useCallback((c: CatalogCardData) => {
-    router.push(`/(tabs)/search?q=${encodeURIComponent(c.title)}`);
+    // Defer one frame so the card's press feedback paints before the search-tab
+    // navigation + its cross-source scrape take over the JS thread.
+    requestAnimationFrame(() => router.push(`/(tabs)/search?q=${encodeURIComponent(c.title)}`));
   }, []);
 
   const verifying = verifyingKey === key && !availByKey[key];
-  const items = availByKey[key] ?? (verifying ? partial : undefined);
+  // Show the AniList catalogue the INSTANT it lands (≈1s) instead of holding a
+  // blank grid for the up-to-12s per-title source verification. Verification
+  // still runs in the background and swaps in the availability-filtered subset
+  // when it completes (`availByKey`); the raw list is the fast first paint.
+  const items = availByKey[key] ?? rawByKey[key] ?? (verifying ? partial : undefined);
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
@@ -158,11 +166,7 @@ export default function SeasonsScreen() {
         }
         ListEmptyComponent={
           verifying ? null : error ? (
-            <View style={s.empty}>
-              <View style={s.emptyIcon}><Ionicons name="cloud-offline-outline" size={32} color={C.accent} /></View>
-              <Text style={s.emptyTitle}>{t.scheduleError}</Text>
-              <Text style={s.emptySub}>{t.scheduleErrorSub}</Text>
-            </View>
+            <OfflineNotice offline={online === false} onRetry={onRefresh} />
           ) : (
             <View style={s.empty}>
               <View style={s.emptyIcon}><Ionicons name="albums-outline" size={30} color={C.textMuted} /></View>

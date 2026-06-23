@@ -85,11 +85,20 @@ function AuthGate() {
 
   // Advertise this device as "online" via Supabase Realtime presence while a
   // user is signed in. Powers the admin-only live-users screen (app/live.tsx).
+  //
+  // Battery: presence holds a live Realtime WebSocket open. Left running while
+  // the app is backgrounded it keeps the radio awake for no benefit (a
+  // backgrounded device isn't "actively using" the app), so we tear the channel
+  // down on background and re-establish it on foreground. startPresence is
+  // idempotent, so re-calling on "active" is cheap.
   useEffect(() => {
-    if (user) {
-      startPresence(user).catch(() => {});
-      return () => { stopPresence().catch(() => {}); };
-    }
+    if (!user) return;
+    if (AppState.currentState === "active") startPresence(user).catch(() => {});
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") startPresence(user).catch(() => {});
+      else stopPresence().catch(() => {});
+    });
+    return () => { sub.remove(); stopPresence().catch(() => {}); };
   }, [user?.id]);
 
   // Keep the shared new-episode feed fresh from ANY screen: when signed in,
@@ -216,6 +225,16 @@ function AuthGate() {
           headerShown: false,
           contentStyle: { backgroundColor: C.bg },
           animation: "fade",
+          // Rapid-navigation memory/CPU guard. Backgrounded screens in the stack
+          // (e.g. a chain of detail pages opened via "related anime") otherwise
+          // keep re-rendering their heavy trees — 80-episode grids, poster/banner
+          // images — whenever a late async result (AniList / Supabase / download
+          // tick) lands, and their native views stay attached. freezeOnBlur
+          // suspends every off-top screen (react-freeze) so only the focused
+          // screen does work; react-native-screens detaches the rest. This is the
+          // fix for the progressive slowdown / "stuck" state after hopping
+          // through many pages.
+          freezeOnBlur: true,
         }}
       >
         <Stack.Screen name="(auth)" />

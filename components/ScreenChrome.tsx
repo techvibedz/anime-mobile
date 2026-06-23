@@ -16,6 +16,8 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { C, R, S, AR } from "../lib/theme";
+import { useSidebar } from "./Sidebar";
+import { t } from "../lib/i18n";
 
 /* ── Aurora backdrop ─────────────────────────────
  * A FULL-SCREEN wash whose glow is concentrated at the top and fades smoothly to
@@ -73,19 +75,70 @@ export function ScreenHeader({
   title,
   right,
   onBack,
+  showMenu = true,
 }: {
   title: string;
   right?: ReactNode;
   onBack?: () => void;
+  /** Trailing hamburger that opens the global drawer. On by default so the
+   *  sidebar is reachable from every screen — not just the home tab. */
+  showMenu?: boolean;
 }) {
   const backIcon = I18nManager.isRTL ? "chevron-forward" : "chevron-back";
+  const { openSidebar } = useSidebar();
   return (
     <View style={hs.header}>
       <GlassIconButton icon={backIcon} onPress={onBack ?? (() => router.back())} />
       <Text style={hs.title} numberOfLines={1}>
         {title}
       </Text>
-      <View style={hs.rightSlot}>{right ?? null}</View>
+      <View style={hs.rightSlot}>
+        {right ?? null}
+        {showMenu ? (
+          <View style={right ? hs.menuSpacer : undefined}>
+            <GlassIconButton icon="menu" onPress={openSidebar} />
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/* ── Offline / no-content notice ──────────────────
+ * Shared full-area state for the network-dependent browse screens. Always offers
+ * a route to the user's offline downloads (which play with no connection), plus
+ * an optional retry. `offline=false` keeps the same layout but uses the softer
+ * "couldn't load" copy for an online-but-failed fetch. */
+export function OfflineNotice({
+  onRetry,
+  offline = true,
+}: {
+  onRetry?: () => void;
+  offline?: boolean;
+}) {
+  return (
+    <View style={hs.offlineWrap}>
+      <View style={hs.offlineIcon}>
+        <Ionicons name={offline ? "cloud-offline-outline" : "alert-circle-outline"} size={38} color={C.accent} />
+      </View>
+      <Text style={hs.offlineTitle}>{offline ? t.offlineTitle : t.homeEmptyTitle}</Text>
+      <Text style={hs.offlineSub}>{offline ? t.offlineSub : t.homeEmptySub}</Text>
+      <Pressable
+        style={({ pressed }) => [hs.offlinePrimary, pressed && { opacity: 0.9 }]}
+        onPress={() => router.push("/downloads")}
+      >
+        <Ionicons name="download" size={16} color={C.textOnAccent} />
+        <Text style={hs.offlinePrimaryText}>{t.watchDownloads}</Text>
+      </Pressable>
+      {onRetry ? (
+        <Pressable
+          style={({ pressed }) => [hs.offlineSecondary, pressed && { opacity: 0.85 }]}
+          onPress={onRetry}
+        >
+          <Ionicons name="refresh" size={15} color={C.text} />
+          <Text style={hs.offlineSecondaryText}>{t.retry}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -125,8 +178,30 @@ const hs = StyleSheet.create({
   iconBtnPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.94 }] },
 
   // flex:1 centered title between the two 42px rails keeps it optically centered.
-  title: { flex: 1, textAlign: "center", color: C.text, fontSize: 18, fontFamily: AR.bold },
-  rightSlot: { minWidth: ICON_BTN, height: ICON_BTN, alignItems: "flex-end", justifyContent: "center" },
+  title: { flex: 1, textAlign: "center", color: C.bone, fontSize: 19, letterSpacing: -0.3, fontFamily: AR.bold },
+  rightSlot: { minWidth: ICON_BTN, height: ICON_BTN, flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
+  menuSpacer: { marginLeft: 8 },
+
+  // paddingTop (not flex:1) so it renders correctly both standalone AND inside a
+  // FlatList's ListEmptyComponent, where a flex child would collapse to 0 height.
+  offlineWrap: { alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingTop: 80, paddingBottom: 40, gap: 10 },
+  offlineIcon: {
+    width: 84, height: 84, borderRadius: 42, backgroundColor: C.glass,
+    borderWidth: 1, borderColor: C.glassBorder, alignItems: "center", justifyContent: "center", marginBottom: 6,
+  },
+  offlineTitle: { color: C.text, fontSize: 18, fontFamily: AR.bold, textAlign: "center" },
+  offlineSub: { color: C.textSecondary, fontSize: 13, lineHeight: 21, textAlign: "center", maxWidth: 300, fontFamily: "Cairo_500Medium" },
+  offlinePrimary: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    backgroundColor: C.accent, borderRadius: R.pill, paddingHorizontal: 22, paddingVertical: 13, marginTop: 10,
+  },
+  offlinePrimaryText: { color: C.textOnAccent, fontSize: 14, fontFamily: "Cairo_700Bold" },
+  offlineSecondary: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    borderRadius: R.pill, paddingHorizontal: 20, paddingVertical: 11,
+  },
+  offlineSecondaryText: { color: C.text, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
 
   sectionLabel: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", marginBottom: 12 },
   sectionText: {

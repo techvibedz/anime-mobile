@@ -217,7 +217,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 9, borderRadius: R.pill,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
-  catChipActive: { backgroundColor: C.accent, borderColor: C.accent, ...ELEVATION_GLOW },
+  catChipActive: { backgroundColor: C.accent, borderColor: C.accent },
   catText: { color: C.textSecondary, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   catTextActive: { color: C.textOnAccent },
 

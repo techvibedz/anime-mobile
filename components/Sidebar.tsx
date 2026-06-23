@@ -162,6 +162,7 @@ function Sidebar() {
   };
 
   const NAV: NavRow[] = [
+    { icon: "home-outline", label: t.home, onPress: () => go("/(tabs)"), match: "/(tabs)" },
     { icon: "person-outline", label: t.profile, onPress: () => go("/profile"), match: "/profile" },
     { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
     { icon: "download-outline", label: t.downloadsTitle, onPress: () => go("/downloads"), match: "/downloads" },
@@ -406,8 +407,8 @@ const st = StyleSheet.create({
   panel: {
     position: "absolute", top: 0, bottom: 0, right: 0,
     backgroundColor: C.bgDeep,
-    borderTopLeftRadius: 34, borderBottomLeftRadius: 34,
-    borderLeftWidth: 1, borderColor: C.glassBorder,
+    borderTopLeftRadius: 24, borderBottomLeftRadius: 24,
+    borderLeftWidth: 1, borderColor: C.line,
     paddingHorizontal: 16,
     overflow: "hidden",
     ...ELEVATION_CARD,

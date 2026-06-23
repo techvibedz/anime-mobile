@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchHome, fetchRecent } from "../../lib/api";
 import type { AnimeItem, EpisodeItem, HomeSection } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
+import { useSidebar } from "../../components/Sidebar";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
 import { LinearGradient } from "expo-linear-gradient";
@@ -123,6 +124,7 @@ export default function SeeAllScreen() {
     type: string;
   }>();
   const insets = useSafeAreaInsets();
+  const { openSidebar } = useSidebar();
   const [items, setItems] = useState<(AnimeItem | EpisodeItem)[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasNext, setHasNext] = useState(false);
@@ -183,6 +185,9 @@ export default function SeeAllScreen() {
         <View style={s.countPill}>
           <Text style={s.count}>{items.length}</Text>
         </View>
+        <Pressable onPress={openSidebar} style={s.backBtn} hitSlop={8}>
+          <Ionicons name="menu" size={22} color={C.white} />
+        </Pressable>
       </View>
 
       <FlatList

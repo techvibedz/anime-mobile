@@ -232,20 +232,25 @@ function imgOrEmpty(s: string | null | undefined): string {
 // أنمي … اون لاين بجودة عالية … Anime3rb". A real Arabic synopsis is kept intact;
 // pure boilerplate collapses to "" and the synopsis block simply hides.
 const SYNOPSIS_JUNK =
-  /تحميل\s*و?\s*مشاهدة|مشاهدة\s*و?\s*تحميل|اون\s*لاين|أون\s*لاين|أونلاين|بجودة\s*عالية|جميع\s*حلقات|anime3rb|anime4up|witanime|أنمي\s*عرب|انمي\s*عرب|حصرياً\s*على/i;
+  /تحميل\s*و?\s*مشاهدة|مشاهدة\s*و?\s*تحميل|اون\s*لاين|أون\s*لاين|أونلاين|بجودة\s*عالية|جميع\s*(?:ال)?حلقات|anime3rb|anime4up|witanime|أنمي\s*عرب|انمي\s*عرب|حصريا?ً?\s*على|موقع\s*انمي|تابعنا|شاهد\s*الآن|بدون\s*إعلانات/i;
 function cleanSynopsis(raw: string | null | undefined): string {
   let s = (raw || "").replace(/\s+/g, " ").trim();
   if (!s) return "";
   // Drop a leading "قصة الأنمي:" / "القصة:" / "Story:" label.
   s = s.replace(/^\s*(?:قصة\s*(?:الأنمي|الانمي)?|القصة|story|synopsis)\s*[:：\-–]?\s*/i, "").trim();
   if (SYNOPSIS_JUNK.test(s)) {
-    // Remove only the sentences carrying the boilerplate markers; keep any real
-    // story sentences that may sit alongside them.
+    // Remove only the segments carrying the boilerplate markers; keep any real
+    // story sentences that may sit alongside them. anime3rb's SEO blurb has no
+    // sentence punctuation (it chains alt-titles with " - "/"|"/"،"), so split
+    // on those separators too — otherwise the whole run survived as one segment.
     const kept = s
-      .split(/[.!؟\n]+/)
+      .split(/[.!؟\n|،]+|\s[-–—]\s/)
       .map((p) => p.trim())
       .filter((p) => p && !SYNOPSIS_JUNK.test(p));
     s = kept.join(". ").trim();
+    // If boilerplate markers still survive after segmenting, the text is SEO
+    // junk through-and-through — drop it entirely rather than show a fragment.
+    if (SYNOPSIS_JUNK.test(s)) return "";
   }
   // Anything shorter than a clause is almost certainly a leftover fragment.
   return s.length < 25 ? "" : s;
@@ -581,10 +586,19 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
 }
 
 export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> {
-  // Re-clean the title on every return path so entries cached/uploaded by an
-  // older build (with the "أنمي … مترجم" decoration) display cleanly too.
+  // Re-clean the title AND synopsis on every return path so entries
+  // cached/uploaded by an older build display cleanly too. Crucial for the
+  // synopsis: older builds (and anime3rb's og:description fallback) cached SEO
+  // boilerplate as the "story" ("مشاهدة وتحميل … اون لاين بجودة عالية …
+  // Anime3rb أنمي عرب"). The live scrape already nukes that via cleanSynopsis,
+  // but a cache/cloud HIT skipped re-cleaning, so the junk wall persisted under
+  // the genres on every reopen. Re-running cleanSynopsis collapses pure
+  // boilerplate to "" and the synopsis block simply hides.
   const clean = (p: EpisodesPayload): EpisodesPayload => {
-    if (p?.data) p.data.title = cleanAnimeTitle(p.data.title);
+    if (p?.data) {
+      p.data.title = cleanAnimeTitle(p.data.title);
+      p.data.synopsis = cleanSynopsis(p.data.synopsis);
+    }
     return p;
   };
   // Read-through cache, fastest tier first:

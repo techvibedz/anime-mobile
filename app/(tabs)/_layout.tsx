@@ -32,7 +32,7 @@ function FloatingNav({ state, navigation }: any) {
   return (
     <View style={[ss.navWrap, { bottom: 16 + insets.bottom }]} pointerEvents="box-none">
       <View style={ss.navPill}>
-        <GlassFill intensity={40} androidColor="rgba(14,16,40,0.92)" />
+        <GlassFill intensity={30} androidColor="rgba(10,10,11,0.94)" />
         <View style={ss.navInner}>
           {TABS.map((tab, i) => {
             const active = state.index === i;
@@ -44,10 +44,11 @@ function FloatingNav({ state, navigation }: any) {
               >
                 <Ionicons
                   name={active ? tab.icon : (`${tab.icon}-outline` as any)}
-                  size={20}
-                  color={active ? C.accent : C.textMuted}
+                  size={19}
+                  color={active ? C.ember : C.textMuted}
                 />
                 {active && <Text style={ss.navLabel}>{tab.label}</Text>}
+                {active && <View style={ss.navSpark} />}
               </Pressable>
             );
           })}
@@ -69,7 +70,7 @@ const ss = StyleSheet.create({
     borderRadius: R.pill,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: C.glassBorder,
+    borderColor: C.line,
     ...ELEVATION_NAV,
   },
   navInner: {
@@ -77,23 +78,31 @@ const ss = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingVertical: 7,
   },
   navItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 14,
+    gap: 7,
+    paddingHorizontal: 15,
     paddingVertical: 10,
     borderRadius: R.pill,
   },
+  // Active: a quiet ink-high chip carries the label; the EMBER is the icon, the
+  // label tint, and a small spark dot — not a filled accent blob.
   navItemActive: {
-    backgroundColor: C.accentSoft,
-    paddingHorizontal: 18,
+    backgroundColor: C.inkHigh,
+    paddingHorizontal: 17,
   },
   navLabel: {
     fontSize: 11,
-    color: C.accent,
+    color: C.ember,
     fontFamily: AR.semibold,
+  },
+  navSpark: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.ember,
   },
 });

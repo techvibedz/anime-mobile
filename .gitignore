@@ -49,3 +49,9 @@ supabase/.temp/
 
 # Built APK release artifacts (uploaded to GitHub Releases, not tracked here)
 *.apk
+
+# Agent tooling / local state (not part of the app)
+.agents/
+.claude/
+.codex/
+.icon-backup-void/

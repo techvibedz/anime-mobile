@@ -66,7 +66,7 @@ const styles = StyleSheet.create({
   cardBadge: {
     position: "absolute", top: 8, right: 8, zIndex: 2,
     flexDirection: "row", alignItems: "center", gap: 3,
-    backgroundColor: "rgba(6,7,26,0.82)", borderRadius: R.sm,
+    backgroundColor: "rgba(10,10,11,0.82)", borderRadius: R.sm,
     paddingHorizontal: 7, paddingVertical: 3,
     borderWidth: 1, borderColor: C.glassBorder,
   },

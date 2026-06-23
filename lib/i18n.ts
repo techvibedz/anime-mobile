@@ -78,6 +78,12 @@ export const ar = {
   homeEmptyTitle: "تعذّر تحميل المحتوى",
   homeEmptySub: "قد يكون الاتصال ضعيفًا أو أن المصدر مشغول. حاول مرة أخرى.",
 
+  // Offline
+  offlineTitle: "أنت غير متّصل بالإنترنت",
+  offlineSub: "تصفّح المحتوى يحتاج اتصالًا بالإنترنت، لكن يمكنك مشاهدة الحلقات التي نزّلتها في أي وقت.",
+  watchDownloads: "مشاهدة التنزيلات",
+  offlineBanner: "أنت في وضع عدم الاتصال",
+
   // Detail page
   watchEpisode: "شاهد هذه الحلقة",
   openAnimePage: "افتح صفحة الأنمي",
@@ -139,6 +145,7 @@ export const ar = {
   resolving: "جاري التحضير…",
   loadingPlayer: "جاري تحميل المشغّل…",
   fallbackPlayer: "المشغّل الاحتياطي",
+  unlock: "إلغاء القفل",
 
   // Downloads
   downloadsTitle: "التنزيلات",
@@ -184,6 +191,7 @@ export const ar = {
   // Sidebar
   menu: "القائمة",
   guest: "زائر",
+  home: "الرئيسية",
   profile: "ملفّي الشخصي",
   shareApp: "شارك التطبيق",
   shareAppMessage: "حمّل تطبيق بانتوفة لمشاهدة الأنمي مجانًا 🎬",

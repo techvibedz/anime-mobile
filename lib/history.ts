@@ -210,21 +210,32 @@ const TITLE_DECORATION = new Set([
   "الحلقات", "جميع", "عرب", "anime3rb", "anime4up", "witanime",
 ]);
 
+// Memo cache — animeTitleKey runs NFKD + regex tokenization, which is wasteful
+// when called repeatedly for the SAME titles (the episode grid asks for the
+// anime's key once per card, and getCompletedSets once per history row). Titles
+// are few and bounded, so a plain Map keyed by the raw input is enough.
+const titleKeyCache = new Map<string, string>();
+
 export function animeTitleKey(s: string | null | undefined): string {
+  const raw = s || "";
+  const cached = titleKeyCache.get(raw);
+  if (cached !== undefined) return cached;
   // Tokenize on the RAW string (Arabic stays composed) so decoration words can
   // be filtered by exact token, then NFKD-fold the survivors for Latin diacritics.
-  const tokens = (s || "")
+  const key = raw
     .toLowerCase()
     .replace(/[^a-z0-9؀-ۿ]+/g, " ")
     .trim()
     .split(" ")
-    .filter((tok) => tok && !TITLE_DECORATION.has(tok));
-  return tokens
+    .filter((tok) => tok && !TITLE_DECORATION.has(tok))
     .join(" ")
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+  if (titleKeyCache.size > 2000) titleKeyCache.clear();
+  titleKeyCache.set(raw, key);
+  return key;
 }
 
 /** Pull an episode number out of a history entry — the stored epNum when

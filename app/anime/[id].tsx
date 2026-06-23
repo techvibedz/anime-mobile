@@ -20,7 +20,7 @@ import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, searchAnime } f
 import type { AnimeDetail, Episode, SearchResult } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
-import { getCompletedSets, isEpisodeWatched, toggleWatched, type CompletedSets } from "../../lib/history";
+import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
 import { fetchNextAiring } from "../../lib/airing";
 import { startDownload, getDownloads, subscribeDownloads, type DownloadStatus } from "../../lib/downloads";
@@ -153,18 +153,25 @@ export default function AnimeDetailScreen() {
   // last available episode flips the badge on, and a newly-aired episode flips it
   // back off. "finished" is gated on the series no longer airing, so a still-
   // running show's latest episode reads as "caught up" rather than "completed".
-  useEffect(() => {
-    if (!data || !animeHref) return;
+  // Derive the last episode number + whether it's been watched. Memoized so the
+  // recording effect below depends only on these PRIMITIVES — not the `completed`
+  // object (which gets a new reference on every focus) — so toggling any
+  // non-final episode no longer re-fires the AniList airing check.
+  const { maxNum, caughtUp } = useMemo(() => {
+    if (!data) return { maxNum: 0, caughtUp: false };
     const all = [...data.episodes, ...episodes4up, ...episodes3rb];
-    if (all.length === 0) return;
-    let maxNum = 0;
+    let mx = 0;
     let hasNum = false;
     for (const e of all) {
-      if (e.number != null && e.number > maxNum) { maxNum = e.number; hasNum = true; }
+      if (e.number != null && e.number > mx) { mx = e.number; hasNum = true; }
     }
-    if (!hasNum) return;
-    const lastHrefs = all.filter((e) => e.number === maxNum).map((e) => e.href);
-    const caughtUp = isEpisodeWatched(completed, { hrefs: lastHrefs, epNum: maxNum, animeTitle: data.title });
+    if (!hasNum) return { maxNum: 0, caughtUp: false };
+    const lastHrefs = all.filter((e) => e.number === mx).map((e) => e.href);
+    return { maxNum: mx, caughtUp: isEpisodeWatched(completed, { hrefs: lastHrefs, epNum: mx, animeTitle: data.title }) };
+  }, [data, episodes4up, episodes3rb, completed]);
+
+  useEffect(() => {
+    if (!data || !animeHref || maxNum === 0) return;
     let cancelled = false;
     (async () => {
       // The series' finale is out when AniList reports no upcoming episode. A
@@ -185,7 +192,7 @@ export default function AnimeDetailScreen() {
       }).catch(() => {});
     })();
     return () => { cancelled = true; };
-  }, [data, episodes4up, episodes3rb, completed, animeHref, merged]);
+  }, [data?.title, animeHref, merged?.anime4up, maxNum, caughtUp]);
 
   const handleToggleWatched = useCallback(async (ep: GridEpisode) => {
     // Use whichever source href exists so source-only episodes (no witanime
@@ -623,6 +630,15 @@ function EpisodesTab({
     [mergedEps],
   );
 
+  // The set of episode numbers watched for THIS anime (cross-source), resolved
+  // ONCE here instead of re-deriving the anime's title key (NFKD + regex) inside
+  // every one of the 80 grid cards on every render. Cards then do a plain Set
+  // lookup. This is the hot path the watched-state change made expensive.
+  const watchedNumbers = useMemo(
+    () => completed.numbersByTitle.get(animeTitleKey(animeTitle)) ?? null,
+    [completed, animeTitle],
+  );
+
   // Reset window when sort flips so user always sees the FIRST page of the
   // new order (not a weird middle chunk).
   useEffect(() => { setVisibleCount(PAGE); }, [sortDesc, mergedEps.length]);
@@ -675,11 +691,18 @@ function EpisodesTab({
       <View style={ss.epGrid}>
         {visible.map((ep, i) => {
           const primary = ep.href || ep.href4up || ep.href3rb || "";
+          // Cheap per-card check: href set membership (any source) OR the
+          // precomputed cross-source episode-number set. No NFKD per card.
+          const watched =
+            (!!ep.href && completed.hrefs.has(normHref(ep.href))) ||
+            (!!ep.href4up && completed.hrefs.has(normHref(ep.href4up))) ||
+            (!!ep.href3rb && completed.hrefs.has(normHref(ep.href3rb))) ||
+            (ep.number != null && !!watchedNumbers?.has(ep.number));
           return (
             <EpisodeGridCard
               key={`${ep.number}-${i}`}
               ep={ep}
-              watched={isEpisodeWatched(completed, { hrefs: [ep.href, ep.href4up, ep.href3rb], epNum: ep.number, animeTitle })}
+              watched={watched}
               isLast={mergedEps.length > 1 && ep.number === lastEpNum}
               poster={poster}
               animeHref={animeHref}

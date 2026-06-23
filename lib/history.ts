@@ -15,6 +15,9 @@ export interface WatchEntry {
   updatedAt: number;
   url4up?: string;
   completed?: boolean;
+  /** Episode number, when known — lets watched-state bridge across sources
+   *  (the same episode has a different URL on witanime / anime4up / anime3rb). */
+  epNum?: number;
   /** Hidden from the "Continue Watching" row but progress is preserved. */
   dismissed?: boolean;
 }
@@ -190,6 +193,59 @@ export function normHref(u: string | null | undefined): string {
 }
 
 /**
+ * Normalize an anime title into a cross-source key. The same anime carries an
+ * identical romaji name on witanime / anime4up / anime3rb (e.g. "Tensei shitara
+ * Slime Datta Ken 4th Season"), so a normalized title + episode number lets a
+ * "watched" flag set in one source light up in the others — the episode URLs
+ * themselves differ per source and can't be compared. Keeps Latin alphanumerics
+ * and Arabic letters; folds case, diacritics, punctuation and spacing.
+ */
+// Source/SEO decoration words dropped from a title key so a decorated title
+// (anime3rb stores "أنمي … مترجم") keys identically to the clean name another
+// source stores. Matched as whole tokens before any Unicode folding (NFKD would
+// decompose the Arabic hamza and defeat a literal compare).
+const TITLE_DECORATION = new Set([
+  "أنمي", "انمي", "انيمي", "مترجم", "مترجمة", "مدبلج", "مدبلجة", "مشاهدة",
+  "تحميل", "اون", "أون", "أونلاين", "لاين", "بجودة", "عالية", "حلقات",
+  "الحلقات", "جميع", "عرب", "anime3rb", "anime4up", "witanime",
+]);
+
+export function animeTitleKey(s: string | null | undefined): string {
+  // Tokenize on the RAW string (Arabic stays composed) so decoration words can
+  // be filtered by exact token, then NFKD-fold the survivors for Latin diacritics.
+  const tokens = (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9؀-ۿ]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((tok) => tok && !TITLE_DECORATION.has(tok));
+  return tokens
+    .join(" ")
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Pull an episode number out of a history entry — the stored epNum when
+ *  present, else parsed from the episode URL (…الحلقة-N / /episode/slug/N) or
+ *  the episode title. Returns null when none can be found. */
+function deriveEpNum(e: WatchEntry): number | null {
+  if (typeof e.epNum === "number" && e.epNum > 0) return e.epNum;
+  const fromStr = (s?: string): number | null => {
+    if (!s) return null;
+    let d = s;
+    try { d = decodeURIComponent(s); } catch {}
+    let m =
+      d.match(/الحلقة[\s\-_]*(\d+)/) ||
+      d.match(/\/episode\/[^/]+\/(\d+)/i) ||
+      d.match(/\bepisode\s*(\d+)/i);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  return fromStr(e.episodeHref) ?? fromStr(e.episodeTitle);
+}
+
+/**
  * Set of normalized hrefs for EVERY episode the user has completed (across all
  * anime). The anime detail page matches each episode's source hrefs (witanime /
  * anime4up / anime3rb) against this set, so an episode counts as watched no
@@ -213,18 +269,68 @@ export function isEpisodeCompleted(
 }
 
 /**
+ * Completed-episode index for the detail page. Carries BOTH:
+ *   • hrefs — normalized URLs of every completed episode (same-source match), and
+ *   • numbersByTitle — per-anime (normalized title) set of completed episode
+ *     numbers, which bridges sources: watching episode 5 of "Naruto" on witanime
+ *     marks episode 5 watched when the same anime is opened from anime4up/anime3rb
+ *     (whose episode URLs are different and would never match by href).
+ */
+export interface CompletedSets {
+  hrefs: Set<string>;
+  numbersByTitle: Map<string, Set<number>>;
+}
+
+export async function getCompletedSets(): Promise<CompletedSets> {
+  const list = await getHistory();
+  const hrefs = new Set<string>();
+  const numbersByTitle = new Map<string, Set<number>>();
+  for (const e of list) {
+    if (!isCompleted(e)) continue;
+    hrefs.add(normHref(e.episodeHref));
+    const n = deriveEpNum(e);
+    const tk = animeTitleKey(e.animeTitle);
+    if (n != null && tk) {
+      let set = numbersByTitle.get(tk);
+      if (!set) { set = new Set<number>(); numbersByTitle.set(tk, set); }
+      set.add(n);
+    }
+  }
+  return { hrefs, numbersByTitle };
+}
+
+/** True if an episode is watched by EITHER a same-source href match OR a
+ *  cross-source (anime title + episode number) match. */
+export function isEpisodeWatched(
+  sets: CompletedSets,
+  opts: { hrefs: (string | null | undefined)[]; epNum?: number | null; animeTitle?: string | null },
+): boolean {
+  if (opts.hrefs.some((h) => h && sets.hrefs.has(normHref(h)))) return true;
+  if (opts.epNum != null && opts.animeTitle) {
+    const set = sets.numbersByTitle.get(animeTitleKey(opts.animeTitle));
+    if (set && set.has(opts.epNum)) return true;
+  }
+  return false;
+}
+
+/**
  * Toggle the watched flag on a specific episode. Adds a stub history entry
  * if there isn't one yet (so the marker survives across launches).
  */
 export async function toggleWatched(
   episodeHref: string,
-  meta: { episodeTitle: string; animeTitle: string; animeHref: string; image?: string; url4up?: string },
+  meta: { episodeTitle: string; animeTitle: string; animeHref: string; image?: string; url4up?: string; epNum?: number | null },
 ): Promise<boolean> {
   const list = await getHistory();
   const idx = list.findIndex((e) => e.episodeHref === episodeHref);
   if (idx >= 0) {
     const cur = list[idx];
-    const next: WatchEntry = { ...cur, completed: !isCompleted(cur), updatedAt: Date.now() };
+    const next: WatchEntry = {
+      ...cur,
+      completed: !isCompleted(cur),
+      epNum: cur.epNum ?? (meta.epNum ?? undefined),
+      updatedAt: Date.now(),
+    };
     list[idx] = next;
     await AsyncStorage.setItem(KEY, JSON.stringify(list));
     pushToCloud(next).catch(() => {});
@@ -240,6 +346,7 @@ export async function toggleWatched(
     positionMs: 0,
     durationMs: 0,
     url4up: meta.url4up,
+    epNum: meta.epNum ?? undefined,
     completed: true,
     updatedAt: Date.now(),
   };

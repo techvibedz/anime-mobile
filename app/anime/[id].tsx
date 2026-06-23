@@ -20,7 +20,7 @@ import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, searchAnime } f
 import type { AnimeDetail, Episode, SearchResult } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
-import { getCompletedEpisodeHrefs, isEpisodeCompleted, normHref, toggleWatched } from "../../lib/history";
+import { getCompletedSets, isEpisodeWatched, toggleWatched, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
 import { fetchNextAiring } from "../../lib/airing";
 import { startDownload, getDownloads, subscribeDownloads, type DownloadStatus } from "../../lib/downloads";
@@ -59,10 +59,10 @@ export default function AnimeDetailScreen() {
   const [bookmarkList, setBookmarkList] = useState<FavoriteList | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("episodes");
-  // Normalized hrefs of every completed episode (across all anime). Each grid
-  // card matches its own source hrefs against this, so the "watched" badge is
-  // independent of which source URL was played or which animeHref was stored.
-  const [completedHrefs, setCompletedHrefs] = useState<Set<string>>(new Set());
+  // Completed-episode index (across all anime). Carries both per-href matches
+  // (same source) and per-anime episode-number matches (cross source), so a
+  // "watched" badge shows regardless of which source the episode was played in.
+  const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map() });
   const [malScore, setMalScore] = useState<number | null>(null);
   // Related anime (sequels, prequels, side stories, spin-offs) from AniList —
   // the source sites carry no related section, so these are resolved by title.
@@ -144,7 +144,7 @@ export default function AnimeDetailScreen() {
 
   // Refresh watched flags when the screen regains focus (e.g. after watching).
   useFocusEffect(useCallback(() => {
-    getCompletedEpisodeHrefs().then(setCompletedHrefs);
+    getCompletedSets().then(setCompleted);
   }, []));
 
   // Record this anime's completion state — the data behind the poster-card
@@ -164,7 +164,7 @@ export default function AnimeDetailScreen() {
     }
     if (!hasNum) return;
     const lastHrefs = all.filter((e) => e.number === maxNum).map((e) => e.href);
-    const caughtUp = isEpisodeCompleted(completedHrefs, lastHrefs);
+    const caughtUp = isEpisodeWatched(completed, { hrefs: lastHrefs, epNum: maxNum, animeTitle: data.title });
     let cancelled = false;
     (async () => {
       // The series' finale is out when AniList reports no upcoming episode. A
@@ -185,26 +185,25 @@ export default function AnimeDetailScreen() {
       }).catch(() => {});
     })();
     return () => { cancelled = true; };
-  }, [data, episodes4up, episodes3rb, completedHrefs, animeHref, merged]);
+  }, [data, episodes4up, episodes3rb, completed, animeHref, merged]);
 
   const handleToggleWatched = useCallback(async (ep: GridEpisode) => {
     // Use whichever source href exists so source-only episodes (no witanime
     // href) can still be toggled — and store under that same href so the
-    // marker matches on the next render.
+    // marker matches on the next render. The episode number rides along so the
+    // flag bridges to the other sources too.
     const primary = ep.href || ep.href4up || ep.href3rb;
     if (!data || !primary) return;
-    const next = await toggleWatched(primary, {
+    await toggleWatched(primary, {
       episodeTitle: ep.title || `${t.episode} ${ep.number}`,
       animeTitle: data.title,
       animeHref,
       image: data.poster,
+      epNum: ep.number ?? undefined,
     });
-    setCompletedHrefs((prev) => {
-      const copy = new Set(prev);
-      const key = normHref(primary);
-      if (next) copy.add(key); else copy.delete(key);
-      return copy;
-    });
+    // Re-read the index so both the href and per-title number sets reflect the
+    // toggle (a cross-source episode has no href in this page to flip locally).
+    getCompletedSets().then(setCompleted);
   }, [data, animeHref]);
 
   // Tapping the heart: if not saved, open the picker so the user chooses Watching vs Planned.
@@ -428,7 +427,7 @@ export default function AnimeDetailScreen() {
               episodes3rb={episodes3rb}
               merged={merged}
               poster={data.poster}
-              completedHrefs={completedHrefs}
+              completed={completed}
               onToggleWatched={handleToggleWatched}
               animeHref={animeHref}
               animeTitle={data.title}
@@ -510,7 +509,7 @@ function EpisodesTab({
   episodes3rb,
   merged,
   poster,
-  completedHrefs,
+  completed,
   onToggleWatched,
   animeHref,
   animeTitle,
@@ -520,7 +519,7 @@ function EpisodesTab({
   episodes3rb: Episode[];
   merged: { anime4up: string } | null;
   poster: string;
-  completedHrefs: Set<string>;
+  completed: CompletedSets;
   onToggleWatched: (ep: GridEpisode) => void;
   animeHref: string;
   animeTitle: string;
@@ -680,7 +679,7 @@ function EpisodesTab({
             <EpisodeGridCard
               key={`${ep.number}-${i}`}
               ep={ep}
-              watched={isEpisodeCompleted(completedHrefs, [ep.href, ep.href4up, ep.href3rb])}
+              watched={isEpisodeWatched(completed, { hrefs: [ep.href, ep.href4up, ep.href3rb], epNum: ep.number, animeTitle })}
               isLast={mergedEps.length > 1 && ep.number === lastEpNum}
               poster={poster}
               animeHref={animeHref}

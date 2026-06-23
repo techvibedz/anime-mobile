@@ -251,6 +251,29 @@ function cleanSynopsis(raw: string | null | undefined): string {
   return s.length < 25 ? "" : s;
 }
 
+// Strip the SEO/source decoration the sites bake into an anime's TITLE so the
+// detail page shows just the anime's name. anime3rb's og:title arrives as
+// "أنمي <Name> مترجم - Anime3rb أنمي عرب" — a leading "أنمي" word, a trailing
+// "مترجم"/"مدبلج", and a site-name suffix — and witanime/anime4up occasionally
+// add the same. A clean name ALSO makes the downstream Jikan/AniList lookups
+// (rating badge, Info tab, related anime) resolve to the right entry instead of
+// choking on the decorated string. Clean titles (witanime/anime4up's
+// .anime-details-title) pass through unchanged.
+function cleanAnimeTitle(raw: string | null | undefined): string {
+  let s = (raw || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  // Site-name suffix: "… - Anime3rb أنمي عرب", "… - Anime4up", "… | WitAnime".
+  s = s.replace(/\s*[|–—\-]\s*(?:anime3rb|anime4up|witanime)\b.*$/i, "").trim();
+  // Leading source words ("مشاهدة"، "تحميل"، "جميع حلقات"، "أنمي"…).
+  s = s.replace(/^(?:مشاهدة|تحميل|جميع\s*(?:حلقات|الحلقات)|أنمي|انمي|انيمي)\s+/g, "").trim();
+  s = s.replace(/^(?:أنمي|انمي|انيمي)\s+/g, "").trim(); // a second leading word
+  // Trailing decoration ("مترجم"، "مدبلج"، "اون لاين"، "بجودة عالية"…), chained.
+  for (let i = 0; i < 3; i++) {
+    s = s.replace(/\s*(?:مترجمة?|مدبلجة?|اون\s*لاين|أون\s*لاين|أونلاين|بجودة\s*عالية|كامل[ةه]?)\s*$/g, "").trim();
+  }
+  return s.replace(/\s+/g, " ").trim();
+}
+
 /* ── proxy URL — DISABLED. We play the resolved URL directly in the native
  * player with per-provider headers (on-device residential IP is accepted by
  * the CDNs). Kept as identity for call-site compatibility. ── */
@@ -502,7 +525,7 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
     const payload: EpisodesPayload = {
       success: !!a,
       data: {
-        title: a?.title || "",
+        title: cleanAnimeTitle(a?.title),
         poster: a?.poster || "",
         banner: a?.poster || "",
         synopsis: cleanSynopsis(a?.synopsis),
@@ -533,7 +556,7 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
   const payload: EpisodesPayload = {
     success: true,
     data: {
-      title: d.title,
+      title: cleanAnimeTitle(d.title),
       poster: d.poster,
       banner: d.poster,
       synopsis: cleanSynopsis(d.synopsis),
@@ -558,12 +581,18 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
 }
 
 export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> {
+  // Re-clean the title on every return path so entries cached/uploaded by an
+  // older build (with the "أنمي … مترجم" decoration) display cleanly too.
+  const clean = (p: EpisodesPayload): EpisodesPayload => {
+    if (p?.data) p.data.title = cleanAnimeTitle(p.data.title);
+    return p;
+  };
   // Read-through cache, fastest tier first:
   // 1) On-device cache — instant, offline-capable. Revalidate in the background.
   const cached = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
   if (cached) {
     void fetchEpisodesFresh(animeUrl).catch(() => {});
-    return cached;
+    return clean(cached);
   }
   // 2) Crowdsourced cloud cache — another device already scouted this anime, so
   //    render instantly with NO live scrape. Seed the on-device cache so the
@@ -573,10 +602,10 @@ export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> 
   if (cloud?.payload?.data) {
     void writeCache(DETAIL_CACHE_PREFIX + animeUrl, cloud.payload);
     if (cloud.stale) void fetchEpisodesFresh(animeUrl).catch(() => {});
-    return cloud.payload;
+    return clean(cloud.payload);
   }
   // 3) Cold path — live scrape on the residential IP, then scout-upload.
-  return fetchEpisodesFresh(animeUrl);
+  return clean(await fetchEpisodesFresh(animeUrl));
 }
 
 /**

@@ -576,6 +576,7 @@ export default function WatchScreen() {
             positionMs: Math.round(pos),
             durationMs: Math.round(dur),
             url4up: url4up ? decodeURIComponent(url4up) : undefined,
+            epNum: paramEpNum ?? undefined,
           });
           maybeAutoAdvance(pos, dur);
         }
@@ -601,6 +602,7 @@ export default function WatchScreen() {
           positionMs: Math.round(pos),
           durationMs: Math.round(dur),
           url4up: url4up ? decodeURIComponent(url4up) : undefined,
+          epNum: paramEpNum ?? undefined,
         });
         maybeAutoAdvance(pos, dur);
       }

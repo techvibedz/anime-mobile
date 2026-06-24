@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>بانتوفة — Pantoufa | تطبيق الأنمي</title>
   <meta name="description" content="بانتوفة — شاهد آلاف حلقات الأنمي المترجمة مجانًا، بدون إعلانات، مع مزامنة سحابية ومتابعة للمشاهدة. حمّل التطبيق الآن." />
-  <meta name="theme-color" content="#06071A" />
+  <meta name="theme-color" content="#0A0A0B" />
   <link rel="icon" href="./assets/favicon.png" />
 
   <!-- Open Graph -->
@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;900&family=Outfit:wght@500;600;700;900&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -88,12 +88,14 @@
               <!-- top bar -->
               <div class="app-top">
                 <div class="app-logo"><span class="app-logo__dot"></span>Pantoufa</div>
-                <div class="app-glassbtn">🔔</div>
+                <div class="app-topbtns">
+                  <div class="app-glassbtn">▦</div>
+                  <div class="app-glassbtn ember">◔</div>
+                </div>
               </div>
 
               <!-- hero carousel -->
               <div class="app-hero" style="background-image:url('./assets/posters/demon-slayer.jpg')">
-                <div class="app-hero__mesh"></div>
                 <div class="app-hero__shade"></div>
                 <div class="app-hero__body">
                   <div class="app-chips">
@@ -103,7 +105,7 @@
                   <p class="app-hero__desc">رحلة تانجيرو لإنقاذ أخته والقضاء على الشياطين.</p>
                   <div class="app-hero__btns">
                     <span class="app-btn app-btn--accent">▶ شاهد الآن</span>
-                    <span class="app-btn app-btn--glass">♡ قائمتي</span>
+                    <span class="app-btn app-btn--ghost">♡ قائمتي</span>
                   </div>
                 </div>
                 <div class="app-dots"><i class="on"></i><i></i><i></i></div>
@@ -147,10 +149,10 @@
               <div class="app-sec">
                 <div class="app-sec__head"><span class="app-tick"></span>التصنيفات</div>
                 <div class="app-cats">
-                  <span class="app-cat" style="--a:#FF2D55;--b:#FF6B3D">⚡ أكشن</span>
-                  <span class="app-cat" style="--a:#FF6B9D;--b:#FF2D55">♥ رومانسي</span>
-                  <span class="app-cat" style="--a:#7C5CFC;--b:#9B6BFF">✦ خيال</span>
-                  <span class="app-cat" style="--a:#00C6FF;--b:#7C5CFC">🪐 خيال علمي</span>
+                  <span class="app-cat">أكشن</span>
+                  <span class="app-cat">رومانسي</span>
+                  <span class="app-cat">خيال</span>
+                  <span class="app-cat">خيال علمي</span>
                 </div>
               </div>
               <div style="height:46px"></div>
@@ -189,7 +191,7 @@
       <div class="section-head reveal">
         <span class="kicker">شاشات من داخل التطبيق</span>
         <h2>هكذا يبدو بانتوفة</h2>
-        <p>واجهة سينمائية بالوضع الداكن، سريعة وسلسة — صُمّمت لعشّاق الأنمي.</p>
+        <p>هويّة بصرية جديدة بالكامل: حبر أسود دافئ، لمسة جمر برتقالية واحدة، وخطوط نظيفة. سريعة، أنيقة، ومصمّمة لعشّاق الأنمي.</p>
       </div>
 
       <div class="phones">
@@ -206,7 +208,6 @@
               <div class="app-gchips">
                 <span class="app-gchip on">الكل</span><span class="app-gchip">أكشن</span><span class="app-gchip">مغامرة</span><span class="app-gchip">رومانسي</span><span class="app-gchip">خيال</span>
               </div>
-              <div class="app-glow"></div>
               <div class="app-grid">
                 <span style="background-image:url('./assets/posters/jujutsu-kaisen.jpg')"></span>
                 <span style="background-image:url('./assets/posters/demon-slayer.jpg')"></span>
@@ -250,29 +251,38 @@
           </div>
         </div>
 
-        <!-- My list -->
+        <!-- Video player -->
         <div class="device device--mini reveal" style="--i:2">
           <span class="device__notch"></span>
           <div class="device__screen">
-            <div class="app">
-              <div class="app-disc__head">
-                <span class="app-disc__title">قائمتي</span>
-                <span class="app-count">١٢</span>
+            <div class="app-player" style="background-image:url('./assets/posters/jujutsu-kaisen.jpg')">
+              <div class="app-player__scrim"></div>
+
+              <div class="app-pl__top">
+                <span class="app-glassbtn sm">‹</span>
+                <span class="app-pl__title">
+                  <b>جوجوتسو كايسن</b>
+                  <span>الحلقة 1 · مترجم</span>
+                </span>
+                <span class="app-pl__icons">⛶</span>
               </div>
-              <div class="app-gchips">
-                <span class="app-gchip on">المفضّلة</span><span class="app-gchip">السجل</span>
+
+              <div class="app-pl__center">
+                <span class="app-pl__skip">⤺</span>
+                <span class="app-pl__play">❚❚</span>
+                <span class="app-pl__skip">⤻</span>
               </div>
-              <div class="app-glow"></div>
-              <div class="app-grid">
-                <span style="background-image:url('./assets/posters/steins-gate.jpg')"></span>
-                <span style="background-image:url('./assets/posters/your-name.jpg')"></span>
-                <span style="background-image:url('./assets/posters/fma-brotherhood.jpg')"></span>
-                <span style="background-image:url('./assets/posters/demon-slayer.jpg')"></span>
-                <span style="background-image:url('./assets/posters/hunter-x-hunter.jpg')"></span>
-                <span style="background-image:url('./assets/posters/one-punch-man.jpg')"></span>
+
+              <div class="app-pl__bottom">
+                <div class="app-pl__times"><span>09:12</span><span>24:00</span></div>
+                <div class="app-pl__bar"><i></i></div>
+                <div class="app-pl__ctrls">
+                  <span>🔒</span>
+                  <span class="app-pl__q">1080p</span>
+                  <span>⏭</span>
+                </div>
               </div>
             </div>
-            <div class="app-nav"><span class="app-nav__item">⌂</span><span class="app-nav__item">⌕</span><span class="app-nav__item on">♡ قائمتي</span></div>
           </div>
         </div>
       </div>

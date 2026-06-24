@@ -133,7 +133,10 @@ addEventListener('resize', () => {
   if (!canvas || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const ctx = canvas.getContext('2d');
   let w, h, dots, dpr;
-  const COLORS = ['#FF2D55', '#7C5CFC', '#FF5C8A'];
+  // SUMI is hairlines, not glow: faint bone dust + a rare ember ember-spark.
+  // Most motes are bone; ~1 in 7 carries a quiet ember to echo the accent.
+  const BONE = 'rgba(244,241,234,0.9)';
+  const EMBER = '#FF5A2C';
 
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -141,15 +144,15 @@ addEventListener('resize', () => {
     h = canvas.height = innerHeight * dpr;
     canvas.style.width = innerWidth + 'px';
     canvas.style.height = innerHeight + 'px';
-    const count = Math.min(90, Math.floor((innerWidth * innerHeight) / 16000));
+    const count = Math.min(64, Math.floor((innerWidth * innerHeight) / 24000));
     dots = Array.from({ length: count }, () => ({
       x: Math.random() * w,
       y: Math.random() * h,
-      r: (Math.random() * 1.8 + 0.4) * dpr,
-      vx: (Math.random() - 0.5) * 0.25 * dpr,
-      vy: (Math.random() - 0.5) * 0.25 * dpr,
-      c: COLORS[(Math.random() * COLORS.length) | 0],
-      a: Math.random() * 0.5 + 0.2,
+      r: (Math.random() * 1.4 + 0.3) * dpr,
+      vx: (Math.random() - 0.5) * 0.18 * dpr,
+      vy: (Math.random() - 0.5) * 0.18 * dpr,
+      c: Math.random() < 0.14 ? EMBER : BONE,
+      a: Math.random() * 0.28 + 0.06,
     }));
   }
 
@@ -164,8 +167,6 @@ addEventListener('resize', () => {
       ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
       ctx.fillStyle = d.c;
       ctx.globalAlpha = d.a;
-      ctx.shadowColor = d.c;
-      ctx.shadowBlur = 8 * dpr;
       ctx.fill();
     }
     ctx.globalAlpha = 1;

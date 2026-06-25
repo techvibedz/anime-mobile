@@ -21,6 +21,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchRecent } from "./api";
+import { reconcileCompletionFromEpisodes } from "./completion";
 import { getFavorites, toAnimeUrl, type FavoriteAnime } from "./favorites";
 import { getNotificationScope, type NotificationScope } from "./settings";
 import { supabase, isSupabaseConfigured } from "./supabase";
@@ -195,6 +196,24 @@ export async function syncEpisodeNotifications(): Promise<number> {
   try {
     const scope = await getNotificationScope();
 
+    // Pull a couple of pages of recent episodes (newest first). Fetched before
+    // the scope handling so the completion reconcile below ALWAYS runs — it's
+    // scope-independent and must update badges even when notifications are
+    // mylist-scoped with an empty list.
+    const episodes = await fetchRecentFeed();
+    if (episodes.length === 0) return 0;
+
+    // Clear stale "caught up"/"finished" badges the instant a new episode drops,
+    // without waiting for the user to reopen the anime's detail page. The feed
+    // already carries the freshest episode numbers per anime.
+    reconcileCompletionFromEpisodes(
+      episodes.map((ep) => ({
+        animeHref: animeUrlFor(ep),
+        animeTitle: ep.animeTitle,
+        epNum: extractEpisodeNumber(ep.title),
+      })),
+    ).catch(() => {});
+
     // When scoped to the user's list, build favorite indexes up front; bail if
     // the list is empty (nothing to match against).
     let byTitle: Map<string, FavoriteAnime> | null = null;
@@ -210,10 +229,6 @@ export async function syncEpisodeNotifications(): Promise<number> {
         byHref.set(f.href, f);
       }
     }
-
-    // Pull a couple of pages of recent episodes (newest first).
-    const episodes = await fetchRecentFeed();
-    if (episodes.length === 0) return 0;
 
     // Build the candidate set for this scope, deduped by `${animeKey}#${epNum}`.
     const candidates = new Map<string, AppNotification>();

@@ -51,6 +51,7 @@ import { CompletionProvider } from "../lib/completion";
 import { setupNotifications, requestNotificationPermission, addNotificationTapListener } from "../lib/push";
 import { reportRecentEpisodes } from "../lib/notifications";
 import { startPresence, stopPresence } from "../lib/presence";
+import { startUsageSession, endUsageSession } from "../lib/usage";
 import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
 import "../global.css";
@@ -93,12 +94,24 @@ function AuthGate() {
   // idempotent, so re-calling on "active" is cheap.
   useEffect(() => {
     if (!user) return;
-    if (AppState.currentState === "active") startPresence(user).catch(() => {});
+    if (AppState.currentState === "active") {
+      startPresence(user).catch(() => {});
+      startUsageSession(user).catch(() => {});
+    }
     const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active") startPresence(user).catch(() => {});
-      else stopPresence().catch(() => {});
+      if (s === "active") {
+        startPresence(user).catch(() => {});
+        startUsageSession(user).catch(() => {});
+      } else {
+        stopPresence().catch(() => {});
+        endUsageSession().catch(() => {});
+      }
     });
-    return () => { sub.remove(); stopPresence().catch(() => {}); };
+    return () => {
+      sub.remove();
+      stopPresence().catch(() => {});
+      endUsageSession().catch(() => {});
+    };
   }, [user?.id]);
 
   // Keep the shared new-episode feed fresh from ANY screen: when signed in,
@@ -253,6 +266,8 @@ function AuthGate() {
         />
         <Stack.Screen name="see-all/[section]" />
         <Stack.Screen name="notifications" />
+        <Stack.Screen name="news" />
+        <Stack.Screen name="news/[id]" />
         <Stack.Screen name="schedule" />
         <Stack.Screen name="upcoming" />
         <Stack.Screen name="seasons" />
@@ -263,6 +278,8 @@ function AuthGate() {
         <Stack.Screen name="settings" />
         <Stack.Screen name="report" />
         <Stack.Screen name="live" />
+        <Stack.Screen name="users" />
+        <Stack.Screen name="user/[id]" />
         <Stack.Screen name="scraper-debug" />
         <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
       </Stack>

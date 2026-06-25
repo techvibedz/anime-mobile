@@ -248,12 +248,12 @@ const ss = StyleSheet.create({
   },
   filterPill: {
     flexDirection: "row", alignItems: "center", flexShrink: 0,
-    marginHorizontal: 3,
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: R.pill,
+    marginHorizontal: 3, height: 36,
+    paddingHorizontal: 14, borderRadius: R.pill,
     backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
   },
   filterPillActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
-  filterText: { color: C.textSecondary, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0 },
+  filterText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0, includeFontPadding: false, textAlignVertical: "center" },
   filterTextActive: { color: C.ember },
   filterCount: {
     backgroundColor: C.glass, borderRadius: R.circle,

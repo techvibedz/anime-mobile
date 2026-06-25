@@ -148,6 +148,19 @@ export default function AnimeDetailScreen() {
     getCompletedSets().then(setCompleted);
   }, []));
 
+  // The two cross-source lists (anime4up + anime3rb) are resolved by TITLE, so a
+  // fuzzy match can land on the WRONG entry — a split-cour or continuous-numbered
+  // listing whose episodes are numbered 13–24 instead of 1–12. Merging that by
+  // number doubled the count (a 12-episode anime suddenly showed 24). Only trust
+  // a secondary source when it OVERLAPS the opened page's own episode numbers;
+  // zero overlap means it resolved to a different anime/season, so drop it. When
+  // the page's own list is empty (primary scrape failed) we keep the secondaries
+  // — they're the only data we have to validate against.
+  const trusted = useMemo(
+    () => trustedSources(data?.episodes ?? [], episodes4up, episodes3rb),
+    [data?.episodes, episodes4up, episodes3rb],
+  );
+
   // Record this anime's completion state — the data behind the poster-card
   // badges (lib/completion) and the profile's "completed" stat. Recomputed
   // whenever the merged episode list or the watched-set changes, so watching the
@@ -160,7 +173,7 @@ export default function AnimeDetailScreen() {
   // non-final episode no longer re-fires the AniList airing check.
   const { maxNum, caughtUp } = useMemo(() => {
     if (!data) return { maxNum: 0, caughtUp: false };
-    const all = [...data.episodes, ...episodes4up, ...episodes3rb];
+    const all = [...data.episodes, ...trusted.up4, ...trusted.a3rb];
     let mx = 0;
     let hasNum = false;
     for (const e of all) {
@@ -169,7 +182,7 @@ export default function AnimeDetailScreen() {
     if (!hasNum) return { maxNum: 0, caughtUp: false };
     const lastHrefs = all.filter((e) => e.number === mx).map((e) => e.href);
     return { maxNum: mx, caughtUp: isEpisodeWatched(completed, { hrefs: lastHrefs, epNum: mx, animeTitle: data.title }) };
-  }, [data, episodes4up, episodes3rb, completed]);
+  }, [data, trusted, completed]);
 
   useEffect(() => {
     if (!data || !animeHref || maxNum === 0) return;
@@ -431,8 +444,8 @@ export default function AnimeDetailScreen() {
           {activeTab === "episodes" && (
             <EpisodesTab
               episodes={data.episodes}
-              episodes4up={episodes4up}
-              episodes3rb={episodes3rb}
+              episodes4up={trusted.up4}
+              episodes3rb={trusted.a3rb}
               merged={merged}
               poster={data.poster}
               completed={completed}
@@ -507,6 +520,57 @@ function GlassCircleBtn({ icon, color = C.text, onPress }: { icon: string; color
       </View>
     </Pressable>
   );
+}
+
+/* ── Cross-source trust guard ───────────────── */
+// anime4up + anime3rb episode lists are resolved by TITLE, so a fuzzy match can
+// land on a different anime/season whose episodes are numbered disjointly (e.g.
+// a split-cour entry numbered 13–24 instead of 1–12). Unioning that by number
+// doubled the episode count.
+//
+// A zero-overlap secondary clearly resolved to the wrong entry, so it's dropped.
+// But a PARTIAL-overlap secondary is just as wrong: a title like "Dr. Stone:
+// Science Future Part 3" resolves on the other sites to the CONTINUOUS-numbered
+// full-series listing, which shares the anchor's numbers (passing a simple
+// overlap test) yet also carries dozens of episodes from the OTHER parts/cours.
+// Appended, those inflate the count well past the part's real episode list.
+//
+// So a secondary is clamped to the anchor's own episode-number RANGE — keeping
+// gap-fills (a number missing from witanime but inside its range) while dropping
+// any cross-part block that falls outside it. The lookahead past the max is 0:
+// allowing even one episode beyond the anchor let the continuous-numbered
+// full-series listing append the NEXT part's episode 1 (numbered max+1), so the
+// detail page still showed one foreign episode. The home "new episodes" feed
+// surfaces genuinely-newer episodes separately. When the page's own list is
+// empty (the primary scrape failed) the secondaries are the only data we have,
+// so they're kept as-is.
+const NEWER_EP_LOOKAHEAD = 0;
+
+function trustedSources(
+  anchor: Episode[],
+  up4: Episode[],
+  a3rb: Episode[],
+): { up4: Episode[]; a3rb: Episode[] } {
+  const anchorNums = new Set<number>();
+  for (const e of anchor) if (e.number != null) anchorNums.add(e.number);
+  if (anchorNums.size === 0) return { up4, a3rb };
+  let min = Infinity;
+  let max = -Infinity;
+  for (const n of anchorNums) {
+    if (n < min) min = n;
+    if (n > max) max = n;
+  }
+  const ceil = max + NEWER_EP_LOOKAHEAD;
+  const clamp = (list: Episode[]) => {
+    // Must share at least one number (zero overlap = wrong entry entirely)…
+    let overlaps = false;
+    for (const e of list) if (e.number != null && anchorNums.has(e.number)) { overlaps = true; break; }
+    if (!overlaps) return [];
+    // …then keep only episodes within the anchor's own range (+ newest lookahead),
+    // so a continuous-numbered cross-part listing can't append foreign episodes.
+    return list.filter((e) => e.number != null && e.number >= min && e.number <= ceil);
+  };
+  return { up4: clamp(up4), a3rb: clamp(a3rb) };
 }
 
 /* ── Tab: Episodes ──────────────────────────── */

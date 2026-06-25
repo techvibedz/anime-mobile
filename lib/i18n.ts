@@ -142,10 +142,18 @@ export const ar = {
   switchServer: "تغيير المصدر",
   nextEpisode: "الحلقة التالية",
   prevEpisode: "الحلقة السابقة",
+  skipIntro: "تخطّي المقدمة",
   resolving: "جاري التحضير…",
   loadingPlayer: "جاري تحميل المشغّل…",
   fallbackPlayer: "المشغّل الاحتياطي",
   unlock: "إلغاء القفل",
+  // Server selection (shown before the player starts)
+  chooseServerTitle: "اختر السيرفر",
+  chooseServerSub: "اختر مصدر التشغيل لبدء المشاهدة",
+  serverRecommended: "موصى به",
+  serverOthers: "سيرفرات أخرى",
+  findingServers: "جاري تحميل سيرفرات إضافية…",
+  tapToPlay: "اضغط للتشغيل",
 
   // Downloads
   downloadsTitle: "التنزيلات",
@@ -194,7 +202,8 @@ export const ar = {
   home: "الرئيسية",
   profile: "ملفّي الشخصي",
   shareApp: "شارك التطبيق",
-  shareAppMessage: "حمّل تطبيق بانتوفة لمشاهدة الأنمي مجانًا 🎬",
+  shareAppMessage:
+    "🎬 شاهد الأنمي مترجمًا ومجانًا مع تطبيق بانتوفة!\n\nحمّله الآن من هنا 👇\nhttps://pantoufa.pages.dev/",
   rateApp: "قيّم التطبيق",
   aboutApp: "عن التطبيق",
   reportIssue: "الإبلاغ عن مشكلة",
@@ -237,6 +246,23 @@ export const ar = {
   hoursUnit: "س",
   minutesUnit: "د",
   watchTimeValue: (h: number, m: number) => (h > 0 ? `${h}س ${m}د` : `${m}د`),
+
+  // Profile editing
+  editProfile: "تعديل الملف",
+  editProfileTitle: "تعديل الملف الشخصي",
+  profileNameLabel: "الاسم",
+  profileNamePlaceholder: "اكتب اسمك",
+  profileBioLabel: "نبذة عنك",
+  profileBioPlaceholder: "اكتب نبذة قصيرة عنك…",
+  profileNoBio: "لا توجد نبذة بعد",
+  profileChangePhoto: "تغيير الصورة",
+  profileSave: "حفظ التغييرات",
+  profileSaving: "جارٍ الحفظ…",
+  profileCancel: "إلغاء",
+  profileSaved: "تم حفظ ملفك الشخصي",
+  profileSaveError: "تعذّر حفظ التغييرات. حاول مرة أخرى.",
+  profileNameRequired: "يرجى كتابة اسمك",
+  profilePhotoPermission: "نحتاج إذن الوصول إلى الصور لتغيير صورتك.",
 
   // Settings
   settingsTitle: "الإعدادات",
@@ -296,6 +322,29 @@ export const ar = {
   upcomingFilterSoon: "الأقرب صدورًا",
   upcomingInDays: (n: number) => (n === 1 ? "بعد يوم" : n === 2 ? "بعد يومين" : n <= 10 ? `بعد ${n} أيام` : `بعد ${n} يومًا`),
 
+  // Anime news
+  newsTitle: "أخبار الأنمي",
+  newsSub: "آخر الإعلانات وأخبار الأنمي — مُنتقاة وخالية تمامًا من المحتوى غير اللائق.",
+  newsEmpty: "لا أخبار حاليًا",
+  newsEmptySub: "تعذّر تحميل الأخبار. تحقّق من اتصالك وحاول مجددًا.",
+  newsRead: "اقرأ المقال",
+  newsSource: (name: string) => `عن: ${name}`,
+  newsOpenSource: "عرض الخبر في المصدر",
+  newsNotFound: "تعذّر عرض الخبر",
+  newsNotFoundSub: "لم نعثر على هذا الخبر. عُد إلى قائمة الأخبار وحاول مجددًا.",
+  newsBackToList: "العودة إلى الأخبار",
+  newsTimeAgo: (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime();
+    if (!iso || isNaN(diff)) return "";
+    const h = Math.floor(diff / 3600000);
+    if (h < 1) return "منذ قليل";
+    if (h < 24) return h === 1 ? "منذ ساعة" : h === 2 ? "منذ ساعتين" : `منذ ${h} ساعة`;
+    const d = Math.floor(h / 24);
+    if (d < 30) return d === 1 ? "منذ يوم" : d === 2 ? "منذ يومين" : `منذ ${d} يوم`;
+    const mo = Math.floor(d / 30);
+    return mo === 1 ? "منذ شهر" : mo === 2 ? "منذ شهرين" : `منذ ${mo} أشهر`;
+  },
+
   // Seasons browser
   seasonsTitle: "المواسم",
   seasonsEmpty: "لا أنميات متوفّرة",
@@ -335,6 +384,46 @@ export const ar = {
   liveJustNow: "الآن",
   liveMinutes: (n: number) => `${n} د`,
   liveHours: (n: number) => `${n} س`,
+
+  // All users (admin only)
+  usersTitle: "كل المستخدمين",
+  usersSub: "آخر دخول والوقت الذي قضاه كل مستخدم داخل التطبيق.",
+  usersCount: (n: number) => `${n} ${n === 1 ? "مستخدم" : "مستخدمين"}`,
+  usersEmpty: "لا يوجد مستخدمون بعد",
+  usersEmptySub: "ستظهر إحصائيات الاستخدام هنا فور فتح المستخدمين للتطبيق.",
+  usersOnlineNow: "متصل الآن",
+  usersLastSeen: "آخر ظهور",
+  usersTimeSpent: "الوقت في التطبيق",
+  usersSessions: "الجلسات",
+  usersFirstSeen: "أول ظهور",
+  usersRegistered: "التسجيل",
+  usersNever: "—",
+  usersDays: (n: number) => `${n} ي`,
+  usersSeconds: (n: number) => `${n} ث`,
+  usersSearchPlaceholder: "ابحث بالاسم أو البريد…",
+  usersFilterAll: "الكل",
+  usersFilterOnline: "متصل الآن",
+  usersFilterActive: "نشط",
+  usersFilterInactive: "لم يفتح بعد",
+  usersSortBy: "ترتيب:",
+  usersSortRecent: "الأحدث",
+  usersSortTime: "الأكثر استخداماً",
+  usersSortSessions: "الأكثر جلسات",
+  usersNoMatch: "لا نتائج مطابقة",
+  usersNoMatchSub: "جرّب كلمة بحث مختلفة أو فلتراً آخر.",
+  usersShowing: (n: number, total: number) => `عرض ${n} من ${total}`,
+
+  // Per-user daily detail (admin only)
+  userTotalTime: "إجمالي الوقت",
+  userTotalOpens: "مرات الفتح",
+  userActiveDays: "أيام النشاط",
+  userAvgPerDay: "المعدل اليومي",
+  userDailyTitle: "النشاط اليومي",
+  userDayOpens: (n: number) => `${n} ${n === 1 ? "فتحة" : "فتحات"}`,
+  userToday: "اليوم",
+  userYesterday: "أمس",
+  userNoDays: "لا توجد أيام مسجّلة بعد",
+  userNoDaysSub: "ستظهر هنا تفاصيل كل يوم يفتح فيه المستخدم التطبيق ومدّة استخدامه.",
 };
 
 export const t = ar;

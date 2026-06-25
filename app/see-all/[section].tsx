@@ -45,11 +45,68 @@ function episodeNumberFrom(item: EpisodeItem): number | null {
   return null;
 }
 
+/**
+ * Stable per-anime key for deduplication. Prefers the canonical animeHref,
+ * falls back to the anime title, then the episode href as a last resort.
+ */
+function episodeAnimeKey(ep: EpisodeItem): string {
+  const href = String(ep.animeHref || "").trim();
+  if (href) return "h:" + href.toLowerCase().replace(/\/+$/, "");
+  const at = String(ep.animeTitle || "").trim();
+  if (at) return "t:" + at.toLowerCase();
+  return "x:" + String(ep.href || ep.title || "");
+}
+
+/**
+ * Keeps only the first occurrence of each anime. Since the "recently updated"
+ * feed is newest-first, the first episode seen for an anime is its latest one.
+ * Mutates `seen` so the same Set carries dedup state across pages.
+ */
+function dedupeEpisodes(eps: EpisodeItem[], seen: Set<string>): EpisodeItem[] {
+  const out: EpisodeItem[] = [];
+  for (const ep of eps) {
+    const key = episodeAnimeKey(ep);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ep);
+  }
+  return out;
+}
+
 const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
 const GAP = S.gapRelaxed;
 const NUM_COLS = 3;
 const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
+
+// witanime's /episode/page/N/ serves a fixed batch, and dedup can discard most
+// of it — so a single page may not fill the grid. FILL_TARGET (≈4 rows) is the
+// minimum number of *fresh* items we try to gather per fetch cycle; the loop
+// over-fetches pages (bounded by MAX_PAGES_PER_FILL) until it's met. In the
+// common case page 1 already clears the bar and only one network trip happens.
+const FILL_TARGET = NUM_COLS * 4;
+const MAX_PAGES_PER_FILL = 5;
+
+/**
+ * Fetches `recently updated` pages starting at `fromPage`, deduping against the
+ * shared `seen` Set, until it has collected ~FILL_TARGET new items (or runs out
+ * of pages). Returns the fresh items, the next unfetched page, and whether more
+ * pages remain — so callers fill the screen in one cycle instead of trickling.
+ */
+async function fillRecent(fromPage: number, seen: Set<string>) {
+  let page = fromPage;
+  let more = true;
+  const collected: EpisodeItem[] = [];
+  for (let i = 0; i < MAX_PAGES_PER_FILL && more; i++) {
+    const res = await fetchRecent(page);
+    page += 1;
+    if (!res.success) break;
+    more = res.data.hasNext;
+    for (const e of dedupeEpisodes(res.data.episodes, seen)) collected.push(e);
+    if (collected.length >= FILL_TARGET) break;
+  }
+  return { collected, nextPage: page, more };
+}
 
 /* Memoized grid cell — keeps the whole grid from re-rendering its visible
  * rows every time the parent's pagination state (loadingMore/hasNext) flips. */
@@ -131,17 +188,18 @@ export default function SeeAllScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [episodePopup, setEpisodePopup] = useState<EpisodeItem | null>(null);
   const pageRef = useRef(1);
+  const seenRef = useRef<Set<string>>(new Set());
   const isPaginated = sectionId === "recently_updated";
   const isEpisodeType = type === "episode";
 
   const loadFirst = useCallback(async () => {
     if (isPaginated) {
-      const res = await fetchRecent(1);
-      if (res.success) {
-        setItems(res.data.episodes);
-        setHasNext(res.data.hasNext);
-        pageRef.current = 1;
-      }
+      const seen = new Set<string>();
+      const { collected, nextPage, more } = await fillRecent(1, seen);
+      seenRef.current = seen;
+      setItems(collected);
+      setHasNext(more);
+      pageRef.current = nextPage - 1; // last page actually fetched
     } else {
       const res = await fetchHome();
       if (res.success) {
@@ -161,14 +219,14 @@ export default function SeeAllScreen() {
   const loadMore = useCallback(async () => {
     if (!isPaginated || loadingMore || !hasNext) return;
     setLoadingMore(true);
-    const nextPage = pageRef.current + 1;
     try {
-      const res = await fetchRecent(nextPage);
-      if (res.success) {
-        setItems((prev) => [...prev, ...res.data.episodes]);
-        setHasNext(res.data.hasNext);
-        pageRef.current = nextPage;
-      }
+      // Over-fetch pages until we've gathered ~a screenful of fresh items, so a
+      // single trigger fills the grid instead of trickling one row at a time
+      // (and the sparse-page case — a whole page deduped away — is absorbed here).
+      const { collected, nextPage, more } = await fillRecent(pageRef.current + 1, seenRef.current);
+      if (collected.length) setItems((prev) => [...prev, ...collected]);
+      pageRef.current = nextPage - 1;
+      setHasNext(more);
     } catch {}
     setLoadingMore(false);
   }, [isPaginated, loadingMore, hasNext]);
@@ -203,7 +261,7 @@ export default function SeeAllScreen() {
         contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 20 }}
         columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
         onEndReached={loadMore}
-        onEndReachedThreshold={0.5}
+        onEndReachedThreshold={1.5}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}

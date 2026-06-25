@@ -166,6 +166,7 @@ function Sidebar() {
     { icon: "person-outline", label: t.profile, onPress: () => go("/profile"), match: "/profile" },
     { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
     { icon: "download-outline", label: t.downloadsTitle, onPress: () => go("/downloads"), match: "/downloads" },
+    { icon: "newspaper-outline", label: t.newsTitle, onPress: () => go("/news"), match: "/news" },
     { icon: "calendar-outline", label: t.scheduleTitle, onPress: () => go("/schedule"), match: "/schedule" },
     { icon: "sparkles-outline", label: t.upcomingTitle, onPress: () => go("/upcoming"), match: "/upcoming" },
     { icon: "albums-outline", label: t.seasonsTitle, onPress: () => go("/seasons"), match: "/seasons" },
@@ -184,6 +185,13 @@ function Sidebar() {
       onPress: () => go("/live"),
       match: "/live",
       accent: C.success,
+    });
+    NAV.splice(NAV.length - 1, 0, {
+      icon: "stats-chart-outline",
+      label: t.usersTitle,
+      onPress: () => go("/users"),
+      match: "/users",
+      accent: C.accent,
     });
   }
 

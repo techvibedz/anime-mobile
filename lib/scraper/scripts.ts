@@ -302,9 +302,12 @@ function scrape() {
     var num = up4EpisodeNumber(href);
     if (num == null) return;
     seen[href] = true;
-    var t = (a.textContent || '').trim();
+    // anime4up's episode <a> wraps the whole card, so a.textContent slurps the
+    // anime name, air date and "مترجم اون لاين" decorations into one junk
+    // string. The number is parsed reliably from the href, so build a clean
+    // "الحلقة N" label instead of trusting the anchor text.
     episodes.push({
-      title: t || ('الحلقة ' + num),
+      title: 'الحلقة ' + num,
       number: num,
       type: '',
       screenshot: '',

@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fetchAnime3rbServersByUrl, prefetchAnime3rbServers } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
+import { recordEpisodeWatched } from "../../lib/completion";
 import { startDownload, getDownloadByEpisode, subscribeDownloads, type DownloadStatus } from "../../lib/downloads";
 import { getAutoplayNext } from "../../lib/settings";
 import { maybeShowInterstitial } from "../../lib/ads";
@@ -84,6 +85,16 @@ function qualityScore(name: string): number {
   if (n.includes("hd") || n.includes("720")) return 2;
   if (n.includes("sd") || n.includes("480") || n.includes("360")) return 0;
   return 1;
+}
+
+// Short quality tag for the server-selection list ("" when unknown).
+function qualityLabel(name: string): string {
+  switch (qualityScore(name)) {
+    case 3: return "FHD";
+    case 2: return "HD";
+    case 0: return "SD";
+    default: return "";
+  }
 }
 
 function getDisplayName(server: VideoServer): string {
@@ -171,8 +182,8 @@ true;
 `;
 
 export default function WatchScreen() {
-  const { episode, url4up, url3rb, epNum: epNumParam, animeTitle: animeTitleParam, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam, local: localParam } = useLocalSearchParams<{
-    episode: string; url4up?: string; url3rb?: string; epNum?: string; animeTitle?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string; local?: string;
+  const { episode, url4up, url3rb, epNum: epNumParam, animeTitle: animeTitleParam, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam, local: localParam, auto: autoParam } = useLocalSearchParams<{
+    episode: string; url4up?: string; url3rb?: string; epNum?: string; animeTitle?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string; local?: string; auto?: string;
   }>();
   const insets = useSafeAreaInsets();
 
@@ -203,6 +214,16 @@ export default function WatchScreen() {
   const [servers, setServers] = useState<ServerState[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Server-selection gate. On a fresh tap from the episode list/home/history we
+  // show a server-picker layout FIRST and only start resolving/playing once the
+  // user picks one. Auto-play hops (next/prev/autoplay carry auto="1") and
+  // offline files skip the gate and play immediately.
+  const [picked, setPicked] = useState(!!autoParam || !!localParam);
+  // Live mirror of `picked` for the focus effect (so it can pick the right
+  // orientation on re-focus without re-subscribing — which would re-run its
+  // player.pause() cleanup).
+  const pickedRef = useRef(!!autoParam || !!localParam);
+  useEffect(() => { pickedRef.current = picked; }, [picked]);
   const [refreshing, setRefreshing] = useState(false);
   // Primary (witanime/anime4up) scrape finished — gates the anime3rb/anime4up
   // enrichment effects so they fire even when the primary had ZERO servers.
@@ -237,7 +258,17 @@ export default function WatchScreen() {
 
   // Load the autoplay preference once; reset the per-episode guard on change.
   useEffect(() => { getAutoplayNext().then((v) => { autoplayRef.current = v; }); }, []);
-  useEffect(() => { autoAdvancedRef.current = false; setLocked(false); }, [episode]);
+  // Once per episode: marks the completion badge when the LAST episode is
+  // finished, so it doesn't wait for a detail-page revisit.
+  const completionMarkedRef = useRef(false);
+  useEffect(() => {
+    autoAdvancedRef.current = false;
+    completionMarkedRef.current = false;
+    setLocked(false);
+    // Re-arm the server-selection gate for the new episode, unless this is an
+    // auto-play hop (next/prev/autoplay) or an offline file — those play directly.
+    setPicked(!!autoParam || !!localParam);
+  }, [episode]);
 
   // Fire auto-advance when playback nears the end (≥97%) and a next episode
   // exists. Shared by the native + WebView progress timers.
@@ -249,11 +280,37 @@ export default function WatchScreen() {
     }
   }, []);
 
+  // Mark the anime "caught up"/"finished" the moment this episode crosses the
+  // 80% watched threshold — same bar history uses for "completed". If it's the
+  // latest available episode, the poster badge flips immediately instead of
+  // waiting for the user to reopen the anime's detail page. Recording is gated
+  // on a real completion record existing (the detail page establishes the
+  // highest-available episode number); it then re-checks AniList for finale
+  // status internally. Runs at most once per episode.
+  const maybeMarkCompleted = useCallback((pos: number, dur: number) => {
+    if (completionMarkedRef.current) return;
+    if (dur <= 0 || pos / dur < 0.8) return;
+    completionMarkedRef.current = true;
+    let epNum: number | null = paramEpNum;
+    if (epNum == null && episode) {
+      const u = decodeURIComponent(episode);
+      const m = u.match(/الحلقة[\s\-_]*(\d+)/) || u.match(/\/episode\/[^/]+\/(\d+)/);
+      if (m) epNum = parseInt(m[1], 10);
+    }
+    if (epNum == null) return;
+    const aTitle = (animeTitleParam ? decodeURIComponent(animeTitleParam) : "") || animeTitle;
+    const aHref = animeHref || (animeParam ? decodeURIComponent(animeParam) : "");
+    recordEpisodeWatched({ animeHref: aHref, animeTitle: aTitle, epNum }).catch(() => {});
+  }, [paramEpNum, episode, animeTitle, animeHref, animeTitleParam, animeParam]);
+
   // Keep serversRef in sync so timers/async handlers can read the live count.
   useEffect(() => { serversRef.current = servers; }, [servers]);
 
   const active = servers[activeIdx];
-  const videoUrl = active?.videoUrl ?? null;
+  // Gate playback on the selection: until the user picks a server, the player
+  // gets NO source so background pre-resolution can't start audio/video behind
+  // the picker. Flips on the moment `picked` is set by pickServer.
+  const videoUrl = picked ? (active?.videoUrl ?? null) : null;
   const isPlaying = active?.status === "playing" && !!videoUrl;
   const isWebView = active?.status === "webview";
   const iframeUrl = getIframeUrl(active?.server);
@@ -370,10 +427,11 @@ export default function WatchScreen() {
       // throttled vid3rb CDN doesn't drop us straight into another stall (the
       // classic stutter→resume→stutter loop). expo-video conflates the
       // start-buffer and rebuffer-resume thresholds into this one Android knob,
-      // so 5s is the documented analog of ExoPlayer's
-      // bufferForPlaybackAfterRebufferMs. Costs ~2s of extra wait at the
-      // throttled rate on first start; pays for itself within one stall.
-      minBufferForPlayback: 5,
+      // so 8s is the documented analog of ExoPlayer's
+      // bufferForPlaybackAfterRebufferMs. Costs ~3s of extra wait at the
+      // throttled rate on first start; pays for itself within one stall by not
+      // dropping straight from a stall back into another (the stutter loop).
+      minBufferForPlayback: 8,
       maxBufferBytes: 0,
       prioritizeTimeOverSizeThreshold: true,
       // iOS: let AVPlayer delay playback to build a stall-proof buffer instead
@@ -392,6 +450,14 @@ export default function WatchScreen() {
   // the main page. Pause explicitly on blur/unmount.
   useFocusEffect(
     useCallback(() => {
+      // On focus, restore the orientation that matches the current phase: the
+      // selector page stays PORTRAIT, the player is LANDSCAPE. (Returning from
+      // the anime page re-locked portrait on the way out.)
+      ScreenOrientation.lockAsync(
+        pickedRef.current
+          ? ScreenOrientation.OrientationLock.LANDSCAPE
+          : ScreenOrientation.OrientationLock.PORTRAIT_UP,
+      ).catch(() => {});
       return () => {
         try { player.pause(); } catch {}
       };
@@ -437,6 +503,10 @@ export default function WatchScreen() {
     let lastPosMs = 0;
     let healing = false;
     let loadingExtensions = 0;
+    // ExoPlayer flickers status==='error' on transient network blips during a
+    // throttled stream. Reloading on the first flicker caused the visible
+    // reload loop; require the error to PERSIST before healing.
+    let errorSince = 0;
 
     const prov = servers[idx]?.server.provider;
     // videa/okru CDNs are far away and routinely need >14s to first byte —
@@ -506,7 +576,12 @@ export default function WatchScreen() {
         }
       } catch {}
       try {
-        if ((player.status as string) === "error") void heal();
+        if ((player.status as string) === "error") {
+          if (!errorSince) errorSince = Date.now();
+          else if (Date.now() - errorSince >= 1500) { errorSince = 0; void heal(); }
+        } else {
+          errorSince = 0;
+        }
       } catch {}
     }, 250);
 
@@ -548,9 +623,19 @@ export default function WatchScreen() {
     scheduleHide();
   }, [scheduleHide]);
 
-  // Lock orientation + load progress
+  // Orientation follows the phase: PORTRAIT while the server selector is up,
+  // LANDSCAPE once a server is picked and the player takes over. Reacts to the
+  // pick transition so the rotation happens exactly when playback begins.
   useEffect(() => {
-    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    ScreenOrientation.lockAsync(
+      picked
+        ? ScreenOrientation.OrientationLock.LANDSCAPE
+        : ScreenOrientation.OrientationLock.PORTRAIT_UP,
+    ).catch(() => {});
+  }, [picked]);
+
+  // Load progress + control auto-hide (orientation handled above).
+  useEffect(() => {
     scheduleHide();
     if (episode) {
       getProgress(decodeURIComponent(episode)).then((entry) => {
@@ -593,11 +678,12 @@ export default function WatchScreen() {
             epNum: paramEpNum ?? undefined,
           });
           maybeAutoAdvance(pos, dur);
+          maybeMarkCompleted(pos, dur);
         }
       } catch {}
     }, 5000);
     return () => { if (progressTimer.current) clearInterval(progressTimer.current); };
-  }, [isPlaying, player, episode, title, animeTitle, animeHref, url4up, imgParam]);
+  }, [isPlaying, player, episode, title, animeTitle, animeHref, url4up, imgParam, maybeMarkCompleted]);
 
   // Save progress (WebView player) — receives position from injected JS
   const lastWebViewPos = useRef<{ pos: number; dur: number }>({ pos: 0, dur: 0 });
@@ -619,10 +705,11 @@ export default function WatchScreen() {
           epNum: paramEpNum ?? undefined,
         });
         maybeAutoAdvance(pos, dur);
+        maybeMarkCompleted(pos, dur);
       }
     }, 5000);
     return () => { if (progressTimer.current) clearInterval(progressTimer.current); };
-  }, [isWebView, episode, title, animeTitle, animeHref, url4up, imgParam]);
+  }, [isWebView, episode, title, animeTitle, animeHref, url4up, imgParam, maybeMarkCompleted]);
 
   // WebView progress message handler
   const onWebViewProgress = useCallback((event: WebViewMessageEvent) => {
@@ -724,11 +811,12 @@ export default function WatchScreen() {
     // first. The hold self-releases on a timeout so a missing anime3rb can't
     // strand playback.
     if (holdTimerRef.current) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
-    const episodeIsA3rb = /anime3rb\.com\/episode\//i.test(decodeURIComponent(episode));
-    setHoldForA3rb(!episodeIsA3rb);
-    if (!episodeIsA3rb) {
-      holdTimerRef.current = setTimeout(() => setHoldForA3rb(false), 8000);
-    }
+    // Play the primary server the instant it resolves — never hold for anime3rb.
+    // The auto-select effect still hot-swaps to anime3rb's 1080p source if it
+    // lands within the first few seconds (its >12s guard prevents yanking a user
+    // who's already watching). Holding cost up to 8s of spinner on every
+    // non-anime3rb episode for a quality bump that often never arrived.
+    setHoldForA3rb(false);
     try {
       const url = decodeURIComponent(episode);
       const u4Param = url4up ? decodeURIComponent(url4up) : undefined;
@@ -1151,6 +1239,7 @@ export default function WatchScreen() {
   // later failure auto-advance can move on without this snapping back, and it
   // never overrides a server the user manually selected.
   useEffect(() => {
+    if (!picked) return; // manual selection mode — the user chooses; no auto-select
     if (a3rbAutoSelectedRef.current) return;
     if (userPickedServerRef.current) return;
     if (servers.length === 0) return;
@@ -1186,7 +1275,7 @@ export default function WatchScreen() {
     if (holdTimerRef.current) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
     setHoldForA3rb(false);
     setActiveIdx(idx);
-  }, [servers, activeIdx, player]);
+  }, [servers, activeIdx, player, picked]);
 
   // ── PREFETCH neighbouring episodes' anime3rb servers ──
   // Once the CURRENT episode's anime3rb server is resolved, warm the caches for
@@ -1383,6 +1472,7 @@ export default function WatchScreen() {
 
   // ── RESOLVE ACTIVE SERVER (fallback if not pre-resolved) ──
   useEffect(() => {
+    if (!picked) return; // selection gate — don't resolve/play until a server is chosen
     if (servers.length === 0) return;
     const state = servers[activeIdx];
     if (!state || state.status !== "idle") return;
@@ -1430,16 +1520,18 @@ export default function WatchScreen() {
       setServers((p) => p.map((s, i) =>
         i === idx ? { ...s, status: failStatus(srv.provider) } : s));
     })();
-  }, [activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null, holdForA3rb]);
+  }, [activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null, holdForA3rb, picked]);
 
-  // Auto-advance to next server on failure
+  // Auto-advance to next server on failure (only after a server was chosen —
+  // during selection the active index must stay put).
   useEffect(() => {
+    if (!picked) return;
     if (servers.length === 0) return;
     const state = servers[activeIdx];
     if (state?.status !== "failed") return;
     const next = servers.findIndex((s, i) => i !== activeIdx && (s.status === "idle" || s.status === "playing" || s.status === "webview"));
     if (next !== -1) setActiveIdx(next);
-  }, [servers, activeIdx]);
+  }, [servers, activeIdx, picked]);
 
   const selectServer = useCallback((idx: number) => {
     // The user made an explicit choice — stop the anime3rb auto-select from
@@ -1453,6 +1545,31 @@ export default function WatchScreen() {
     setActiveIdx(idx);
     setPickerOpen(false);
   }, []);
+
+  // Pick a server from the selection layout → resolve + play it directly.
+  const pickServer = useCallback((idx: number) => {
+    selectServer(idx);
+    setPicked(true);
+  }, [selectServer]);
+
+  // Servers ordered for the selection layout: anime3rb (recommended) first,
+  // then by quality FHD → HD → SD, with provider rank as a final tiebreak.
+  // `orig` keeps the index into `servers` so a tap maps back to the right one.
+  const orderedServers = useMemo(() =>
+    servers
+      .map((s, orig) => ({ s, orig }))
+      .sort((a, b) => {
+        const ra = a.s.server.source === "anime3rb" ? 0 : 1;
+        const rb = b.s.server.source === "anime3rb" ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        const qa = qualityScore(a.s.server.name);
+        const qb = qualityScore(b.s.server.name);
+        if (qa !== qb) return qb - qa;
+        const pa = PROVIDER_RANK[a.s.server.provider] ?? 5;
+        const pb = PROVIDER_RANK[b.s.server.provider] ?? 5;
+        return pa - pb;
+      }),
+    [servers]);
 
   // Skip +/- 10s
   const skipBack = useCallback(() => {
@@ -1493,7 +1610,7 @@ export default function WatchScreen() {
 
   // Next episode — carry cross-source url4up + anime context so the
   // anime4up servers keep showing on the next episode.
-  const goNextEpisode = useCallback(() => {
+  const goNextEpisode = useCallback((keepAutoplay = false) => {
     if (!nextEpisodeHref) return;
     router.replace({
       pathname: `/watch/${encodeURIComponent(nextEpisodeHref)}`,
@@ -1503,15 +1620,18 @@ export default function WatchScreen() {
         img: imgParam || "",
         animeTitle: animeTitleParam || "",
         epNum: paramEpNum != null ? String(paramEpNum + 1) : "",
+        // Manual tap → land on the server picker like a fresh episode.
+        // Only autoplay-at-end (keepAutoplay) continues straight into playback.
+        ...(keepAutoplay === true ? { auto: "1" } : {}),
       },
     });
   }, [nextEpisodeHref, nextUp4Href, animeParam, imgParam, animeTitleParam, paramEpNum]);
 
-  // Expose the latest goNextEpisode to the progress timers (which are defined
-  // earlier and can't reference it directly without a TDZ error).
-  useEffect(() => { goNextRef.current = goNextEpisode; }, [goNextEpisode]);
+  // Expose goNextEpisode to the progress timers (autoplay-at-end keeps playing
+  // directly, so it passes keepAutoplay=true).
+  useEffect(() => { goNextRef.current = () => goNextEpisode(true); }, [goNextEpisode]);
 
-  // Previous episode
+  // Previous episode — manual only, always lands on the server picker.
   const goPrevEpisode = useCallback(() => {
     if (!prevEpisodeHref) return;
     router.replace({
@@ -1540,6 +1660,10 @@ export default function WatchScreen() {
     }
     if (!href) return;
     try { player?.pause(); } catch {}
+    // router.push keeps this watch screen mounted underneath, so the unmount
+    // cleanup that re-locks portrait never fires — the anime page would inherit
+    // landscape. Re-lock portrait explicitly before navigating.
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
     router.push(`/anime/${encodeURIComponent(href)}`);
   }, [animeParam, animeHref, episode, player]);
 
@@ -1869,6 +1993,69 @@ export default function WatchScreen() {
     );
   }
 
+  // ── SERVER SELECTION (shown before playback starts) ──
+  // Fresh taps land here first: anime3rb servers are surfaced as "recommended"
+  // at the top, then the rest, each group ordered by quality (FHD → HD → SD).
+  // Picking one resolves + plays it directly.
+  if (!picked) {
+    const recRows = orderedServers.filter((x) => x.s.server.source === "anime3rb");
+    const otherRows = orderedServers.filter((x) => x.s.server.source !== "anime3rb");
+    const renderRow = ({ s, orig }: { s: ServerState; orig: number }) => {
+      const recommended = s.server.source === "anime3rb";
+      const q = qualityLabel(s.server.name);
+      const initial = (getDisplayName(s.server).charAt(0) || "S").toUpperCase();
+      return (
+        <Pressable
+          key={`${s.server.id}-${orig}`}
+          onPress={() => pickServer(orig)}
+          style={({ pressed }) => [ss.selItem, recommended && ss.selItemRec, pressed && { opacity: 0.7 }]}
+        >
+          <View style={[ss.serverAvatar, recommended && { borderColor: C.accent }]}>
+            <Text style={[ss.serverAvatarText, recommended && { color: C.accent }]}>{initial}</Text>
+          </View>
+          <View style={ss.serverInfo}>
+            <Text style={[ss.serverName, recommended && ss.serverNameActive]} numberOfLines={1}>
+              {getDisplayName(s.server)}
+            </Text>
+            <Text style={ss.serverMeta} numberOfLines={1}>{s.server.source || t.tapToPlay}</Text>
+          </View>
+          {q ? (
+            <View style={[ss.qualityBadge, q === "FHD" && ss.qualityBadgeHi]}>
+              <Text style={[ss.qualityBadgeText, q === "FHD" && { color: C.accent }]}>{q}</Text>
+            </View>
+          ) : null}
+          <Ionicons name="play-circle" size={24} color={recommended ? C.accent : "rgba(255,255,255,0.55)"} />
+        </Pressable>
+      );
+    };
+    return (
+      <View style={ss.root}>
+        <StatusBar hidden />
+        <View style={[ss.selHeader, { paddingTop: (insets.top || 10) + 8 }]}>
+          <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
+            <Ionicons name="chevron-back" size={22} color={C.white} />
+          </Pressable>
+          <View style={ss.serverInfo}>
+            <Text style={ss.selTitle} numberOfLines={1}>{t.chooseServerTitle}</Text>
+            <Text style={ss.selSub} numberOfLines={1}>{title || animeTitle || t.chooseServerSub}</Text>
+          </View>
+        </View>
+        <ScrollView contentContainerStyle={ss.selContent} showsVerticalScrollIndicator={false}>
+          {recRows.length > 0 && <Text style={ss.selSectionLabel}>{t.serverRecommended}</Text>}
+          {recRows.map(renderRow)}
+          {otherRows.length > 0 && <Text style={ss.selSectionLabel}>{t.serverOthers}</Text>}
+          {otherRows.map(renderRow)}
+          {a3rbServerCount === 0 && !noServersFinal && (
+            <View style={ss.selFinding}>
+              <ActivityIndicator size="small" color={C.accent} />
+              <Text style={ss.selFindingText}>{t.findingServers}</Text>
+            </View>
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
   const allFailed = servers.every((s) => s.status === "failed");
 
   return (
@@ -2125,19 +2312,19 @@ export default function WatchScreen() {
             <View style={ss.ctrlRow}>
               <Pressable onPress={skipForward85} style={ss.chipBtn}>
                 <Ionicons name="play-forward-circle-outline" size={16} color={C.white} />
-                <Text style={ss.chipBtnText}>+85s</Text>
+                <Text style={ss.chipBtnText}>{t.skipIntro}</Text>
               </Pressable>
 
               <View style={{ flexDirection: "row", gap: 8 }}>
                 {prevEpisodeHref && (
                   <Pressable onPress={goPrevEpisode} style={ss.chipBtn}>
                     <Ionicons name="play-skip-back" size={14} color={C.white} />
-                    <Text style={ss.chipBtnText}>Prev</Text>
+                    <Text style={ss.chipBtnText}>{t.prevEpisode}</Text>
                   </Pressable>
                 )}
                 {nextEpisodeHref && (
-                  <Pressable onPress={goNextEpisode} style={ss.chipBtnAccent}>
-                    <Text style={ss.chipBtnAccentText}>Next Episode</Text>
+                  <Pressable onPress={() => goNextEpisode()} style={ss.chipBtnAccent}>
+                    <Text style={ss.chipBtnAccentText}>{t.nextEpisode}</Text>
                     <Ionicons name="play-skip-forward" size={14} color={C.white} />
                   </Pressable>
                 )}
@@ -2181,7 +2368,7 @@ export default function WatchScreen() {
               <Ionicons name="play-forward" size={18} color={C.white} />
             </Pressable>
             {nextEpisodeHref && (
-              <Pressable onPress={goNextEpisode} style={[ss.iconBtn, ss.iconBtnAccent]} hitSlop={6}>
+              <Pressable onPress={() => goNextEpisode()} style={[ss.iconBtn, ss.iconBtnAccent]} hitSlop={6}>
                 <Ionicons name="play-skip-forward" size={18} color={C.white} />
               </Pressable>
             )}
@@ -2441,6 +2628,52 @@ const ss = StyleSheet.create({
     shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.22, shadowRadius: 12, elevation: 6,
   },
   chipBtnAccentText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+
+  // Server selection layout (pre-playback)
+  selHeader: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingHorizontal: 20, paddingBottom: 12,
+    borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.06)",
+  },
+  selTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+  selSub: { color: "rgba(255,255,255,0.45)", fontSize: 12, marginTop: 1, fontFamily: "Cairo_500Medium" },
+  selContent: {
+    // direction:"ltr" + explicit column so the Arabic-locale RTL flip can't
+    // turn the list into a row; gap dropped (RN 0.81 gap+row-reverse Yoga bug)
+    // — per-item marginBottom spaces the rows instead.
+    direction: "ltr", flexDirection: "column",
+    alignSelf: "center", width: "100%", maxWidth: 720,
+    paddingHorizontal: 24, paddingVertical: 16,
+  },
+  selSectionLabel: {
+    color: "rgba(255,255,255,0.45)", fontSize: 11, fontWeight: "800",
+    letterSpacing: 0.6, marginTop: 8, marginBottom: 2, fontFamily: "Cairo_700Bold",
+  },
+  selItem: {
+    // direction:"ltr" keeps avatar→info→play laid out left-to-right and, by
+    // pinning the row to ltr (not RTL row-reverse), keeps `gap` safe from the
+    // RN 0.81 gap+row-reverse Yoga bug. marginBottom replaces the list gap.
+    direction: "ltr", flexDirection: "row", alignItems: "center", gap: 12,
+    marginBottom: 8,
+    paddingVertical: 12, paddingHorizontal: 13, borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.06)",
+  },
+  selItemRec: {
+    backgroundColor: "rgba(255,90,44,0.1)",
+    borderColor: "rgba(255,90,44,0.4)",
+  },
+  qualityBadge: {
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
+  },
+  qualityBadgeHi: {
+    backgroundColor: "rgba(255,90,44,0.16)", borderColor: "rgba(255,90,44,0.4)",
+  },
+  qualityBadgeText: { color: "rgba(255,255,255,0.85)", fontSize: 11, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.3 },
+  selFinding: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 18 },
+  selFindingText: { color: "rgba(255,255,255,0.45)", fontSize: 13, fontFamily: "Cairo_500Medium" },
 
   // Server picker
   pickerOverlay: { ...StyleSheet.absoluteFillObject, flexDirection: "row", zIndex: 10 },

@@ -493,11 +493,12 @@ const ss = StyleSheet.create({
   chipContainer: { height: 52, overflow: "visible" },
   chipScroll: { paddingHorizontal: PAD, gap: 8, paddingBottom: 16, alignItems: "center" as const },
   chip: {
-    paddingHorizontal: 15, paddingVertical: 8, borderRadius: R.pill,
+    height: 36, justifyContent: "center",
+    paddingHorizontal: 15, borderRadius: R.pill,
     backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
   },
   chipActive: { backgroundColor: C.ember, borderColor: "transparent" },
-  chipText: { color: C.textSecondary, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  chipText: { color: C.textSecondary, fontSize: 13, lineHeight: 20, fontWeight: "600", fontFamily: "Cairo_600SemiBold", includeFontPadding: false, textAlignVertical: "center" },
   chipTextActive: { color: C.textOnAccent },
 
   // Hairline divider + search-progress strip

@@ -33,12 +33,14 @@ LEGACY_RUNTIMES=(
   "1.4.0"
 )
 
+# eas-cli has no --runtime-version flag; runtime comes from app config, so we
+# pass it through OTA_RUNTIME, which app.config.js applies. Unset = fingerprint.
 echo ">> Publishing to current (fingerprint) runtime on branch '$BRANCH'"
 eas update --branch "$BRANCH" --message "$MSG"
 
 for RT in "${LEGACY_RUNTIMES[@]}"; do
   echo ">> Republishing to legacy runtime $RT on branch '$BRANCH'"
-  eas update --branch "$BRANCH" --runtime-version "$RT" --message "$MSG (legacy $RT)"
+  OTA_RUNTIME="$RT" eas update --branch "$BRANCH" --message "$MSG (legacy $RT)"
 done
 
 echo ">> Done. New installs + all listed legacy runtimes now have this update."

@@ -38,7 +38,7 @@
       "fallbackToCacheTimeout": 0,
       "url": "https://u.expo.dev/54f0baee-f81b-4de2-89f1-825251f0547d"
     },
-    "runtimeVersion": "2.2.0",
+    "runtimeVersion": { "policy": "fingerprint" },
     "extra": {
       "versionJsonUrl": "https://raw.githubusercontent.com/techvibedz/anime-mobile/master/version.json",
       "router": {},

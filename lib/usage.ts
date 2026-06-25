@@ -10,7 +10,13 @@
 // RPC, which can only ever touch the caller's own row.
 
 import type { User } from "@supabase/supabase-js";
+import * as Application from "expo-application";
 import { supabase, isSupabaseConfigured } from "./supabase";
+
+// The installed native app version — what tells us who's on an old build. This
+// is the APK version, NOT the OTA/JS bundle, so it's the right signal for "needs
+// to download a new APK". See [[ota-delivery-runtime-and-apply]].
+const APP_VERSION = Application.nativeApplicationVersion ?? null;
 
 const FLUSH_INTERVAL_MS = 60_000;
 
@@ -47,6 +53,7 @@ async function call(seconds: number, newSession: boolean): Promise<void> {
       p_avatar: avatar,
       p_new_session: newSession,
       p_local_day: localDay(),
+      p_version: APP_VERSION,
     });
   } catch {
     // Network/auth hiccups are non-fatal — usage stats are best-effort.
@@ -106,6 +113,8 @@ export interface UsageRow {
   lastSeenAt: string;
   /** ISO time the account was created. */
   createdAt: string | null;
+  /** Installed native app (APK) version, or null if not yet reported. */
+  version: string | null;
 }
 
 /**
@@ -128,6 +137,7 @@ export async function fetchAllUsage(): Promise<UsageRow[]> {
     firstSeenAt: r.first_seen_at ?? null,
     lastSeenAt: r.last_seen_at,
     createdAt: r.created_at ?? null,
+    version: r.version ?? null,
   }));
 }
 

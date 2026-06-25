@@ -298,6 +298,11 @@ export default function UsersScreen() {
                       label={t.usersRegistered}
                       value={fmtDate(u.createdAt)}
                     />
+                    <Stat
+                      icon="phone-portrait-outline"
+                      label={t.usersVersion}
+                      value={u.version ? `v${u.version}` : t.usersNever}
+                    />
                   </View>
                 </Pressable>
               );

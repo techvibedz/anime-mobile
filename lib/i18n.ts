@@ -175,6 +175,8 @@ export const ar = {
   downloadNoServer: "تعذّر العثور على مصدر قابل للتنزيل لهذه الحلقة.",
   downloadResolving: "جارٍ تحضير التنزيل…",
   downloadOffline: "حلقة مُنزَّلة — تُشغَّل بدون إنترنت",
+  chooseDownloadServer: "اختر جودة التنزيل",
+  chooseDownloadServerSub: "اختر السيرفر والدقة التي تريد تنزيلها",
   storageUsed: (s: string) => `المساحة المستخدمة: ${s}`,
 
   // Settings / sign out
@@ -397,6 +399,7 @@ export const ar = {
   usersSessions: "الجلسات",
   usersFirstSeen: "أول ظهور",
   usersRegistered: "التسجيل",
+  usersVersion: "الإصدار",
   usersNever: "—",
   usersDays: (n: number) => `${n} ي`,
   usersSeconds: (n: number) => `${n} ث`,

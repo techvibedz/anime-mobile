@@ -40,7 +40,12 @@ Add inside `"android"`:
 is git-ignored — don't commit it.)
 
 ### 4. Build 1.4.0
-Bump `version` + `runtimeVersion` to `1.4.0` in `app.json`, then:
+Bump `version` to `1.4.0` in `app.json`, then:
+> Note: `runtimeVersion` is now `{ "policy": "fingerprint" }` — do NOT bump it by
+> hand. Expo derives it from native code, so all builds with the same native
+> fingerprint share one runtime and a single OTA reaches them. To reach users on
+> OLD pre-fingerprint APKs, use `npm run publish-ota "<msg>"` (republishes to the
+> legacy runtimes listed in `scripts/publish-ota.sh`).
 ```
 npx eas build --platform android --profile preview --non-interactive --no-wait
 ```

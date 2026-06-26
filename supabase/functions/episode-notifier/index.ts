@@ -61,6 +61,37 @@ interface QueueRow {
   image: string | null;
 }
 
+// Rows in episode_queue are inserted by ANY signed-in user (shared feed). Before
+// fanning them out as push to everyone, sanitize attacker-controllable fields:
+// clamp the title, require a sane episode number, and drop images from hosts that
+// aren't known scrape-source CDNs. Dropping a bad image still delivers the text
+// push — we never drop a whole notification here, only untrusted rich content.
+// NOTE: witanime rotates TLDs (.life/.you/...), so match the source name as a
+// domain label under any TLD. If a NEW scrape source/CDN is added later, add it
+// here or its images will be dropped from pushes.
+const IMG_HOST_ALLOW = /(?:^|\.)(?:witanime|anime4up|anime3rb)\.[a-z]{2,}$/i;
+
+function safeImage(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return null;
+    return IMG_HOST_ALLOW.test(u.hostname) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeRow(q: QueueRow): QueueRow {
+  const title = (q.anime_title || "").slice(0, 80);
+  const ep = Number.isFinite(q.episode_number) ? Math.trunc(q.episode_number) : 0;
+  return { ...q, anime_title: title, episode_number: ep, image: safeImage(q.image) };
+}
+
+function isPlausibleRow(q: QueueRow): boolean {
+  return !!q.anime_title && q.episode_number > 0 && q.episode_number < 100000;
+}
+
 // Mirror of norm() in lib/notifications.ts — keep latin/digits + Arabic block.
 function norm(s: string): string {
   return (s || "")
@@ -218,7 +249,7 @@ Deno.serve(async (req) => {
     .gte("created_at", cutoff)
     .order("created_at", { ascending: true })
     .limit(500);
-  const queue = (queueRows ?? []) as QueueRow[];
+  const queue = ((queueRows ?? []) as QueueRow[]).filter(isPlausibleRow).map(sanitizeRow);
 
   // ── Flood guard: silently seed brand-new users ───────────────────
   // A user with NO notification history (no notified_episodes rows) is brand new

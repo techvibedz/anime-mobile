@@ -24,7 +24,7 @@ import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
 import { fetchNextAiring } from "../../lib/airing";
-import { startDownload, getDownloads, subscribeDownloads, type DownloadStatus } from "../../lib/downloads";
+import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
 import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations } from "../../lib/animeInfo";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
 import { normLatin, seasonNum, formatCat } from "../../lib/relations";
@@ -32,6 +32,7 @@ import { MalBadge, MalCardBadge } from "../../components/MalRating";
 import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
 import { GlassFill } from "../../components/GlassFill";
+import { DownloadPicker } from "../../components/DownloadPicker";
 import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -600,6 +601,7 @@ function EpisodesTab({
   // Live per-episode download state, keyed by the episode's primary href, so each
   // grid card can show idle / progress / done and trigger an offline save.
   const [downloads, setDownloads] = useState<Record<string, { status: DownloadStatus; progress: number }>>({});
+  const [dlPicker, setDlPicker] = useState<DownloadMeta | null>(null);
   useEffect(() => {
     const sync = () => getDownloads().then((list) => {
       const m: Record<string, { status: DownloadStatus; progress: number }> = {};
@@ -613,7 +615,7 @@ function EpisodesTab({
   const onDownloadEp = useCallback((ep: GridEpisode) => {
     const primary = ep.href || ep.href4up || ep.href3rb;
     if (!primary) return;
-    startDownload({
+    setDlPicker({
       animeTitle,
       episodeTitle: ep.title || `${t.episode} ${ep.number}`,
       epNum: ep.number ?? null,
@@ -816,6 +818,7 @@ function EpisodesTab({
           </Text>
         </Pressable>
       )}
+      <DownloadPicker visible={!!dlPicker} meta={dlPicker} onClose={() => setDlPicker(null)} />
     </>
   );
 }

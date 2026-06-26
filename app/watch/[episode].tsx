@@ -21,7 +21,8 @@ import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fet
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
 import { recordEpisodeWatched } from "../../lib/completion";
-import { startDownload, getDownloadByEpisode, subscribeDownloads, type DownloadStatus } from "../../lib/downloads";
+import { getDownloadByEpisode, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
+import { DownloadPicker } from "../../components/DownloadPicker";
 import { getAutoplayNext } from "../../lib/settings";
 import { maybeShowInterstitial } from "../../lib/ads";
 import { C } from "../../lib/theme";
@@ -1890,6 +1891,7 @@ export default function WatchScreen() {
   // idle / progress / done and tapping it starts a save or opens the manager.
   const [downloadStatus, setDownloadStatus] = useState<DownloadStatus | null>(null);
   const [downloadPct, setDownloadPct] = useState(0);
+  const [dlPicker, setDlPicker] = useState<DownloadMeta | null>(null);
   useEffect(() => {
     if (localUri || !episode) { setDownloadStatus(null); return; }
     const href = decodeURIComponent(episode);
@@ -1912,7 +1914,7 @@ export default function WatchScreen() {
       router.push("/downloads");
       return;
     }
-    startDownload({
+    setDlPicker({
       animeTitle: animeTitle || (animeTitleParam ? decodeURIComponent(animeTitleParam) : ""),
       episodeTitle: title || "",
       epNum: paramEpNum,
@@ -1922,7 +1924,6 @@ export default function WatchScreen() {
       url4up: (url4up ? decodeURIComponent(url4up) : undefined) || currentUp4Href || undefined,
       url3rb: url3rb ? decodeURIComponent(url3rb) : undefined,
     });
-    setDownloadStatus("resolving");
   }, [episode, downloadStatus, animeTitle, animeTitleParam, title, paramEpNum, imgParam, animeParam, animeHref, url4up, url3rb, currentUp4Href]);
 
   const renderDownloadBtn = () => {
@@ -2485,6 +2486,7 @@ export default function WatchScreen() {
           </View>
         </View>
       )}
+      <DownloadPicker visible={!!dlPicker} meta={dlPicker} onClose={() => setDlPicker(null)} />
     </View>
   );
 }

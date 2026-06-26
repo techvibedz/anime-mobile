@@ -1376,14 +1376,56 @@ function dlHeaders(provider: string): Record<string, string> {
   return h;
 }
 
+export type DownloadServer = { name: string; iframeUrl: string; provider: string; quality: string };
+
+function dlQualityLabel(name: string): string {
+  const s = dlQualityScore(name);
+  return s === 3 ? "FHD" : s === 2 ? "HD" : s === 0 ? "SD" : "";
+}
+
+export async function listDownloadServers(opts: {
+  episodeHref: string;
+  url4up?: string;
+  url3rb?: string;
+  epNum?: number | null;
+  animeTitle?: string | null;
+}): Promise<DownloadServer[]> {
+  const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
+  const cands: { name: string; iframeUrl: string; provider: string }[] = [];
+  try {
+    let a3: RawServer[] = [];
+    if (url3rb) a3 = await fetchAnime3rbServersByUrl(url3rb);
+    else if (animeTitle && epNum != null) a3 = await fetchAnime3rbServers(animeTitle, epNum);
+    for (const s of a3) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
+  } catch {}
+  try {
+    const res = await fetchVideoServers(episodeHref, url4up);
+    if (res?.success) for (const s of res.data.servers) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
+  } catch {}
+  return cands
+    .filter((c) => c.provider in DL_RANK && c.iframeUrl)
+    .sort((a, b) => (DL_RANK[a.provider] - DL_RANK[b.provider]) || (dlQualityScore(b.name) - dlQualityScore(a.name)))
+    .map((c) => ({ name: c.name, iframeUrl: c.iframeUrl, provider: c.provider, quality: dlQualityLabel(c.name) }));
+}
+
 export async function resolveDownloadUrl(opts: {
   episodeHref: string;
   url4up?: string;
   url3rb?: string;
   epNum?: number | null;
   animeTitle?: string | null;
+  server?: { iframeUrl: string; provider: string } | null;
 }): Promise<{ url: string; headers: Record<string, string>; type: "mp4" } | null> {
   const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
+
+  if (opts.server?.iframeUrl && opts.server.provider in DL_RANK) {
+    const r = await resolveVideo(opts.server.iframeUrl, opts.server.provider).catch(() => null);
+    const url = r?.success ? r.data?.videoUrl : null;
+    if (url && r!.data!.type !== "hls" && !/\.m3u8(\?|$)/i.test(url)) {
+      return { url, headers: dlHeaders(opts.server.provider), type: "mp4" };
+    }
+  }
+
   const cands: { name: string; iframeUrl: string; provider: string }[] = [];
 
   // anime3rb (vid3rb → direct 1080p .mp4) — the best download source.

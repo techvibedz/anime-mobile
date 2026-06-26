@@ -47,6 +47,7 @@ export interface DownloadMeta {
   episodeHref: string;
   url4up?: string;
   url3rb?: string;
+  server?: { name: string; iframeUrl: string; provider: string; quality: string };
 }
 
 const INDEX_KEY = "@downloads_index_v1";
@@ -174,6 +175,7 @@ export async function startDownload(meta: DownloadMeta): Promise<string> {
       url3rb: meta.url3rb,
       epNum: meta.epNum,
       animeTitle: meta.animeTitle,
+      server: meta.server,
     });
     if (!resolved) {
       patch(id, { status: "failed" });

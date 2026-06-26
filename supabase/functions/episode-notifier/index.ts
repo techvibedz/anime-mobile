@@ -42,6 +42,7 @@ interface TokenRow {
   token: string;
   notification_scope: string | null;
   enabled: boolean | null;
+  updated_at: string | null;
 }
 
 interface Favorite {
@@ -59,6 +60,7 @@ interface QueueRow {
   episode_href: string | null;
   episode_number: number;
   image: string | null;
+  created_at: string;
 }
 
 // Rows in episode_queue are inserted by ANY signed-in user (shared feed). Before
@@ -213,15 +215,21 @@ Deno.serve(async (req) => {
   // 1. Tokens, split by scope (default "all" matches the app default).
   const { data: tokenRows } = await supabase
     .from("push_tokens")
-    .select("user_id, token, notification_scope, enabled");
+    .select("user_id, token, notification_scope, enabled, updated_at");
   const mylistTokensByUser = new Map<string, string[]>();
   const allTokensByUser = new Map<string, string[]>();
+  // Latest token (re)registration time per user, in ms. The app re-registers
+  // (bumping updated_at) on every sign-in, so this is "when this user's current
+  // device last started listening". We never push an episode that predates it.
+  const tokenRegByUser = new Map<string, number>();
   for (const r of (tokenRows ?? []) as TokenRow[]) {
     if (r.enabled === false) continue; // master switch off → skip this device
     const map = r.notification_scope === "mylist" ? mylistTokensByUser : allTokensByUser;
     const arr = map.get(r.user_id) ?? [];
     arr.push(r.token);
     map.set(r.user_id, arr);
+    const reg = r.updated_at ? Date.parse(r.updated_at) : 0;
+    if (reg > (tokenRegByUser.get(r.user_id) ?? 0)) tokenRegByUser.set(r.user_id, reg);
   }
 
   // 2. Favorites → per-user match sets (only needed for "mylist" users).
@@ -251,37 +259,37 @@ Deno.serve(async (req) => {
     .limit(500);
   const queue = ((queueRows ?? []) as QueueRow[]).filter(isPlausibleRow).map(sanitizeRow);
 
-  // ── Flood guard: silently seed brand-new users ───────────────────
-  // A user with NO notification history (no notified_episodes rows) is brand new
-  // — e.g. a freshly signed-in account or a device that just registered its push
-  // token. Without a guard, the loop below would push the ENTIRE current queue
-  // backlog (up to QUEUE_TTL_HOURS old) to them at once: a flood of "already
-  // sent" episodes. So we record every current queue episode as already-notified
-  // for them WITHOUT pushing, then skip them this run. They only start receiving
-  // pushes for episodes that appear AFTER this point. This mirrors the in-app
-  // "seed silently on first run" flood-guard in lib/notifications.ts.
+  // ── Flood guard: never push episodes that predate the token ──────
+  // The bug this fixes: the OLD guard only protected users with ZERO notification
+  // history. But a RETURNING user (signs out — which DELETES their push token —
+  // then signs back in, or reinstalls) still has old history, so they were treated
+  // as "established" and blasted with the ENTIRE 72h queue backlog the instant
+  // they signed in: a flood of "old episodes".
+  //
+  // Correct rule: an episode only pushes to a user if it entered the queue AFTER
+  // that user's CURRENT push token registered (updated_at, bumped on every sign-in).
+  // Every queue episode older than the token is silently recorded as already-seen
+  // and never pushed. This covers brand-new AND returning users in one rule.
   const relevantUserIds = new Set<string>([
     ...allTokensByUser.keys(),
     ...mylistTokensByUser.keys(),
   ]);
-  const seededUsers = new Set<string>();
-  if (relevantUserIds.size > 0) {
-    const { data: seenRows } = await supabase
-      .from("notified_episodes")
-      .select("user_id")
-      .in("user_id", [...relevantUserIds]);
-    for (const r of (seenRows ?? []) as { user_id: string }[]) seededUsers.add(r.user_id);
-  }
+  // True when this episode predates the user's current token → seed, don't push.
+  const predatesToken = (userId: string, q: QueueRow) =>
+    Date.parse(q.created_at) < (tokenRegByUser.get(userId) ?? 0);
 
+  let seededCount = 0;
   if (queue.length > 0) {
     const seedRows: { user_id: string; anime_key: string; episode_number: number }[] = [];
     for (const userId of relevantUserIds) {
-      if (seededUsers.has(userId)) continue; // already has history → not brand new
       for (const q of queue) {
-        seedRows.push({ user_id: userId, anime_key: q.anime_key, episode_number: q.episode_number });
+        if (predatesToken(userId, q)) {
+          seedRows.push({ user_id: userId, anime_key: q.anime_key, episode_number: q.episode_number });
+        }
       }
     }
-    // Bulk-record the backlog as already-seen (idempotent), in chunks.
+    seededCount = seedRows.length;
+    // Bulk-record the pre-token backlog as already-seen (idempotent), in chunks.
     for (let i = 0; i < seedRows.length; i += 500) {
       await supabase
         .from("notified_episodes")
@@ -294,7 +302,6 @@ Deno.serve(async (req) => {
 
   const messages: PushMessage[] = [];
   let pushedCount = 0;
-  const seededCount = relevantUserIds.size - seededUsers.size;
 
   // Claim (user, anime_key, episode) for dedup; true the first time only.
   async function claimEpisode(userId: string, animeKey: string, episode: number): Promise<boolean> {
@@ -317,9 +324,9 @@ Deno.serve(async (req) => {
   for (const q of queue) {
     const normTitle = norm(q.anime_title);
 
-    // "all" users → everyone (except users seeded silently this run).
+    // "all" users → everyone whose token predates nothing for this episode.
     for (const [userId, tokens] of allTokensByUser) {
-      if (!seededUsers.has(userId)) continue; // brand new → seeded silently above
+      if (predatesToken(userId, q)) continue; // older than token → seeded silently above
       if (!(await claimEpisode(userId, q.anime_key, q.episode_number))) continue;
       for (const to of tokens) {
         messages.push(buildMessage(to, q));
@@ -329,7 +336,7 @@ Deno.serve(async (req) => {
 
     // "mylist" users → only if this anime is in their favorites.
     for (const [userId, tokens] of mylistTokensByUser) {
-      if (!seededUsers.has(userId)) continue; // brand new → seeded silently above
+      if (predatesToken(userId, q)) continue; // older than token → seeded silently above
       const hrefs = favHrefsByUser.get(userId);
       const titles = favTitlesByUser.get(userId);
       const matches =
@@ -358,7 +365,7 @@ Deno.serve(async (req) => {
       queued: queue.length,
       allUsers: allTokensByUser.size,
       mylistUsers: mylistTokensByUser.size,
-      seededUsers: seededCount,
+      seededRows: seededCount,
       pushed: pushedCount,
     }),
     { headers: { "Content-Type": "application/json" } },

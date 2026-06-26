@@ -17,7 +17,7 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchVideoServers, resolveVideo, getProxyUrl, fetchAnime3rbServers, fetchAnime3rbServersByUrl, prefetchAnime3rbServers } from "../../lib/api";
+import { fetchVideoServers, resolveVideo, fetchAnime3rbServers, fetchAnime3rbServersByUrl, prefetchAnime3rbServers } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
 import { saveProgress, getProgress } from "../../lib/history";
 import { recordEpisodeWatched } from "../../lib/completion";
@@ -540,7 +540,7 @@ export default function WatchScreen() {
           const r = await resolveVideo(embedUrl, srv.provider, true).catch(() => null);
           if (cancelled) return;
           if (!r?.success || !r.data?.videoUrl) { fail(); return; }
-          const fresh = getProxyUrl(r.data.videoUrl);
+          const fresh = r.data.videoUrl;
           if (fresh !== videoUrl) {
             // New URL — let the keyed useVideoPlayer recreation take over;
             // this effect re-runs with the new videoUrl.
@@ -1463,7 +1463,7 @@ export default function WatchScreen() {
   const updateServer = useCallback((idx: number, r: { success: boolean; data?: { videoUrl: string } }) => {
     if (r.success && r.data?.videoUrl) {
       setServers((p) => p.map((s, i) =>
-        i === idx ? { ...s, status: "playing", videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
+        i === idx ? { ...s, status: "playing", videoUrl: r.data!.videoUrl } : s));
     } else {
       setServers((p) => p.map((s, i) =>
         i === idx ? { ...s, status: failStatus(s.server.provider) } : s));
@@ -1512,7 +1512,7 @@ export default function WatchScreen() {
         const r = await resolveVideo(url, srv.provider, true).catch(() => null);
         if (r?.success && r.data?.videoUrl) {
           setServers((p) => p.map((s, i) =>
-            i === idx ? { ...s, status: "playing", videoUrl: getProxyUrl(r.data!.videoUrl) } : s));
+            i === idx ? { ...s, status: "playing", videoUrl: r.data!.videoUrl } : s));
           return;
         }
         if (a < attempts - 1) await new Promise((res) => setTimeout(res, 1500));

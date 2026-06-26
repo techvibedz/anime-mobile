@@ -279,13 +279,6 @@ function cleanAnimeTitle(raw: string | null | undefined): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-/* ── proxy URL — DISABLED. We play the resolved URL directly in the native
- * player with per-provider headers (on-device residential IP is accepted by
- * the CDNs). Kept as identity for call-site compatibility. ── */
-export function getProxyUrl(videoUrl: string): string {
-  return videoUrl;
-}
-
 /* ── /home ──────────────────────────────────── */
 
 type HomePayload = { success: boolean; data: { featured: FeaturedItem[]; sections: HomeSection[] } };

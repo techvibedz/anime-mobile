@@ -18,11 +18,6 @@ CF challenges naturally. No server, no hosting, no payment.
 - ✅ `lib/api.ts` — same public function signatures as before; delegates to scraper
 - ✅ Debug screen at `/scraper-debug` (accessible via "Scraper PoC" link on welcome)
 
-### Server (deprecated)
-- ⚠️ `server/` is no longer used by the app
-- ⚠️ HF Space at `xpirox/pantoufa-server` is no longer needed — safe to delete
-- Server code kept in repo for reference; can be removed in a cleanup pass
-
 ### Supabase
 - Project: `iwrphgttbjqifstqttqm`
 - Schema applied (`favorites`, `watch_history`, RLS)
@@ -39,8 +34,6 @@ CF challenges naturally. No server, no hosting, no payment.
 
 - Test the full in-app rewrite on a real APK build
 - If video extraction fails on some providers, consider per-provider extraction scripts in `scripts.ts`
-- Delete the HF Space (Settings → Delete this Space) once app is confirmed working
-- Eventually remove `server/`, `hf-space/`, `render.yaml` from repo (cleanup pass)
 - Remove the "Scraper PoC" link from `app/(auth)/welcome.tsx` after PoC validation
 
 ## Do not

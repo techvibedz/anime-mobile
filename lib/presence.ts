@@ -22,7 +22,6 @@ export function isAdmin(email?: string | null): boolean {
 
 export interface OnlineUser {
   userId: string;
-  email: string;
   name: string;
   avatarUrl: string | null;
   /** ISO time this user first came online in the current session. */
@@ -44,7 +43,6 @@ function computeUsers(): OnlineUser[] {
   // so each key is one user and the array length is their connected devices.
   const state = channel.presenceState<{
     user_id: string;
-    email: string;
     name: string;
     avatar_url: string | null;
     online_at: string;
@@ -58,7 +56,6 @@ function computeUsers(): OnlineUser[] {
     const p = sorted[0];
     users.push({
       userId: p.user_id,
-      email: p.email,
       name: p.name,
       avatarUrl: p.avatar_url ?? null,
       onlineAt: p.online_at,
@@ -100,7 +97,6 @@ export async function startPresence(user: User): Promise<void> {
       if (status === "SUBSCRIBED" && channel) {
         await channel.track({
           user_id: user.id,
-          email: user.email ?? "",
           name,
           avatar_url: avatarUrl,
           online_at: new Date().toISOString(),

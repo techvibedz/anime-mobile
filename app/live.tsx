@@ -98,7 +98,7 @@ export default function LiveUsersScreen() {
           <View style={s.list}>
             {users.map((u) => {
               const isMe = u.userId === user?.id;
-              const initial = (u.name || u.email || "?").trim().charAt(0).toUpperCase();
+              const initial = (u.name || "?").trim().charAt(0).toUpperCase();
               return (
                 <View key={u.userId} style={s.row}>
                   {/* time + devices on the left (Arabic reads R→L) */}
@@ -116,7 +116,6 @@ export default function LiveUsersScreen() {
                     <Text style={s.rowName} numberOfLines={1}>
                       {u.name}{isMe ? ` · ${t.liveUsersYou}` : ""}
                     </Text>
-                    <Text style={s.rowEmail} numberOfLines={1}>{u.email}</Text>
                   </View>
 
                   <View style={s.avatarWrap}>

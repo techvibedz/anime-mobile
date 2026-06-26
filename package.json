@@ -8,7 +8,7 @@
     "ios": "expo start --ios",
     "prebuild": "expo prebuild",
     "publish-ota": "bash scripts/publish-ota.sh",
-    "test": "npx --yes tsx lib/relations.test.ts"
+    "test": "npx --yes tsx lib/relations.test.ts && npx --yes tsx lib/fuzzy.test.ts"
   },
   "dependencies": {
     "@expo-google-fonts/cairo": "^0.4.2",

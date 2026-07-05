@@ -1,6 +1,6 @@
 {
     "force_update": false,
-    "version": "2.2.0",
-    "release_notes": "إصدار 2.2.0:\n• أيقونة جديدة كليًا للتطبيق بحرف P أنيق مع مثلّث تشغيل مدمج.\n• شاشة بداية جديدة بملء الشاشة بتصميم متناسق.\n• تحسينات في وضوح الأيقونات على مختلف الأجهزة.",
-    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v2.2.0/pantoufa-2.2.0.apk"
+    "version": "3.0.0",
+    "release_notes": "إصدار 3.0.0:\n• تصميم جديد كليًا بواجهة زجاجية أنيقة (HOLO SPATIAL).\n• ميزة المشاهدة الجماعية — شاهد الأنمي مع أصدقائك في غرفة متزامنة.\n• تحسينات كبيرة في سرعة تحميل الحلقات والصفحة الرئيسية.\n• خطوط وأيقونات جديدة وتجربة استخدام أنعم.",
+    "apk_url": "https://github.com/techvibedz/anime-mobile/releases/download/v3.0.0/pantoufa-3.0.0.apk"
 }

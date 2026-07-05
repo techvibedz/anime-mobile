@@ -1,24 +1,19 @@
 import { View, Text, Pressable, StyleSheet, I18nManager } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { C, R, S } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { Aurora } from "../../components/ScreenChrome";
 
 export default function Welcome() {
   const insets = useSafeAreaInsets();
 
   return (
     <View style={ss.root}>
-      {/* SUMI backdrop: ink with a single faint ember wash at the top — no orbs,
-          no starfield, no gradient blobs. The restraint IS the premium. */}
-      <LinearGradient
-        colors={["rgba(255,90,44,0.10)", "transparent"]}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 0.5 }}
-        style={StyleSheet.absoluteFill}
-      />
+      {/* Shared HOLO Aurora backdrop — unifies the whole auth flow. Restrained
+          two-hue wash, no orbs / blobs. */}
+      <Aurora />
 
       <View style={[ss.content, { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 18 }]}>
         {/* Brand — solid ember mark, bone wordmark, no glow */}

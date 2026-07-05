@@ -339,18 +339,40 @@ export async function searchWitanimeDirect(query: string): Promise<WitCard[] | n
 
 /* ── Title matching (mirrors EXTRACT_TITLE_MATCH in scripts.ts) ── */
 
-function tm_seasonNum(s: string): number {
-  s = (s || "").toLowerCase();
+// Roman-numeral season markers ("Mushoku Tensei III", anime3rb's own lowercase
+// "mushoku-tensei-ii-…" slug). MAL/witanime romaji titles number later seasons
+// this way, never "season 3", and anime3rb slugs mirror it — so this MUST work
+// case-insensitively (the catalog matcher lowercases both sides). Multi-letter
+// romans (ii..ix) are unambiguous, so match any case. Single-letter V/X collide
+// with real words, so only accept them UPPERCASE. "I" is season 1 (the default)
+// and too collision-prone (English pronoun) to ever match.
+// ponytail: a bare "VII"/"II" in a non-season title (e.g. "Final Fantasy VII")
+// is misread as a season; acceptable — vanishingly rare in this catalog, and it
+// only affects season-equality in matching. Extend the map for season XI+.
+const ROMAN_SEASON: Record<string, number> = {
+  II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10,
+};
+function tm_romanSeason(orig: string): number {
+  const s = orig || "";
+  const multi = s.match(/\b(VIII|VII|VI|IV|IX|III|II)\b/i);
+  if (multi) return ROMAN_SEASON[multi[1].toUpperCase()];
+  const single = s.match(/\b(X|V)\b/); // uppercase-only for the word-colliding singles
+  return single ? ROMAN_SEASON[single[1]] : 0;
+}
+export function tm_seasonNum(orig: string): number {
+  const s = (orig || "").toLowerCase();
   const m =
     s.match(/\b(?:season|s|part|cour)\s*(\d+)\b/) ||
     // Ordinal-before-keyword form: "7th Season", "2nd Part", "3rd Cour".
     s.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:season|part|cour)\b/) ||
     s.match(/الموسم\s*([٠-٩\d]+)/) ||
     s.match(/الجزء\s*([٠-٩\d]+)/);
-  if (!m) return 1;
-  const n = m[1].replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
-  const v = parseInt(n, 10);
-  return isNaN(v) ? 1 : v;
+  if (m) {
+    const n = m[1].replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+    const v = parseInt(n, 10);
+    if (!isNaN(v)) return v;
+  }
+  return tm_romanSeason(orig) || 1;
 }
 function tm_normLatin(s: string): string {
   return String(s || "").toLowerCase()
@@ -401,7 +423,7 @@ export function classifyProvider(url: string): string {
   const u = (url || "").toLowerCase();
   if (/mp4upload/.test(u)) return "mp4upload";
   if (/dailymotion|dai\.ly/.test(u)) return "dailymotion";
-  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|vibuxer|audinifer|masukestin|hanerix/.test(u)) return "streamwish";
+  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|vibuxer|audinifer|masukestin|hanerix|playerwish/.test(u)) return "streamwish";
   if (/voe\./.test(u)) return "voe";
   if (/share4max|megamax/.test(u)) return "share4max";
   if (/rubyvidhub|streamruby|rubystm|ruby/.test(u)) return "streamruby";
@@ -411,6 +433,11 @@ export function classifyProvider(url: string): string {
   if (/videa\.|vidvaita|vidit/.test(u)) return "videa";
   if (/vk\.com/.test(u)) return "vk";
   if (/vid3rb|anime3rb/.test(u)) return "vid3rb";
+  // witanime's current default hosts. Give them their own ids so they aren't
+  // classified "generic" and dropped by the witanime-generic filter in the
+  // server merge — they play via the iframe fallback.
+  if (/luluvdo|lulustream|luluvid/.test(u)) return "luluvdo";
+  if (/yonaplay/.test(u)) return "yonaplay";
   return "generic";
 }
 
@@ -792,6 +819,106 @@ export async function scrapeAnime4upEpisodePageDirect(
   if (!animeTitle && episodeTitle) {
     animeTitle = episodeTitle.replace(/الحلقة\s*\d+.*$/, "").replace(/\bepisode\s*\d+.*$/i, "").trim();
   }
+  return { servers, episodeTitle, animeTitle };
+}
+
+/* ── witanime direct server decode ── */
+// witanime no longer ships plain server iframes. Each episode page carries an
+// obfuscated registry — `_zX` = a base64 JSON array of reversed+base64 embed
+// URLs, `_zK` = per-server decode config — that the site's gh100.js
+// `renderModuleContent()` decodes on click. The WebView scrape depends on those
+// clicks firing past witanime's Cloudflare gate and frequently comes back empty
+// → "no servers". Decode the registry straight from the static HTML instead
+// (mirrors the anime4up direct path). Ported 1:1 from gh100.js.
+// ponytail: FRAMEWORK_HASH is hardcoded in gh100.js and only yonaplay embeds
+// need it; if witanime rotates it, re-read gh100.js.
+const WIT_FRAMEWORK_HASH = "23a97133-caf3-4eb4-9466-93d0a4ff8198";
+
+// base64 → binary (latin1) string. Hand-rolled because atob/Buffer aren't
+// reliably present in the RN runtime (same reason profile.ts hand-rolls it).
+// Matches atob() output for witanime's registry (verified on live pages).
+function b64ToBinary(b64: string): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const lookup: Record<string, number> = {};
+  for (let i = 0; i < chars.length; i++) lookup[chars[i]] = i;
+  const clean = String(b64).replace(/[^A-Za-z0-9+/]/g, "");
+  let out = "";
+  for (let i = 0; i < clean.length; i += 4) {
+    const e1 = lookup[clean[i]], e2 = lookup[clean[i + 1]];
+    const e3 = lookup[clean[i + 2]], e4 = lookup[clean[i + 3]];
+    if (e1 === undefined || e2 === undefined) break;
+    out += String.fromCharCode((e1 << 2) | (e2 >> 4));
+    if (e3 !== undefined) out += String.fromCharCode(((e2 & 15) << 4) | (e3 >> 2));
+    if (e4 !== undefined) out += String.fromCharCode(((e3 & 3) << 6) | e4);
+  }
+  return out;
+}
+
+function witDecodeServer(res: string, cfg: { d?: number[]; k?: string }): string | null {
+  try {
+    if (!res || !cfg || !Array.isArray(cfg.d) || !cfg.k) return null;
+    const s = res.split("").reverse().join("").replace(/[^A-Za-z0-9+/=]/g, "");
+    const off = cfg.d[parseInt(b64ToBinary(cfg.k), 10)];
+    if (off == null || off < 0) return null;
+    const decoded = b64ToBinary(s);
+    let out = decoded.slice(0, decoded.length - off);
+    if (/^https:\/\/yonaplay\.net\/embed\.php\?id=\d+$/.test(out)) out += "&apiKey=" + WIT_FRAMEWORK_HASH;
+    return out;
+  } catch { return null; }
+}
+
+function parseWitServers(html: string): RawServer[] {
+  const zx = html.match(/_zX\s*=\s*"([^"]+)"/);
+  const zk = html.match(/_zK\s*=\s*"([^"]+)"/);
+  if (!zx || !zk) return [];
+  let reg: string[], cfg: { d?: number[]; k?: string }[];
+  try {
+    reg = JSON.parse(b64ToBinary(zx[1]));
+    cfg = JSON.parse(b64ToBinary(zk[1]));
+  } catch { return []; }
+  if (!Array.isArray(reg) || !Array.isArray(cfg)) return [];
+  // Server labels sit in <span class="ser"> in data-server-id (= registry) order.
+  const names: string[] = [];
+  const nre = /<span[^>]*class=["']ser["'][^>]*>([\s\S]*?)<\/span>/gi;
+  let nm: RegExpExecArray | null;
+  while ((nm = nre.exec(html))) names.push(nm[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim());
+  const out: RawServer[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < reg.length; i++) {
+    const url = witDecodeServer(reg[i], cfg[i]);
+    if (!url || url.indexOf("http") !== 0 || seen.has(url)) continue;
+    if (/google|facebook|pyppo|popads|disqus/.test(url)) continue;
+    try {
+      const h = new URL(url).hostname.toLowerCase();
+      if (!h || h === "undefined" || h === "null" || h.indexOf(".") < 0) continue;
+    } catch { continue; }
+    seen.add(url);
+    out.push({ id: String(out.length), name: names[i] || `Server ${out.length + 1}`, iframeUrl: normalizeEmbedUrl(url), provider: classifyProvider(url) });
+  }
+  return out;
+}
+
+// Full witanime episode-page parse (servers + display titles) from one static
+// GET. Returns null on fetch/decode failure so the caller falls back to the
+// WebView scrape (older episodes predating the _zX/_zK scheme still render
+// plain iframes).
+export async function scrapeWitanimeEpisodePageDirect(
+  episodeUrl: string,
+): Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string } | null> {
+  const html = await fetchHtml(episodeUrl, WIT_BASE + "/");
+  if (!html) return null;
+  const servers = parseWitServers(html);
+  if (servers.length === 0) return null;
+  const deent = (s: string) =>
+    s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
+  let episodeTitle = "";
+  const h3 = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+  if (h3) episodeTitle = deent(h3[1].replace(/<[^>]+>/g, ""));
+  let animeTitle = "";
+  const link = html.match(/anime-page-link[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+  if (link) animeTitle = deent(link[1].replace(/<[^>]+>/g, ""));
+  if (!animeTitle && episodeTitle) animeTitle = episodeTitle.replace(/الحلقة\s*\d+.*$/, "").trim();
   return { servers, episodeTitle, animeTitle };
 }
 

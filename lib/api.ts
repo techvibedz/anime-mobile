@@ -23,6 +23,7 @@ import {
   searchAnime4upDirect,
   searchAnime4upDirectList,
   scrapeAnime4upEpisodePageDirect,
+  scrapeWitanimeEpisodePageDirect,
   findUp4EpisodeAcrossPages,
   searchAnime3rbDirect,
   searchAnime3rbCatalog,
@@ -30,6 +31,7 @@ import {
   scrapeAnime3rbEpisodeServers,
   scrapeAnime3rbTitlePage,
   anime3rbExactSlugs,
+  tm_seasonNum,
   extractVid3rb,
   extractMp4upload,
   fetchWitHomeDirect,
@@ -708,7 +710,12 @@ export async function resolveUp4EpisodeUrl(animeTitle: string, epNumber: number)
 // anime4up lesson: only successful resolutions are cached — caching a miss
 // for 24h would permanently block retries while the site is briefly flaky.
 const a3rbTitleCache = new Map<string, { url: string; ts: number }>();
-const A3RB_TITLE_PREFIX = "@a3rb_title_v1:";
+// v2: bumped to discard slug mappings written by the pre-Roman-season build,
+// which resolved later seasons ("Mushoku Tensei III") to season 1's page and
+// re-wrote that wrong slug on every hit so it never aged out. A fresh key forces
+// re-resolution with the season-aware logic (which correctly returns nothing
+// when a later season isn't on anime3rb).
+const A3RB_TITLE_PREFIX = "@a3rb_title_v2:";
 // Titles whose Jikan alt-name bridge has already been attempted this session.
 // The bridge hits Jikan + probes anime3rb with each alt name; a fundamental
 // name mismatch won't change between the watch screen's retries, so run it at
@@ -769,14 +776,10 @@ async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | nul
     // season. This lets later-season anime resolve their anime3rb page too
     // (previously they were skipped entirely, the main reason "a lot of animes"
     // never showed anime3rb servers).
-    const seasonM =
-      key.match(/\b(?:season|part|cour)\s*(\d+)\b/) ||
-      key.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:season|part|cour)\b/) ||
-      key.match(/الموسم\s*([0-9٠-٩]+)/) ||
-      key.match(/الجزء\s*([0-9٠-٩]+)/);
-    const seasonNum = seasonM
-      ? parseInt(seasonM[1].replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)), 10)
-      : 1;
+    // Pass the ORIGINAL-case title so Roman-numeral seasons ("Mushoku Tensei
+    // III") are detected — the lowercased `key` would hide the uppercase-roman
+    // discriminator that keeps a stray "v"/"x" from being read as a season.
+    const seasonNum = tm_seasonNum(animeTitle);
     const alts = await getAltTitles(animeTitle).catch(() => []);
     for (const alt of alts) {
       if (!/[a-z]/i.test(alt)) continue;            // need Latin script for the slug
@@ -922,7 +925,7 @@ export async function diagnoseAnime3rb(title: string, epNum: number): Promise<st
 // union — so episodes missing from witanime/anime4up still appear (and stay
 // playable, since each href is a real anime3rb episode URL). Cached 6h; a miss
 // isn't cached so a flaky resolve can retry on the next visit.
-const A3RB_EPS_PREFIX = "@a3rb_eps_v1:";
+const A3RB_EPS_PREFIX = "@a3rb_eps_v2:"; // v2: discard episode lists keyed by pre-fix (wrong-season) title URLs
 const A3RB_EPS_TTL = 6 * 60 * 60 * 1000;
 export async function fetchAnime3rbEpisodes(animeTitle: string): Promise<Episode[]> {
   if (!animeTitle || !animeTitle.trim()) return [];
@@ -1017,26 +1020,35 @@ async function scrapeUp4ServersFast(episodeUrl: string) {
     .catch(() => null);
 }
 
+// witanime hides its server embeds in an obfuscated _zX/_zK registry that only
+// its gh100.js decodes on click. The WebView render depends on those clicks
+// firing past witanime's Cloudflare gate and frequently comes back empty — so
+// decode the registry straight from the static HTML. Falls back to the WebView
+// scrape when the direct decode yields nothing (older pages that still ship
+// plain iframes). `direct` lets the merge keep validated servers even if
+// generic, so a brand-new witanime host still plays instead of vanishing.
+async function scrapeWitServersFast(episodeUrl: string) {
+  try {
+    const direct = await scrapeWitanimeEpisodePageDirect(episodeUrl);
+    if (direct) {
+      return { source: "witanime", servers: direct.servers, episodeTitle: direct.episodeTitle, animeTitle: direct.animeTitle, up4EpisodeUrl: null as string | null, direct: true };
+    }
+  } catch { /* fall through to the WebView scrape */ }
+  return scrapeVideoServers(episodeUrl)
+    .then((r) => ({ source: "witanime", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle, up4EpisodeUrl: r.up4EpisodeUrl ?? null }))
+    .catch(() => null);
+}
+
 async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Promise<VideoServersPayload> {
   const primaryIsUp4 = /anime4up/i.test(episodeUrl);
   // If we have a url4up AND the primary isn't already anime4up, scrape both
   // sources' servers in parallel (uses 2 WebView slots simultaneously).
-  const tasks: Promise<{ source: string; servers: any[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null } | null>[] = [];
+  const tasks: Promise<{ source: string; servers: any[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null; direct?: boolean } | null>[] = [];
 
   if (primaryIsUp4) {
     tasks.push(scrapeUp4ServersFast(episodeUrl));
   } else {
-    tasks.push(
-      scrapeVideoServers(episodeUrl)
-        .then((r) => ({
-          source: "witanime",
-          servers: r.servers,
-          episodeTitle: r.episodeTitle,
-          animeTitle: r.animeTitle,
-          up4EpisodeUrl: r.up4EpisodeUrl ?? null,
-        }))
-        .catch(() => null),
-    );
+    tasks.push(scrapeWitServersFast(episodeUrl));
   }
   if (url4up && !primaryIsUp4) {
     tasks.push(scrapeUp4ServersFast(url4up));
@@ -1053,15 +1065,17 @@ async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Prom
 
   const seen = new Set<string>();
   const merged: (VideoServer & { source?: string })[] = [];
-  function add(arr: any[] | undefined, source: string) {
+  function add(arr: any[] | undefined, source: string, keepGeneric = false) {
     if (!arr) return;
     for (const s of arr) {
       if (!s.iframeUrl || seen.has(s.iframeUrl)) continue;
-      // Drop unclassifiable "generic" servers from witanime — they're junk
-      // (the site's own placeholder player) and only fall back to the embed.
-      // Keep anime4up's generic-classified servers: their embed hosts often
-      // aren't in the provider list but are real, playable servers.
-      if (s.provider === "generic" && source !== "anime4up") continue;
+      // Drop unclassifiable "generic" servers from the WebView witanime scrape —
+      // they're junk (the site's own placeholder player). Keep anime4up's
+      // generic-classified servers (their embed hosts often aren't in the
+      // provider list but are real), and keep DIRECT-decoded ones (keepGeneric):
+      // those are validated real embeds, so a brand-new witanime host still
+      // plays via the iframe fallback instead of silently vanishing.
+      if (s.provider === "generic" && source !== "anime4up" && !keepGeneric) continue;
       seen.add(s.iframeUrl);
       merged.push({
         id: String(merged.length),
@@ -1074,7 +1088,7 @@ async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Prom
   }
   // Witanime is primary, anime4up extras appended.
   if (primary && primary.source === "witanime") {
-    add(primary.servers, "witanime");
+    add(primary.servers, "witanime", !!primary.direct);
     if (secondary) add(secondary.servers, "anime4up");
   } else if (primary && primary.source === "anime4up") {
     add(primary.servers, "anime4up");

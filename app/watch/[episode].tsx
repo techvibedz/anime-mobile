@@ -9,6 +9,8 @@ import {
   StatusBar,
   PanResponder,
   Dimensions,
+  Animated,
+  Easing,
 } from "react-native";
 import { VideoView, useVideoPlayer } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
@@ -25,8 +27,11 @@ import { getDownloadByEpisode, subscribeDownloads, type DownloadStatus, type Dow
 import { DownloadPicker } from "../../components/DownloadPicker";
 import { getAutoplayNext } from "../../lib/settings";
 import { maybeShowInterstitial } from "../../lib/ads";
+import { useAuth } from "../../lib/auth";
+import { useWatchPartySync, createRoom } from "../../lib/watchParty";
 import { C } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { useReducedMotion } from "../../lib/motion";
 
 type ServerStatus = "idle" | "resolving" | "playing" | "webview" | "failed";
 
@@ -256,6 +261,28 @@ export default function WatchScreen() {
   const autoplayRef = useRef(true);
   const goNextRef = useRef<() => void>(() => {});
   const autoAdvancedRef = useRef(false);
+  // Watch Party: when this device is a CLIENT, the host drives playback —
+  // local controls (toggle/seek/skip/next/auto-advance) are suppressed and the
+  // sync hook applies the host's state instead. Read through a ref so the
+  // callbacks/PanResponders defined before the hook can see the live role.
+  const partyClientRef = useRef(false);
+  // True only while this watch screen is the focused route. With freezeOnBlur the
+  // screen stays MOUNTED when the user pushes the anime page on top of it — the
+  // native player and its self-heal/auto-play timers keep running, which would
+  // resurrect audio on the backgrounded episode. Every autonomous play() checks
+  // this ref so a blurred screen can never restart playback. (User taps and the
+  // party host's sync still play through their own paths.)
+  const focusedRef = useRef(true);
+  // Watch-party host gate: while true, the source resolving must NOT auto-play
+  // (the room isn't ready yet). Mirrors party.holdPlayback through a ref so the
+  // player-setup closure + effects can read it without re-subscribing.
+  const holdPlaybackRef = useRef(false);
+  // Host-only: broadcast the live player state the instant a control fires, so
+  // viewers play/pause/seek in lock-step instead of waiting for the heartbeat.
+  // Filled in after the party hook (these handlers are defined before it). No-op
+  // off-host. Pass the post-action play state when toggling so the broadcast
+  // isn't built from React's not-yet-updated paused flag.
+  const partyPulseRef = useRef<(playing?: boolean) => void>(() => {});
 
   // Load the autoplay preference once; reset the per-episode guard on change.
   useEffect(() => { getAutoplayNext().then((v) => { autoplayRef.current = v; }); }, []);
@@ -266,6 +293,7 @@ export default function WatchScreen() {
     autoAdvancedRef.current = false;
     completionMarkedRef.current = false;
     setLocked(false);
+    setSelfReady(false); // re-buffer for the new episode → re-arm the party gate
     // Re-arm the server-selection gate for the new episode, unless this is an
     // auto-play hop (next/prev/autoplay) or an offline file — those play directly.
     setPicked(!!autoParam || !!localParam);
@@ -274,6 +302,7 @@ export default function WatchScreen() {
   // Fire auto-advance when playback nears the end (≥97%) and a next episode
   // exists. Shared by the native + WebView progress timers.
   const maybeAutoAdvance = useCallback((pos: number, dur: number) => {
+    if (partyClientRef.current) return; // host drives episode changes
     if (!autoplayRef.current || autoAdvancedRef.current) return;
     if (dur > 0 && pos / dur >= 0.97) {
       autoAdvancedRef.current = true;
@@ -442,7 +471,9 @@ export default function WatchScreen() {
     if (videoUrl && resumeMs > 0) {
       p.currentTime = resumeMs / 1000;
     }
-    if (videoUrl) p.play();
+    // Don't auto-start on a blurred screen (background episode) or while the
+    // watch-party host gate is holding the room.
+    if (videoUrl && focusedRef.current && !holdPlaybackRef.current) p.play();
   });
 
   // Kill audio the moment the user leaves this screen. expo-video releases
@@ -451,6 +482,7 @@ export default function WatchScreen() {
   // the main page. Pause explicitly on blur/unmount.
   useFocusEffect(
     useCallback(() => {
+      focusedRef.current = true;
       // On focus, restore the orientation that matches the current phase: the
       // selector page stays PORTRAIT, the player is LANDSCAPE. (Returning from
       // the anime page re-locked portrait on the way out.)
@@ -460,6 +492,9 @@ export default function WatchScreen() {
           : ScreenOrientation.OrientationLock.PORTRAIT_UP,
       ).catch(() => {});
       return () => {
+        // Mark blurred FIRST so any in-flight auto-play timer that fires after
+        // this no-ops instead of restarting audio on the backgrounded screen.
+        focusedRef.current = false;
         try { player.pause(); } catch {}
       };
     }, [player]),
@@ -469,6 +504,8 @@ export default function WatchScreen() {
   useEffect(() => {
     if (!videoUrl || !player) return;
     const tryPlay = () => {
+      // Never auto-resume a blurred (backgrounded) screen, or a host-gated room.
+      if (!focusedRef.current || holdPlaybackRef.current) return;
       try {
         // Resume after a self-heal re-resolve (fresh token, same episode).
         if (pendingSeekRef.current > 0) {
@@ -569,7 +606,7 @@ export default function WatchScreen() {
 
     // Poll for "started playing" every 250ms; once we see motion, lock in.
     const watchdog = setInterval(() => {
-      if (cancelled || healing) return;
+      if (cancelled || healing || !focusedRef.current) return; // don't heal a blurred screen
       try {
         if (player.duration > 0 || player.currentTime > 0) {
           hasStarted = true;
@@ -591,7 +628,7 @@ export default function WatchScreen() {
     // manifest), extend the wait instead of restarting from scratch — killing
     // a slow-but-progressing load was another source of visible refreshes.
     const deadline = setInterval(() => {
-      if (cancelled || healing || hasStarted) return;
+      if (cancelled || healing || hasStarted || !focusedRef.current) return;
       if (Date.now() < graceUntil) return;
       try {
         if ((player.status as string) === "loading" && loadingExtensions < 3) {
@@ -1574,6 +1611,7 @@ export default function WatchScreen() {
 
   // Skip +/- 10s
   const skipBack = useCallback(() => {
+    if (partyClientRef.current) return;
     if (isPlaying && player) {
       try { player.currentTime = Math.max(0, player.currentTime - 10); } catch {}
     } else if (isWebView) {
@@ -1583,9 +1621,11 @@ export default function WatchScreen() {
         }catch(e){}
       `);
     }
+    partyPulseRef.current(); // host: push the new position to viewers now
   }, [isPlaying, isWebView, player]);
 
   const skipForward = useCallback(() => {
+    if (partyClientRef.current) return;
     if (isPlaying && player) {
       try { player.currentTime = Math.min(player.currentTime + 10, player.duration || Infinity); } catch {}
     } else if (isWebView) {
@@ -1595,9 +1635,11 @@ export default function WatchScreen() {
         }catch(e){}
       `);
     }
+    partyPulseRef.current();
   }, [isPlaying, isWebView, player]);
 
   const skipForward85 = useCallback(() => {
+    if (partyClientRef.current) return;
     if (isPlaying && player) {
       try { player.currentTime = Math.min(player.currentTime + 85, player.duration || Infinity); } catch {}
     } else if (isWebView) {
@@ -1607,11 +1649,13 @@ export default function WatchScreen() {
         }catch(e){}
       `);
     }
+    partyPulseRef.current();
   }, [isPlaying, isWebView, player]);
 
   // Next episode — carry cross-source url4up + anime context so the
   // anime4up servers keep showing on the next episode.
   const goNextEpisode = useCallback((keepAutoplay = false) => {
+    if (partyClientRef.current) return; // host drives episode changes
     if (!nextEpisodeHref) return;
     router.replace({
       pathname: `/watch/${encodeURIComponent(nextEpisodeHref)}`,
@@ -1634,6 +1678,7 @@ export default function WatchScreen() {
 
   // Previous episode — manual only, always lands on the server picker.
   const goPrevEpisode = useCallback(() => {
+    if (partyClientRef.current) return; // host drives episode changes
     if (!prevEpisodeHref) return;
     router.replace({
       pathname: `/watch/${encodeURIComponent(prevEpisodeHref)}`,
@@ -1686,6 +1731,78 @@ export default function WatchScreen() {
   const [isSeeking, setIsSeeking] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [speedIdx, setSpeedIdx] = useState(0);
+  // Watch-party: this device has buffered enough of the current episode to start.
+  // Reported into the room so the host can wait for everyone before playing.
+  const [selfReady, setSelfReady] = useState(false);
+
+  // ── WATCH PARTY ──
+  // Sync this player with a room. Host broadcasts its state on a heartbeat;
+  // client follows it (see lib/watchParty). Inert when not in a room.
+  const { user } = useAuth();
+  const [partyPanelOpen, setPartyPanelOpen] = useState(false);
+  // Nav params re-broadcast so a client can reopen the SAME episode. Passed
+  // through verbatim (raw param strings) so host↔client round-trip is exact.
+  const partyNavParams = useMemo<Record<string, string>>(() => ({
+    url4up: url4up ?? "",
+    anime: animeParam ?? "",
+    img: imgParam ?? "",
+    animeTitle: animeTitleParam ?? "",
+    epNum: epNumParam ?? "",
+  }), [url4up, animeParam, imgParam, animeTitleParam, epNumParam]);
+  // Apply the host's play/pause without the client guard (the guard blocks the
+  // user's OWN controls, not the host-driven sync).
+  const applyPartyPaused = useCallback((paused: boolean) => {
+    try { paused ? player.pause() : player.play(); } catch {}
+    setIsPlayerPaused(paused);
+  }, [player]);
+  const party = useWatchPartySync({
+    player,
+    episode: episode ? decodeURIComponent(episode) : undefined,
+    navParams: partyNavParams,
+    paused: isPlayerPaused,
+    applyPaused: applyPartyPaused,
+    selfReady,
+  });
+  const isPartyClient = party.role === "client";
+  useEffect(() => { partyClientRef.current = isPartyClient; }, [isPartyClient]);
+  useEffect(() => { holdPlaybackRef.current = party.holdPlayback; }, [party.holdPlayback]);
+  useEffect(() => { partyPulseRef.current = party.pulse; }, [party.pulse]);
+  // While the host gate is holding (each new episode until Start), surface the
+  // panel so the host always sees the live roster + Start button — including
+  // when they opened the episode after creating the room from the lobby.
+  useEffect(() => {
+    if (party.role === "host" && party.holdPlayback) setPartyPanelOpen(true);
+  }, [party.role, party.holdPlayback]);
+
+  // Report readiness to the room: flip selfReady once the current source has
+  // buffered its start (native: duration/readyToPlay; embeds buffer internally,
+  // so they count as ready once shown). A hard cap prevents an undetectable
+  // buffer state from deadlocking the whole room on the host's gate.
+  useEffect(() => {
+    if (!party.code || selfReady) return;
+    if (isWebView) { setSelfReady(true); return; }
+    // ponytail: 25s ceiling so a stuck/undetectable resolve can't hang the room.
+    const cap = setTimeout(() => setSelfReady(true), 25000);
+    const iv = setInterval(() => {
+      try {
+        // Ready = a playable source is RESOLVED (direct URL or embed). Buffer-
+        // based readiness (duration/readyToPlay) was unreliable: a gated or
+        // host-paused player never reports a duration, so members stayed
+        // "buffering" forever and the gate never released. Source-resolved is
+        // reliable for every role, and a slow connection (slow to resolve) still
+        // makes the host wait.
+        if (active?.status === "playing" || active?.status === "webview" || player.duration > 0) {
+          setSelfReady(true);
+        }
+      } catch {}
+    }, 500);
+    return () => { clearTimeout(cap); clearInterval(iv); };
+  }, [party.code, selfReady, isWebView, player, episode, active?.status]);
+  const startParty = useCallback(() => {
+    if (!user) return;
+    createRoom(user).catch(() => {});
+    setPartyPanelOpen(true);
+  }, [user]);
 
   // Poll player state every 500ms — ONLY while the controls are on screen.
   // The seek bar / time labels these values drive aren't rendered when the
@@ -1733,14 +1850,19 @@ export default function WatchScreen() {
   }, [speedIdx, player, videoUrl]);
 
   const togglePlayPause = useCallback(() => {
+    if (partyClientRef.current) return; // host controls playback in a party
+    // Party host: can't start the episode until the whole room is ready.
+    if (holdPlaybackRef.current && isPlayerPaused) return;
     if (!player) return;
     try {
       if (isPlayerPaused) {
         player.play();
         setIsPlayerPaused(false);
+        partyPulseRef.current(true); // host: viewers resume in the same instant
       } else {
         player.pause();
         setIsPlayerPaused(true);
+        partyPulseRef.current(false);
       }
     } catch {}
   }, [player, isPlayerPaused]);
@@ -1760,6 +1882,45 @@ export default function WatchScreen() {
   isPausedRef.current = isPlayerPaused;
   playerRef.current = player;
 
+  // ── SLOW-CONNECTION QUALITY STEP-DOWN ──
+  // anime3rb exposes each quality as its own server (1080p default), but each
+  // stream is a fixed-bitrate progressive MP4 — on a connection slower than
+  // that bitrate it rebuffers forever and there's no ABR to save it. Watch
+  // cumulative MID-WATCH buffering on an anime3rb server; once ~20s of it
+  // piles up, hop to the next lower quality at the same position instead of
+  // letting the user grind through the stutter loop.
+  useEffect(() => {
+    if (!isPlaying || !player || !picked) return;
+    const idx = activeIdx;
+    if (serversRef.current[idx]?.server.source !== "anime3rb") return;
+    let stalledMs = 0;
+    const iv = setInterval(() => {
+      try {
+        if (!focusedRef.current || isPausedRef.current) return;
+        // Mid-watch only — currentTime > 0 means the initial load is behind us.
+        if (!(player.currentTime > 0) || (player.status as string) !== "loading") return;
+        stalledMs += 1000;
+        if (stalledMs < 20000) return;
+        clearInterval(iv);
+        const list = serversRef.current;
+        const curQ = qualityScore(list[idx]?.server.name || "");
+        // Highest-quality sibling still BELOW the current one (1080→720→480).
+        let nextIdx = -1, nextQ = -1;
+        list.forEach((s, i) => {
+          const q = qualityScore(s.server.name);
+          if (i !== idx && s.server.source === "anime3rb" && s.status !== "failed" && q < curQ && q > nextQ) {
+            nextIdx = i; nextQ = q;
+          }
+        });
+        if (nextIdx === -1) return;
+        console.log(`[quality] ${list[idx]?.server.name} rebuffered ${Math.round(stalledMs / 1000)}s — stepping down to ${list[nextIdx].server.name}`);
+        pendingSeekRef.current = Math.round(player.currentTime * 1000);
+        selectServer(nextIdx);
+      } catch {}
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [isPlaying, player, picked, activeIdx, selectServer]);
+
   const seekBarWidthRef = useRef(0);
   const seekBarPageXRef = useRef(0);
   const lastLiveSeekRef = useRef(0);
@@ -1767,6 +1928,7 @@ export default function WatchScreen() {
   // Apply a scrub at `ratio` (0..1). `live` throttles the native seek so a fast
   // drag doesn't flood the player; `final` forces the seek and resumes play.
   const doScrub = useCallback((ratio: number, live: boolean, final: boolean) => {
+    if (partyClientRef.current) return; // host controls seeking in a party
     const dur = durationRef.current;
     if (dur <= 0) return;
     const tt = ratio * dur;
@@ -1780,6 +1942,7 @@ export default function WatchScreen() {
       try { p.currentTime = tt; } catch {}
     }
     if (final && !isPausedRef.current) { try { p.play(); } catch {} }
+    if (final) partyPulseRef.current(); // host: broadcast the scrubbed position
   }, []);
 
   const seekPan = useRef(
@@ -1940,6 +2103,25 @@ export default function WatchScreen() {
             size={18}
             color={done ? C.success : C.white}
           />
+        )}
+      </Pressable>
+    );
+  };
+
+  // Watch Party button — ember-tinted when in a room, with a member-count badge.
+  const renderPartyBtn = () => {
+    if (localUri) return null; // offline file can't be shared live
+    return (
+      <Pressable
+        onPress={() => (party.role ? setPartyPanelOpen((o) => !o) : startParty())}
+        style={ss.iconBtn}
+        hitSlop={6}
+      >
+        <Ionicons name="people" size={18} color={party.role ? C.accent : C.white} />
+        {party.members.length > 1 && (
+          <View style={ss.partyCount}>
+            <Text style={ss.partyCountText}>{party.members.length}</Text>
+          </View>
         )}
       </Pressable>
     );
@@ -2120,22 +2302,22 @@ export default function WatchScreen() {
       ) : active?.status === "resolving" ? (
         <View style={[ss.player, ss.centered]}>
           <ActivityIndicator size="large" color={C.accent} />
-          <Text style={ss.statusText}>Connecting...</Text>
+          <Text style={ss.statusText}>{t.connecting}</Text>
           <Text style={ss.statusSub}>{active ? getDisplayName(active.server) : ""}</Text>
         </View>
       ) : allFailed ? (
         <View style={[ss.player, ss.centered]}>
           <Ionicons name="cloud-offline-outline" size={48} color={C.textMuted} />
-          <Text style={ss.statusText}>All servers failed</Text>
+          <Text style={ss.statusText}>{t.allServersFailed}</Text>
           <Pressable onPress={loadServers} style={ss.actionBtn}>
             <Ionicons name="refresh" size={16} color={C.white} />
-            <Text style={ss.actionBtnText}>Retry</Text>
+            <Text style={ss.actionBtnText}>{t.retry}</Text>
           </Pressable>
         </View>
       ) : (
         <View style={[ss.player, ss.centered]}>
           <ActivityIndicator size="large" color={C.accent} />
-          <Text style={ss.statusText}>Preparing...</Text>
+          <Text style={ss.statusText}>{t.resolving}</Text>
         </View>
       )}
 
@@ -2247,6 +2429,7 @@ export default function WatchScreen() {
               />
             </Pressable>
             {renderDownloadBtn()}
+            {renderPartyBtn()}
             <Pressable onPress={() => setPickerOpen(true)} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="server-outline" size={18} color={C.white} />
             </Pressable>
@@ -2374,10 +2557,94 @@ export default function WatchScreen() {
               </Pressable>
             )}
             {renderDownloadBtn()}
+            {renderPartyBtn()}
             <Pressable onPress={() => setPickerOpen(true)} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="server-outline" size={18} color={C.white} />
             </Pressable>
           </View>
+        </View>
+      )}
+
+      {/* WATCH PARTY panel — non-intrusive room overlay (live roster + start gate).
+          Rendered once at root so it shows over either player surface. The host
+          sees who's ready and presses Start only once everyone has resolved a
+          source (no one stuck on a loading screen); viewers see their own state. */}
+      {party.role && partyPanelOpen && (
+        <View style={[ss.partyPanel, { top: (insets.top || 10) + 48 }]}>
+          <View style={ss.partyHeadRow}>
+            <View style={ss.partyLiveDot} />
+            <Text style={ss.partyHeadText} numberOfLines={1}>
+              {party.role === "host" ? `${t.wpPartyBtn} · ${party.code}` : t.wpFollowing}
+            </Text>
+            {party.viewerCount > 0 && (
+              <View style={ss.partyReadyPill}>
+                <Text style={ss.partyReadyPillText}>{t.wpReadyOf(party.readyCount, party.viewerCount)}</Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={ss.partyStatus}>
+            {isPartyClient
+              ? (party.hostPaused ? t.wpWaitingToStart : t.wpHostPlaying)
+              : (party.holdPlayback
+                  ? (party.allReady ? t.wpAllReady : t.wpWaitingReady(party.waitingCount))
+                  : t.wpHostPlaying)}
+          </Text>
+
+          {/* Live roster: one row per member with an explicit ready / loading
+              state, so the host can read the room at a glance before starting. */}
+          <View style={ss.partyRoster}>
+            {party.members.slice(0, 6).map((m) => {
+              // The host (leader) drives the room and is never gated on itself,
+              // so it always reads as ready — never show the leader "waiting".
+              const ready = m.isHost || m.ready;
+              return (
+                <View key={m.userId} style={ss.partyMember}>
+                  <View style={[ss.partyMAvatar, m.isHost && ss.partyAvatarHost]}>
+                    <Text style={ss.partyAvatarText}>{(m.name || "?").trim().charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <Text style={ss.partyMName} numberOfLines={1}>
+                    {m.userId === user?.id ? t.wpYou : m.name}{m.isHost ? ` · ${t.wpHost}` : ""}
+                  </Text>
+                  {ready ? (
+                    <View style={ss.partyChip}>
+                      <Text style={ss.partyChipReady}>{t.wpReady}</Text>
+                      <Ionicons name="checkmark-circle" size={12} color={C.success} />
+                    </View>
+                  ) : (
+                    <View style={ss.partyChip}>
+                      <Text style={ss.partyChipWait}>{t.wpBuffering}</Text>
+                      <ActivityIndicator size="small" color={C.gold} />
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+
+          {/* Host start gate: enabled only once every viewer is ready, so the
+              press starts everyone together with nothing still buffering. */}
+          {party.role === "host" && party.holdPlayback && (
+            <Pressable
+              disabled={!party.allReady}
+              onPress={() => party.start()}
+              style={[ss.partyStartBtn, !party.allReady && ss.partyStartBtnDisabled]}
+            >
+              {party.allReady ? (
+                <Ionicons name="play" size={15} color={C.black} />
+              ) : (
+                <ActivityIndicator size="small" color={C.textMuted} />
+              )}
+              <Text style={[ss.partyStartTxt, !party.allReady && ss.partyStartTxtDisabled]}>
+                {party.allReady ? t.wpStartForEveryone : t.wpWaitingReady(party.waitingCount)}
+              </Text>
+            </Pressable>
+          )}
+
+          <Pressable style={ss.partyLeave} onPress={() => { party.leaveParty(); setPartyPanelOpen(false); }}>
+            <Ionicons name="exit-outline" size={14} color={C.error} />
+            <Text style={ss.partyLeaveText}>{t.wpLeaveParty}</Text>
+          </Pressable>
         </View>
       )}
 
@@ -2402,91 +2669,151 @@ export default function WatchScreen() {
         </View>
       )}
 
-      {/* SERVER PICKER */}
+      {/* SERVER PICKER — landscape side drawer, animated in/out */}
       {pickerOpen && (
-        <View style={ss.pickerOverlay}>
-          <Pressable style={ss.pickerBackdrop} onPress={() => setPickerOpen(false)} />
-          <View style={[ss.pickerSheet, { paddingTop: (insets.top || 10) + 10 }]}>
-            <View style={ss.pickerHeader}>
-              <View style={ss.pickerHeaderLeft}>
-                <View style={ss.pickerHeaderIcon}>
-                  <Ionicons name="server-outline" size={16} color={C.accent} />
-                </View>
-                <View>
-                  <Text style={ss.pickerTitle}>Servers</Text>
-                  <Text style={ss.pickerSub}>
-                    {servers.filter((s) => s.status === "playing" || s.status === "webview").length} of {servers.length} ready
-                  </Text>
-                </View>
-              </View>
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable onPress={refreshServers} style={ss.iconBtn} hitSlop={6} disabled={refreshing}>
-                  {refreshing ? (
-                    <ActivityIndicator size="small" color={C.accent} />
-                  ) : (
-                    <Ionicons name="refresh" size={18} color={C.white} />
-                  )}
-                </Pressable>
-                <Pressable onPress={() => setPickerOpen(false)} style={ss.iconBtn} hitSlop={6}>
-                  <Ionicons name="close" size={20} color={C.white} />
-                </Pressable>
-              </View>
-            </View>
-            <ScrollView showsVerticalScrollIndicator={false} style={ss.pickerScroll} contentContainerStyle={ss.pickerContent}>
-              {servers.map((item, index) => {
-                const isActive = index === activeIdx;
-                const color = item.status === "playing" ? C.success
-                  : item.status === "webview" ? C.cyan
-                  : item.status === "failed" ? C.error
-                  : item.status === "resolving" ? C.gold
-                  : "rgba(255,255,255,0.35)";
-                const label = item.status === "playing" ? "Direct"
-                  : item.status === "webview" ? "Embed"
-                  : item.status === "failed" ? "Failed"
-                  : item.status === "resolving" ? "Connecting…"
-                  : "Tap to play";
-                const initial = (getDisplayName(item.server).charAt(0) || "S").toUpperCase();
-                return (
-                  <Pressable
-                    key={`${item.server.id}-${index}`}
-                    onPress={() => selectServer(index)}
-                    style={({ pressed }) => [ss.serverItem, isActive && ss.serverItemActive, pressed && { opacity: 0.7 }]}
-                  >
-                    <View style={[ss.serverAvatar, isActive && { borderColor: C.accent }]}>
-                      {item.status === "resolving" ? (
-                        <ActivityIndicator size="small" color={C.gold} />
-                      ) : (
-                        <Text style={[ss.serverAvatarText, isActive && { color: C.accent }]}>{initial}</Text>
-                      )}
-                      <View style={[ss.serverStatusDot, { backgroundColor: color }]} />
-                    </View>
-                    <View style={ss.serverInfo}>
-                      <Text style={[ss.serverName, isActive && ss.serverNameActive]} numberOfLines={1}>
-                        {getDisplayName(item.server)}
-                      </Text>
-                      <View style={ss.serverMetaRow}>
-                        <Text style={[ss.serverMetaLabel, { color }]}>{label}</Text>
-                        {item.server.source ? (
-                          <Text style={ss.serverMeta} numberOfLines={1}> • {item.server.source}</Text>
-                        ) : null}
-                      </View>
-                    </View>
-                    {isActive ? (
-                      <View style={ss.activeBadge}>
-                        <Ionicons name="play" size={9} color={C.white} />
-                        <Text style={ss.activeBadgeText}>NOW</Text>
-                      </View>
-                    ) : item.status === "playing" ? (
-                      <Ionicons name="flash" size={14} color={C.success} />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
+        <ServerSheet
+          servers={servers}
+          activeIdx={activeIdx}
+          refreshing={refreshing}
+          insets={insets}
+          onSelect={selectServer}
+          onRefresh={refreshServers}
+          onClose={() => setPickerOpen(false)}
+        />
       )}
       <DownloadPicker visible={!!dlPicker} meta={dlPicker} onClose={() => setDlPicker(null)} />
+    </View>
+  );
+}
+
+/* ── Server picker — landscape side drawer with slide-in motion ──────
+   Purely presentational: all playback logic (select/refresh/state) stays in
+   WatchScreen and arrives as props. Slides in from the trailing edge with a
+   backdrop fade; reduced-motion shows it instantly. RN core Animated only
+   (Reanimated crashes over OTA). */
+function ServerSheet({
+  servers,
+  activeIdx,
+  refreshing,
+  insets,
+  onSelect,
+  onRefresh,
+  onClose,
+}: {
+  servers: ServerState[];
+  activeIdx: number;
+  refreshing: boolean;
+  insets: { top: number };
+  onSelect: (index: number) => void;
+  onRefresh: () => void;
+  onClose: () => void;
+}) {
+  const reduced = useReducedMotion();
+  const hideX = Dimensions.get("window").width;
+  const slide = useRef(new Animated.Value(reduced ? 0 : 1)).current; // 1 = off-screen right
+  const backdrop = useRef(new Animated.Value(reduced ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (reduced) return;
+    Animated.parallel([
+      Animated.timing(slide, { toValue: 0, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const animateClose = () => {
+    if (reduced) { onClose(); return; }
+    Animated.parallel([
+      Animated.timing(slide, { toValue: 1, duration: 200, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) onClose(); });
+  };
+
+  const translateX = slide.interpolate({ inputRange: [0, 1], outputRange: [0, hideX] });
+
+  return (
+    <View style={ss.pickerOverlay}>
+      <Animated.View style={[ss.pickerBackdrop, { opacity: backdrop }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={animateClose} />
+      </Animated.View>
+      <Animated.View style={[ss.pickerSheet, { paddingTop: (insets.top || 10) + 10, transform: [{ translateX }] }]}>
+        <View style={ss.pickerHeader}>
+          <View style={ss.pickerHeaderLeft}>
+            <View style={ss.pickerHeaderIcon}>
+              <Ionicons name="server-outline" size={16} color={C.accent} />
+            </View>
+            <View>
+              <Text style={ss.pickerTitle}>Servers</Text>
+              <Text style={ss.pickerSub}>
+                {servers.filter((s) => s.status === "playing" || s.status === "webview").length} of {servers.length} ready
+              </Text>
+            </View>
+          </View>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable onPress={onRefresh} style={ss.iconBtn} hitSlop={6} disabled={refreshing}>
+              {refreshing ? (
+                <ActivityIndicator size="small" color={C.accent} />
+              ) : (
+                <Ionicons name="refresh" size={18} color={C.white} />
+              )}
+            </Pressable>
+            <Pressable onPress={animateClose} style={ss.iconBtn} hitSlop={6}>
+              <Ionicons name="close" size={20} color={C.white} />
+            </Pressable>
+          </View>
+        </View>
+        <ScrollView showsVerticalScrollIndicator={false} style={ss.pickerScroll} contentContainerStyle={ss.pickerContent}>
+          {servers.map((item, index) => {
+            const isActive = index === activeIdx;
+            const color = item.status === "playing" ? C.success
+              : item.status === "webview" ? C.cyan
+              : item.status === "failed" ? C.error
+              : item.status === "resolving" ? C.gold
+              : "rgba(255,255,255,0.35)";
+            const label = item.status === "playing" ? "Direct"
+              : item.status === "webview" ? "Embed"
+              : item.status === "failed" ? "Failed"
+              : item.status === "resolving" ? "Connecting…"
+              : "Tap to play";
+            const initial = (getDisplayName(item.server).charAt(0) || "S").toUpperCase();
+            return (
+              <Pressable
+                key={`${item.server.id}-${index}`}
+                onPress={() => onSelect(index)}
+                style={({ pressed }) => [ss.serverItem, isActive && ss.serverItemActive, pressed && { opacity: 0.7 }]}
+              >
+                <View style={[ss.serverAvatar, isActive && { borderColor: C.accent }]}>
+                  {item.status === "resolving" ? (
+                    <ActivityIndicator size="small" color={C.gold} />
+                  ) : (
+                    <Text style={[ss.serverAvatarText, isActive && { color: C.accent }]}>{initial}</Text>
+                  )}
+                  <View style={[ss.serverStatusDot, { backgroundColor: color }]} />
+                </View>
+                <View style={ss.serverInfo}>
+                  <Text style={[ss.serverName, isActive && ss.serverNameActive]} numberOfLines={1}>
+                    {getDisplayName(item.server)}
+                  </Text>
+                  <View style={ss.serverMetaRow}>
+                    <Text style={[ss.serverMetaLabel, { color }]}>{label}</Text>
+                    {item.server.source ? (
+                      <Text style={ss.serverMeta} numberOfLines={1}> • {item.server.source}</Text>
+                    ) : null}
+                  </View>
+                </View>
+                {isActive ? (
+                  <View style={ss.activeBadge}>
+                    <Ionicons name="play" size={9} color={C.white} />
+                    <Text style={ss.activeBadgeText}>NOW</Text>
+                  </View>
+                ) : item.status === "playing" ? (
+                  <Ionicons name="flash" size={14} color={C.success} />
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </Animated.View>
     </View>
   );
 }
@@ -2541,9 +2868,63 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   iconBtnAccent: {
-    backgroundColor: "rgba(255,90,44,0.25)",
-    borderColor: "rgba(255,90,44,0.5)",
+    backgroundColor: "rgba(139,147,255,0.25)",
+    borderColor: "rgba(139,147,255,0.5)",
   },
+
+  // ── Watch Party ──
+  partyCount: {
+    position: "absolute", top: -2, right: -2, minWidth: 15, height: 15, borderRadius: 8,
+    paddingHorizontal: 3, backgroundColor: C.accent, alignItems: "center", justifyContent: "center",
+    borderWidth: 1.5, borderColor: C.player,
+  },
+  partyCountText: { color: C.black, fontSize: 9, fontFamily: "Outfit_800ExtraBold" },
+  partyPanel: {
+    position: "absolute", right: 12, zIndex: 9, width: 256, padding: 14, borderRadius: 14,
+    backgroundColor: "rgba(10,10,11,0.94)", borderWidth: 1, borderColor: "rgba(139,147,255,0.30)",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.5, shadowRadius: 22, elevation: 12,
+  },
+  partyHeadRow: { flexDirection: "row-reverse", alignItems: "center" },
+  partyLiveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.accent, marginLeft: 7 },
+  partyHeadText: { color: C.text, fontSize: 13, fontFamily: "Cairo_700Bold", flex: 1, textAlign: "right" },
+  partyReadyPill: {
+    marginRight: 6, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 100,
+    backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.border,
+  },
+  partyReadyPillText: { color: C.textSecondary, fontSize: 10, fontFamily: "Outfit_700Bold" },
+  partyStatus: { color: C.textSecondary, fontSize: 11, marginTop: 4, textAlign: "right", fontFamily: "Cairo_500Medium" },
+
+  // Live roster — one row per member, status on the leading (left in RTL) edge.
+  // Margins, not `gap`, because RN 0.81 mis-lays `gap` under row-reverse.
+  partyRoster: { marginTop: 12 },
+  partyMember: { flexDirection: "row-reverse", alignItems: "center", paddingVertical: 5 },
+  partyMAvatar: {
+    width: 26, height: 26, borderRadius: 13, backgroundColor: C.surfaceLight, marginLeft: 9,
+    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: C.border,
+  },
+  partyAvatarHost: { borderColor: C.accent, backgroundColor: C.accentSoft },
+  partyAvatarText: { color: C.text, fontSize: 11, fontFamily: "Outfit_700Bold" },
+  partyMName: { flex: 1, color: C.text, fontSize: 12, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  partyChip: { flexDirection: "row-reverse", alignItems: "center", marginRight: 6 },
+  partyChipReady: { color: C.success, fontSize: 10, fontFamily: "Cairo_700Bold", marginRight: 4 },
+  partyChipWait: { color: C.gold, fontSize: 10, fontFamily: "Cairo_600SemiBold", marginRight: 4 },
+
+  // Host start gate. Ember-filled when armed; muted + non-interactive while any
+  // viewer is still resolving a source.
+  partyStartBtn: {
+    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
+    marginTop: 12, paddingVertical: 11, borderRadius: 100, backgroundColor: C.accent,
+  },
+  partyStartBtnDisabled: { backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.border },
+  partyStartTxt: { color: C.black, fontSize: 13, fontFamily: "Cairo_700Bold", marginRight: 6 },
+  partyStartTxtDisabled: { color: C.textMuted },
+
+  partyLeave: {
+    flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6,
+    marginTop: 10, paddingVertical: 9, borderRadius: 10,
+    backgroundColor: "rgba(255,87,71,0.10)", borderWidth: 1, borderColor: "rgba(255,87,71,0.25)",
+  },
+  partyLeaveText: { color: C.error, fontSize: 12, fontFamily: "Cairo_700Bold" },
   speedBtn: {
     height: 38, minWidth: 48, borderRadius: 19, paddingHorizontal: 10,
     backgroundColor: "rgba(255,255,255,0.1)",
@@ -2572,7 +2953,7 @@ const ss = StyleSheet.create({
   },
   playBtn: {
     width: 76, height: 76, borderRadius: 38,
-    backgroundColor: "rgba(255,90,44,0.9)",
+    backgroundColor: "rgba(139,147,255,0.9)",
     alignItems: "center", justifyContent: "center",
     borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
     shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 18, elevation: 10,
@@ -2662,8 +3043,8 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.06)",
   },
   selItemRec: {
-    backgroundColor: "rgba(255,90,44,0.1)",
-    borderColor: "rgba(255,90,44,0.4)",
+    backgroundColor: "rgba(139,147,255,0.1)",
+    borderColor: "rgba(139,147,255,0.4)",
   },
   qualityBadge: {
     paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7,
@@ -2671,7 +3052,7 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
   },
   qualityBadgeHi: {
-    backgroundColor: "rgba(255,90,44,0.16)", borderColor: "rgba(255,90,44,0.4)",
+    backgroundColor: "rgba(139,147,255,0.16)", borderColor: "rgba(139,147,255,0.4)",
   },
   qualityBadgeText: { color: "rgba(255,255,255,0.85)", fontSize: 11, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.3 },
   selFinding: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 18 },
@@ -2690,7 +3071,7 @@ const ss = StyleSheet.create({
   pickerHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
   pickerHeaderIcon: {
     width: 34, height: 34, borderRadius: 17,
-    backgroundColor: "rgba(255,90,44,0.14)", borderWidth: 1, borderColor: "rgba(255,90,44,0.3)",
+    backgroundColor: "rgba(139,147,255,0.14)", borderWidth: 1, borderColor: "rgba(139,147,255,0.3)",
     alignItems: "center", justifyContent: "center",
   },
   pickerTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
@@ -2705,8 +3086,8 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.05)",
   },
   serverItemActive: {
-    backgroundColor: "rgba(255,90,44,0.12)",
-    borderColor: "rgba(255,90,44,0.45)",
+    backgroundColor: "rgba(139,147,255,0.12)",
+    borderColor: "rgba(139,147,255,0.45)",
   },
   serverAvatar: {
     width: 34, height: 34, borderRadius: 17,

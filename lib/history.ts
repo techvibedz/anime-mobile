@@ -192,6 +192,25 @@ export function normHref(u: string | null | undefined): string {
   catch { return u.replace(/\/+$/, "").toLowerCase(); }
 }
 
+// Stabilize a per-anime key across witanime's rotating TLD (.life/.you/...).
+// Collapses the host to its second-level label (drop the TLD) + path, so the
+// SAME anime keyed while the app resolved a different TLD folds to one identity.
+// Used by notifications (dedup) AND completion badges (lookup) — a record stored
+// under witanime.life must still match a lookup resolved under witanime.you.
+// MUST stay byte-identical to normAnimeKey() in supabase/functions/episode-notifier.
+export function normAnimeKey(k: string): string {
+  if (!k) return "";
+  try {
+    const u = new URL(k);
+    const host = u.hostname.replace(/^www\./, "");
+    const labels = host.split(".");
+    const sld = labels.length >= 2 ? labels[labels.length - 2] : host;
+    return (sld + u.pathname).replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return k.trim().toLowerCase();
+  }
+}
+
 /**
  * Normalize an anime title into a cross-source key. The same anime carries an
  * identical romaji name on witanime / anime4up / anime3rb (e.g. "Tensei shitara

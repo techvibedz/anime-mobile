@@ -135,7 +135,7 @@ const styles = StyleSheet.create({
   seg: {
     minWidth: 34, alignItems: "center",
     paddingHorizontal: 6, paddingVertical: 4,
-    borderRadius: R.sm, backgroundColor: "rgba(255,122,79,0.18)",
+    borderRadius: R.sm, backgroundColor: "rgba(139,147,255,0.18)",
   },
   segValue: {
     color: C.text, fontSize: 15, fontWeight: "800",

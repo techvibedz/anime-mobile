@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -285,38 +285,38 @@ export default function ProfileScreen() {
 
         {!editing && (
         <>
-        {/* Big stats */}
-        <View style={s.bigStatsRow}>
-          {bigStats.map((st2, i) => (
-            <View key={st2.label} style={[s.bigStatCard, i > 0 && s.colSpace, { borderColor: st2.tint + "2E" }]}>
-              <LinearGradient
-                colors={[st2.tint + "1A", "transparent"]}
-                start={{ x: 0.5, y: 0 }}
-                end={{ x: 0.5, y: 1 }}
-                style={StyleSheet.absoluteFill}
-              />
-              <View style={[s.bigStatIcon, { backgroundColor: st2.tint + "22" }]}>
-                <Ionicons name={st2.icon as any} size={17} color={st2.tint} />
-              </View>
-              <Text style={s.bigStatValue} numberOfLines={1} adjustsFontSizeToFit>{st2.value}</Text>
-              <Text style={s.bigStatLabel}>{st2.label}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Mini stats */}
-        <View style={s.miniRow}>
-          {miniStats.map((m, i) => (
-            <View key={m.label} style={[s.miniCard, i > 0 && s.colSpace]}>
-              <View style={[s.miniIcon, { backgroundColor: m.color + "22" }]}>
-                <Ionicons name={m.icon as any} size={14} color={m.color} />
-              </View>
-              <View style={s.miniText}>
-                <Text style={s.miniValue}>{m.value}</Text>
-                <Text style={s.miniLabel} numberOfLines={1}>{m.label}</Text>
-              </View>
-            </View>
-          ))}
+        {/* Unified stats panel — one cohesive block: three primary stats over a
+            divider, then three secondary stats. Replaces six separate cards. */}
+        <View style={s.statsPanel}>
+          <View style={s.statsPrimaryRow}>
+            {bigStats.map((st2, i) => (
+              <Fragment key={st2.label}>
+                {i > 0 ? <View style={s.vDivider} /> : null}
+                <View style={s.statCol}>
+                  <View style={[s.statColIcon, { backgroundColor: st2.tint + "22" }]}>
+                    <Ionicons name={st2.icon as any} size={17} color={st2.tint} />
+                  </View>
+                  <Text style={s.statColValue} numberOfLines={1} adjustsFontSizeToFit>{st2.value}</Text>
+                  <Text style={s.statColLabel} numberOfLines={1}>{st2.label}</Text>
+                </View>
+              </Fragment>
+            ))}
+          </View>
+          <View style={s.hDivider} />
+          <View style={s.statsSecondaryRow}>
+            {miniStats.map((m, i) => (
+              <Fragment key={m.label}>
+                {i > 0 ? <View style={s.vDivider} /> : null}
+                <View style={s.statCol}>
+                  <View style={[s.secIcon, { backgroundColor: m.color + "22" }]}>
+                    <Ionicons name={m.icon as any} size={13} color={m.color} />
+                  </View>
+                  <Text style={s.secValue}>{m.value}</Text>
+                  <Text style={s.secLabel} numberOfLines={1}>{m.label}</Text>
+                </View>
+              </Fragment>
+            ))}
+          </View>
         </View>
 
         {/* Recent activity */}
@@ -440,26 +440,24 @@ const s = StyleSheet.create({
   },
   sinceText: { color: C.textSoft, fontSize: 12, fontFamily: "Cairo_600SemiBold", marginLeft: 6 },
 
-  bigStatsRow: { flexDirection: "row", paddingHorizontal: S.paddingContent, marginTop: 8 },
-  bigStatCard: {
-    flex: 1, alignItems: "center", paddingVertical: 18, borderRadius: R.xl,
+  // Unified stats panel — one bordered surface, two divider-separated tiers.
+  statsPanel: {
+    marginHorizontal: S.paddingContent, marginTop: 8,
+    borderRadius: R.xl, overflow: "hidden",
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    overflow: "hidden",
     ...ELEVATION_CARD,
   },
-  bigStatIcon: { width: 36, height: 36, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginBottom: 8 },
-  bigStatValue: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  bigStatLabel: { color: C.textSecondary, fontSize: 10, textAlign: "center", marginTop: 4, fontFamily: "Cairo_500Medium" },
-
-  miniRow: { flexDirection: "row", paddingHorizontal: S.paddingContent, marginTop: 10 },
-  miniCard: {
-    flex: 1, flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 12,
-    borderRadius: R.lg, backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-  },
-  miniIcon: { width: 30, height: 30, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginRight: 10 },
-  miniText: { flex: 1, alignItems: "flex-end" },
-  miniValue: { color: C.text, fontSize: 17, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  miniLabel: { color: C.textMuted, fontSize: 10, fontFamily: "Cairo_500Medium" },
+  statsPrimaryRow: { flexDirection: "row", alignItems: "stretch", paddingVertical: 18 },
+  statsSecondaryRow: { flexDirection: "row", alignItems: "stretch", paddingVertical: 14 },
+  statCol: { flex: 1, alignItems: "center", paddingHorizontal: 6 },
+  statColIcon: { width: 36, height: 36, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  statColValue: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  statColLabel: { color: C.textSecondary, fontSize: 10, textAlign: "center", marginTop: 4, fontFamily: "Cairo_500Medium" },
+  secIcon: { width: 28, height: 28, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginBottom: 6 },
+  secValue: { color: C.text, fontSize: 15, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  secLabel: { color: C.textMuted, fontSize: 10, textAlign: "center", marginTop: 3, fontFamily: "Cairo_500Medium" },
+  vDivider: { width: 1, backgroundColor: C.border, marginVertical: 4 },
+  hDivider: { height: 1, backgroundColor: C.border, marginHorizontal: 16 },
 
   section: { paddingHorizontal: S.paddingContent, marginTop: 28 },
 

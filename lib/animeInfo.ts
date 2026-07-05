@@ -19,6 +19,7 @@ import {
   buildSearchQueries,
   slugToTitle,
   pickBestMedia,
+  scoreMedia,
   collectFranchise,
   type AniListMedia,
   type RelatedAnimeEntry,
@@ -379,7 +380,7 @@ export async function getAltTitles(query: string): Promise<string[]> {
  * de-dupe, self-exclusion) lives in ./relations so it's unit-testable without
  * the RN runtime. This file only does the network call + caching. */
 
-const REL_CACHE_PREFIX = "@anime_relations_v4:";
+const REL_CACHE_PREFIX = "@anime_relations_v5:";
 
 // POST a GraphQL query to AniList, retrying the transient failures that occur
 // in the wild (429 rate-limit, 5xx). Returns parsed JSON or null.
@@ -456,7 +457,14 @@ async function doFetchRelations(title: string, href?: string | null): Promise<Re
   if (mal.malId != null) {
     const json = await anilistPost(RELATIONS_BY_MAL_QUERY, { idMal: mal.malId });
     const media = json?.data?.Media as AniListMedia | undefined;
-    if (media) {
+    // Confidence gate: Jikan's pickBest has no title-match floor, so a generically
+    // named anime can resolve to a popular-but-unrelated MAL entry — making the
+    // ENTIRE related tab a different franchise. The source URL's romaji slug is a
+    // trustworthy Latin-side anchor (Arabic scraped titles fold to empty in the
+    // scorer), so when we have one, require the bridged media to actually match it
+    // before trusting the bridge; a mismatch falls through to the already-
+    // thresholded title search. No slug → keep the bridge (nothing better to check).
+    if (media && (!slugTitle || scoreMedia(media, slugTitle) >= 50)) {
       const out = await collectFranchise(media, title, fetchMediaById);
       if (out.length > 0) return out;
     }

@@ -278,6 +278,7 @@ function AuthGate() {
         <Stack.Screen name="settings" />
         <Stack.Screen name="report" />
         <Stack.Screen name="live" />
+        <Stack.Screen name="watch-party" />
         <Stack.Screen name="users" />
         <Stack.Screen name="user/[id]" />
         <Stack.Screen name="scraper-debug" />

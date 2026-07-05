@@ -11,6 +11,8 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   AppState,
+  Animated,
+  Easing,
 } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -30,29 +32,22 @@ import { SourceRail } from "../../components/SourceRail";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
-import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
+import { PosterCard } from "../../components/PosterCard";
+import { StateView } from "../../components/StateView";
+import { C, S, R, T, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { checkOnline } from "../../lib/net";
 import { useReducedMotion } from "../../lib/motion";
+import { posterUrl } from "../../lib/img";
+import { Rise } from "../../components/Rise";
 
 const { width: SW } = Dimensions.get("window");
-const HERO_H = 440;
+const HERO_H = 460;
 const CARD_W = 140;
 const CARD_H = 200;
 const EP_W = 200;
 const EP_H = 112;
 const PAD = S.paddingContent;
-
-const CATEGORIES = [
-  { name: "Action", label: "أكشن", icon: "flash" },
-  { name: "Romance", label: "رومانسي", icon: "heart" },
-  { name: "Comedy", label: "كوميدي", icon: "happy" },
-  { name: "Fantasy", label: "خيال", icon: "sparkles" },
-  { name: "Horror", label: "رعب", icon: "skull" },
-  { name: "Sci-Fi", label: "خيال علمي", icon: "planet" },
-  { name: "Drama", label: "دراما", icon: "sad" },
-  { name: "Adventure", label: "مغامرة", icon: "compass" },
-];
 
 const SECTION_LABELS: Record<string, string> = {
   trending: "الأكثر رواجًا",
@@ -148,7 +143,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
               />
             </View>
             {item.image && (
-              <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
+              <Image source={{ uri: posterUrl(item.image, SW) }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
             )}
             {/* Protection scrim — deepened so the title / synopsis / CTAs always
                 clear WCAG AA against the darkened plate, never against raw art. */}
@@ -163,6 +158,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
               <View style={ss.chipRow}>
                 {item.genres.slice(0, 3).map((g, gi) => (
                   <View key={gi} style={ss.chip}>
+                    <GlassFill intensity={16} />
                     <Text style={ss.chipText}>{g}</Text>
                   </View>
                 ))}
@@ -173,7 +169,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
               )}
               <View style={ss.heroButtons}>
                 <Pressable
-                  style={ss.btnPrimary}
+                  style={ss.btnPrimaryWrap}
                   onPress={() => {
                     if (!item.href) return;
                     if (item.href.includes("/episode/")) {
@@ -189,8 +185,10 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
                     }
                   }}
                 >
-                  <Ionicons name="play" size={16} color={C.textOnAccent} />
-                  <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
+                  <LinearGradient colors={[C.accent, C.mint]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ss.btnPrimaryGrad}>
+                    <Ionicons name="play" size={16} color={C.textOnAccent} />
+                    <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
+                  </LinearGradient>
                 </Pressable>
                 <Pressable
                   style={ss.btnGlass}
@@ -207,16 +205,16 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
           </View>
         ))}
       </ScrollView>
-      {/* Dot pagination */}
+      {/* Segmented position indicator — pinned bottom-center of the hero (the
+          conventional carousel-indicator spot). Single source of truth is
+          heroIndex; sits in the hero's lower padding, clear of the CTAs. */}
       {featured.length > 1 && (
-        <View style={ss.dots}>
-          {featured.map((_, i) => (
-            <View key={i} style={[ss.dot, i === heroIndex && ss.dotActive]} />
+        <View style={ss.heroTrack} pointerEvents="none">
+          {featured.map((_, si) => (
+            <View key={si} style={[ss.seg, si === heroIndex && ss.segActive]} />
           ))}
         </View>
       )}
-      {/* Accent glow line */}
-      <View style={ss.glowLine} />
     </View>
   );
 });
@@ -314,11 +312,21 @@ export default function HomeScreen() {
   // episodes to the server for closed-app push (with image). Both run in the
   // background so they never block the home feed.
   useEffect(() => {
-    syncEpisodeNotifications()
-      .then(() => getUnreadCount())
-      .then(setUnread)
-      .catch(() => {});
-    reportRecentEpisodes().catch(() => {});
+    const run = () => {
+      // Carries reconcileCompletionFromEpisodes — re-running on foreground (not
+      // just mount) is what clears a stale "caught up" badge after a new episode
+      // drops while the app stayed alive. Throttled inside syncEpisodeNotifications.
+      syncEpisodeNotifications()
+        .then(() => getUnreadCount())
+        .then(setUnread)
+        .catch(() => {});
+      reportRecentEpisodes().catch(() => {});
+    };
+    run();
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") run();
+    });
+    return () => sub.remove();
   }, []);
 
   // Refresh history + unread badge when the tab regains focus
@@ -365,33 +373,26 @@ export default function HomeScreen() {
             <View style={ss.logoDot} />
             <Text style={ss.logoText}>Pantoufa</Text>
           </View>
-          <View style={ss.topBarActions}>
-            <Pressable onPress={() => router.push("/schedule")} hitSlop={8}>
-              <View style={ss.glassBtn}>
-                <GlassFill intensity={20} />
-                <Ionicons name="calendar-outline" size={18} color={C.text} />
-              </View>
+          {/* Actions consolidated into one frosted segmented cluster — a single
+              premium control instead of three scattered circles. Each segment
+              keeps its own 44px hit target + handler. */}
+          <View style={ss.actionCluster}>
+            <GlassFill intensity={20} />
+            <Pressable style={ss.clusterBtn} onPress={() => router.push("/schedule")} hitSlop={8}>
+              <Ionicons name="calendar-outline" size={18} color={C.text} />
             </Pressable>
-
-            <Pressable onPress={() => router.push("/notifications")} hitSlop={8}>
-              <View>
-                <View style={ss.glassBtn}>
-                  <GlassFill intensity={20} />
-                  <Ionicons name={unread > 0 ? "notifications" : "notifications-outline"} size={18} color={unread > 0 ? C.accent : C.text} />
+            <View style={ss.clusterDivider} />
+            <Pressable style={ss.clusterBtn} onPress={() => router.push("/notifications")} hitSlop={8}>
+              <Ionicons name={unread > 0 ? "notifications" : "notifications-outline"} size={18} color={unread > 0 ? C.accent : C.text} />
+              {unread > 0 && (
+                <View style={ss.notifBadge}>
+                  <Text style={ss.notifBadgeText}>{unread > 9 ? "9+" : unread}</Text>
                 </View>
-                {unread > 0 && (
-                  <View style={ss.notifBadge}>
-                    <Text style={ss.notifBadgeText}>{unread > 9 ? "9+" : unread}</Text>
-                  </View>
-                )}
-              </View>
+              )}
             </Pressable>
-
-            <Pressable onPress={openSidebar} hitSlop={8}>
-              <View style={ss.glassBtn}>
-                <GlassFill intensity={20} />
-                <Ionicons name="menu" size={20} color={C.text} />
-              </View>
+            <View style={ss.clusterDivider} />
+            <Pressable style={ss.clusterBtn} onPress={openSidebar} hitSlop={8}>
+              <Ionicons name="menu" size={20} color={C.text} />
             </Pressable>
           </View>
         </View>
@@ -413,10 +414,14 @@ export default function HomeScreen() {
         {/* ── Hero Carousel (state isolated — see HeroCarousel) ─────── */}
         {featured.length > 0 && <HeroCarousel featured={featured} />}
 
-        {/* ── Continue Watching ─────────────── */}
+        {/* ── Resume shelf (Continue Watching) ───────────────
+            Promoted onto a frosted panel that OVERLAPS the hero's lower edge —
+            the privileged "get back to it" surface floating over the cinematic
+            plate. Same data + handlers as before, new hierarchy. */}
         {history.length > 0 && (
-          <View style={ss.section}>
-            <View style={ss.sectionHeader}>
+          <View style={ss.shelf}>
+            <GlassFill intensity={26} />
+            <View style={ss.shelfHeader}>
               <View style={ss.sectionTitleRow}>
                 <View style={ss.sectionTick} />
                 <Text style={ss.sectionTitle}>{t.continueWatching}</Text>
@@ -425,7 +430,7 @@ export default function HomeScreen() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
+              contentContainerStyle={{ paddingHorizontal: PAD, gap: 14, paddingBottom: 2 }}
             >
               {history.slice(0, 10).map((entry) => (
                 <ContinueCard
@@ -445,20 +450,18 @@ export default function HomeScreen() {
           const MAX_PREVIEW = 15;
           const previewItems = section.items.slice(0, MAX_PREVIEW);
           const hasMore = section.items.length > MAX_PREVIEW;
+          const openAll = () => {
+            const localized = SECTION_LABELS[section.id] || section.title;
+            router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(localized)}&type=${section.type}`);
+          };
           return (
-            <View key={section.id} style={ss.section}>
+            <Rise key={section.id} style={ss.section} delay={Math.min(si, 6) * 70}>
               <View style={ss.sectionHeader}>
                 <View style={ss.sectionTitleRow}>
                   <View style={ss.sectionTick} />
                   <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
                 </View>
-                <Pressable
-                  style={ss.seeAllBtn}
-                  onPress={() => {
-                    const localized = SECTION_LABELS[section.id] || section.title;
-                    router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(localized)}&type=${section.type}`);
-                  }}
-                >
+                <Pressable style={ss.seeAllBtn} onPress={openAll}>
                   <Text style={ss.seeAllText}>{t.seeAll(section.items.length)}</Text>
                   <Ionicons name="chevron-back" size={12} color={C.textSecondary} />
                 </Pressable>
@@ -476,13 +479,7 @@ export default function HomeScreen() {
                       <EpisodeCardView key={item.href || i} item={item} onPress={openEpisodePopup} />
                     ))}
                 {hasMore && (
-                  <Pressable
-                    style={ss.seeAllCard}
-                    onPress={() => {
-                      const localized = SECTION_LABELS[section.id] || section.title;
-                      router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(localized)}&type=${section.type}`);
-                    }}
-                  >
+                  <Pressable style={ss.seeAllCard} onPress={openAll}>
                     <View style={ss.seeAllCircle}>
                       <Ionicons name="arrow-back" size={20} color={C.accent} />
                     </View>
@@ -490,7 +487,7 @@ export default function HomeScreen() {
                   </Pressable>
                 )}
               </ScrollView>
-            </View>
+            </Rise>
           );
         })}
 
@@ -498,105 +495,115 @@ export default function HomeScreen() {
         <SourceRail kind="season" title={t.railThisSeason} order={0} />
         <SourceRail kind="movies" title={t.railMovies} order={1} />
 
-        {/* ── Categories ──────────────────────── */}
-        <View style={ss.section}>
-          <View style={ss.sectionHeader}>
-            <View style={ss.sectionTitleRow}>
-              <View style={ss.sectionTick} />
-              <Text style={ss.sectionTitle}>{t.categories}</Text>
-            </View>
-          </View>
-          <View style={ss.catGrid}>
-            {CATEGORIES.map((cat) => (
-              <Pressable
-                key={cat.name}
-                style={({ pressed }) => [ss.catCard, { opacity: pressed ? 0.8 : 1 }]}
-                onPress={() => router.push(`/(tabs)/search?genre=${encodeURIComponent(cat.name)}`)}
-              >
-                <View style={ss.catGrad}>
-                  <Ionicons name={cat.icon as any} size={19} color={C.ember} />
-                  <Text style={ss.catName}>{cat.label}</Text>
-                </View>
-              </Pressable>
-            ))}
-          </View>
-        </View>
-
         {/* Banner ad at the end of the feed (no-op until configured) */}
         <AdBanner style={{ marginTop: S.xxl }} />
 
         <View style={{ height: insets.bottom + 100 }} />
       </ScrollView>
 
-      {/* Episode tap popup — watch directly or open anime page */}
-      <EpisodeActionModal episode={episodePopup} onClose={closeEpisodePopup} />
+      {/* Episode tap → slide-up bottom sheet (watch directly or open anime page).
+          Mounted only while open so the entrance animation fires each time. */}
+      {episodePopup && <EpisodeActionSheet episode={episodePopup} onClose={closeEpisodePopup} />}
     </View>
   );
 }
 
-/* ── Episode tap modal ──────────────────────── */
+/* ── Episode tap sheet ──────────────────────── */
 
-function EpisodeActionModal({ episode, onClose }: { episode: EpisodeItem | null; onClose: () => void }) {
-  if (!episode) return null;
+function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const reduced = useReducedMotion();
+  // Slide-up + backdrop-fade. RN core Animated (Reanimated crashes over OTA).
+  const translateY = useRef(new Animated.Value(reduced ? 0 : 520)).current;
+  const backdrop = useRef(new Animated.Value(reduced ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (reduced) return;
+    Animated.parallel([
+      Animated.timing(translateY, { toValue: 0, duration: 300, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  // Animated dismiss — only for the backdrop/cancel affordances. The action
+  // buttons keep their exact original onPress (they navigate away, so an exit
+  // animation would just delay the transition).
+  const animateClose = () => {
+    if (reduced) { onClose(); return; }
+    Animated.parallel([
+      Animated.timing(translateY, { toValue: 520, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) onClose(); });
+  };
+
   return (
-    <Modal transparent animationType="fade" visible onRequestClose={onClose}>
-      <Pressable style={ss.modalBackdrop} onPress={onClose}>
-        <Pressable style={ss.modalSheet} onPress={() => {}}>
-          {episode.image ? (
-            <Image source={{ uri: episode.image }} style={ss.modalImage} contentFit="cover" />
-          ) : (
-            <View style={[ss.modalImage, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
-              <Ionicons name="film-outline" size={32} color={C.textMuted} />
-            </View>
-          )}
-          <Text style={ss.modalTitle} numberOfLines={2}>{episode.title}</Text>
-          {episode.animeTitle ? <Text style={ss.modalSub} numberOfLines={1}>{episode.animeTitle}</Text> : null}
-
-          <Pressable
-            style={ss.modalBtnPrimary}
-            onPress={() => {
-              onClose();
-              const params: Record<string, string> = {};
-              if (episode.image) params.img = encodeURIComponent(episode.image);
-              // Pass animeHref so the watch screen can compute prev/next.
-              const rawAnime = episode.animeHref || episode.href;
-              const animeUrl = rawAnime && rawAnime.includes('/anime/')
-                ? rawAnime
-                : (toAnimeUrl(rawAnime) ?? '');
-              if (animeUrl) params.anime = animeUrl;
-              // Defer one frame so the modal-close + button feedback paint
-              // before the heavy watch-screen mount blocks the JS thread.
-              requestAnimationFrame(() => router.push({
-                pathname: `/watch/${encodeURIComponent(episode.href)}`,
-                params,
-              }));
-            }}
-          >
-            <Ionicons name="play" size={16} color={C.textOnAccent} />
-            <Text style={ss.modalBtnPrimaryText}>{t.watchEpisode}</Text>
-          </Pressable>
-
-          <Pressable
-            style={ss.modalBtnSecondary}
-            onPress={() => {
-              onClose();
-              // Cached payloads sometimes have an episode URL in animeHref.
-              // Normalize so we always navigate to the real anime page.
-              const raw = episode.animeHref || episode.href;
-              const animeUrl = raw && raw.includes('/anime/') ? raw : (toAnimeUrl(raw) ?? raw);
-              if (animeUrl) router.push(`/anime/${encodeURIComponent(animeUrl)}`);
-            }}
-            disabled={!episode.animeHref && !episode.href}
-          >
-            <Ionicons name="information-circle-outline" size={16} color={C.text} />
-            <Text style={ss.modalBtnSecondaryText}>{t.openAnimePage}</Text>
-          </Pressable>
-
-          <Pressable style={ss.modalCancel} onPress={onClose}>
-            <Text style={ss.modalCancelText}>{t.cancel}</Text>
-          </Pressable>
+    <Modal transparent visible animationType="none" onRequestClose={animateClose}>
+      <View style={{ flex: 1 }}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={animateClose}>
+          <Animated.View style={[StyleSheet.absoluteFill, ss.sheetBackdrop, { opacity: backdrop }]} />
         </Pressable>
-      </Pressable>
+        <View style={ss.sheetAnchor} pointerEvents="box-none">
+          <Animated.View
+            style={[ss.sheetPanel, { paddingBottom: insets.bottom + 16, transform: [{ translateY }] }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={ss.sheetGrabber} />
+            {episode.image ? (
+              <Image source={{ uri: episode.image }} style={ss.sheetImage} contentFit="cover" />
+            ) : (
+              <View style={[ss.sheetImage, { alignItems: "center", justifyContent: "center" }]}>
+                <Ionicons name="film-outline" size={32} color={C.textMuted} />
+              </View>
+            )}
+            <Text style={ss.sheetTitle} numberOfLines={2}>{episode.title}</Text>
+            {episode.animeTitle ? <Text style={ss.sheetSub} numberOfLines={1}>{episode.animeTitle}</Text> : null}
+
+            <Pressable
+              style={ss.sheetBtnPrimary}
+              onPress={() => {
+                onClose();
+                const params: Record<string, string> = {};
+                if (episode.image) params.img = encodeURIComponent(episode.image);
+                // Pass animeHref so the watch screen can compute prev/next.
+                const rawAnime = episode.animeHref || episode.href;
+                const animeUrl = rawAnime && rawAnime.includes('/anime/')
+                  ? rawAnime
+                  : (toAnimeUrl(rawAnime) ?? '');
+                if (animeUrl) params.anime = animeUrl;
+                // Defer one frame so the modal-close + button feedback paint
+                // before the heavy watch-screen mount blocks the JS thread.
+                requestAnimationFrame(() => router.push({
+                  pathname: `/watch/${encodeURIComponent(episode.href)}`,
+                  params,
+                }));
+              }}
+            >
+              <Ionicons name="play" size={16} color={C.textOnAccent} />
+              <Text style={ss.sheetBtnPrimaryText}>{t.watchEpisode}</Text>
+            </Pressable>
+
+            <Pressable
+              style={ss.sheetBtnSecondary}
+              onPress={() => {
+                onClose();
+                // Cached payloads sometimes have an episode URL in animeHref.
+                // Normalize so we always navigate to the real anime page.
+                const raw = episode.animeHref || episode.href;
+                const animeUrl = raw && raw.includes('/anime/') ? raw : (toAnimeUrl(raw) ?? raw);
+                if (animeUrl) router.push(`/anime/${encodeURIComponent(animeUrl)}`);
+              }}
+              disabled={!episode.animeHref && !episode.href}
+            >
+              <Ionicons name="information-circle-outline" size={16} color={C.text} />
+              <Text style={ss.sheetBtnSecondaryText}>{t.openAnimePage}</Text>
+            </Pressable>
+
+            <Pressable style={ss.sheetCancel} onPress={animateClose}>
+              <Text style={ss.sheetCancelText}>{t.cancel}</Text>
+            </Pressable>
+          </Animated.View>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -605,32 +612,19 @@ function EpisodeActionModal({ episode, onClose }: { episode: EpisodeItem | null;
 
 const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: AnimeItem; index: number }) {
   return (
-    <Pressable
+    <PosterCard
+      image={item.image}
+      title={item.title}
+      subtitle={item.type || undefined}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-      style={({ pressed }) => ({ width: CARD_W, opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] })}
-    >
-      <View style={ss.card}>
-        {item.image ? (
-          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
-        ) : (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
-            <Ionicons name="image-outline" size={28} color={C.textMuted} />
-          </View>
-        )}
-        {item.isNew && (
-          <View style={ss.newBadge}>
-            <Text style={ss.badgeText}>{t.newBadge}</Text>
-          </View>
-        )}
-        <MalCardBadge title={item.title} />
-        <LinearGradient colors={["transparent", "rgba(10,10,11,0.95)"]} style={ss.cardGrad} />
-        {/* Rank number with accent stroke effect */}
-        <Text style={ss.cardRank}>{index + 1}</Text>
-        <CompletionBadge hrefs={[item.href, ...Object.values(item.sourceHrefs || {})]} titles={[item.title]} />
-      </View>
-      <Text style={ss.cardTitle} numberOfLines={1}>{item.title}</Text>
-      {item.type && <Text style={ss.cardType}>{item.type}</Text>}
-    </Pressable>
+      width={CARD_W}
+      rank={index + 1}
+      newBadge={item.isNew}
+      recyclingKey={item.href}
+      titleLines={1}
+      topRight={<MalCardBadge title={item.title} />}
+      bottomRight={<CompletionBadge hrefs={[item.href, ...Object.values(item.sourceHrefs || {})]} titles={[item.title]} />}
+    />
   );
 });
 
@@ -657,14 +651,9 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
         )}
         {/* Play button overlay */}
         <View style={ss.epPlayOverlay}>
-          <LinearGradient
-            colors={[C.accent, C.violet]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={ss.epPlayBtn}
-          >
+          <View style={ss.epPlayBtn}>
             <Ionicons name="play" size={14} color="#fff" />
-          </LinearGradient>
+          </View>
         </View>
         <CompletionBadge hrefs={[item.animeHref]} titles={[item.animeTitle]} />
       </View>
@@ -679,7 +668,7 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
 function extractEpisodeNumber(title: string): number | null {
   if (!title) return null;
   // Arabic numerals
-  const arMatch = title.match(/الحلقة[\s\-_]*([\u0660-\u0669]+)/);
+  const arMatch = title.match(/الحلقة[\s\-_]*([٠-٩]+)/);
   if (arMatch) {
     const ar = arMatch[1];
     let num = "";
@@ -751,14 +740,9 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
           />
         )}
         <View style={ss.epPlayOverlay}>
-          <LinearGradient
-            colors={[C.accent, C.violet]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={ss.epPlayBtn}
-          >
+          <View style={ss.epPlayBtn}>
             <Ionicons name="play" size={14} color="#fff" />
-          </LinearGradient>
+          </View>
         </View>
         {/* Episode number badge */}
         {epNum !== null && (
@@ -814,22 +798,14 @@ function HomeEmpty({
           </Pressable>
         </View>
       </View>
-      <View style={ss.emptyWrap}>
-        <View style={ss.emptyIcon}>
-          <Ionicons name={offline ? "cloud-offline-outline" : "alert-circle-outline"} size={40} color={C.accent} />
-        </View>
-        <Text style={ss.emptyTitle}>{offline ? t.offlineTitle : t.homeEmptyTitle}</Text>
-        <Text style={ss.emptyDesc}>{offline ? t.offlineSub : t.homeEmptySub}</Text>
-        {/* Downloaded episodes play with no connection — always offer them. */}
-        <Pressable style={ss.emptyBtn} onPress={() => router.push("/downloads")}>
-          <Ionicons name="download" size={16} color={C.textOnAccent} />
-          <Text style={ss.emptyBtnText}>{t.watchDownloads}</Text>
-        </Pressable>
-        <Pressable style={ss.emptyBtnGhost} onPress={onRetry}>
-          <Ionicons name="refresh" size={15} color={C.text} />
-          <Text style={ss.emptyBtnGhostText}>{t.retry}</Text>
-        </Pressable>
-      </View>
+      <StateView
+        icon={offline ? "cloud-offline-outline" : "alert-circle-outline"}
+        variant={offline ? "offline" : "error"}
+        title={offline ? t.offlineTitle : t.homeEmptyTitle}
+        message={offline ? t.offlineSub : t.homeEmptySub}
+        primary={{ label: t.watchDownloads, onPress: () => router.push("/downloads"), icon: "download" }}
+        secondary={{ label: t.retry, onPress: onRetry, icon: "refresh" }}
+      />
     </View>
   );
 }
@@ -865,33 +841,6 @@ function HomeSkeleton() {
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
-  // Empty / error state
-  emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 40, gap: 14 },
-  emptyIcon: {
-    width: 88, height: 88, borderRadius: R.circle,
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
-    alignItems: "center", justifyContent: "center", marginBottom: 6,
-  },
-  emptyTitle: {
-    color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Cairo_700Bold", textAlign: "center",
-  },
-  emptyDesc: {
-    color: C.textSecondary, fontSize: 14, lineHeight: 21, textAlign: "center",
-    fontFamily: "Cairo_500Medium",
-  },
-  emptyBtn: {
-    flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8,
-    backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 13, paddingHorizontal: 28,
-    ...ELEVATION_GLOW,
-  },
-  emptyBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
-  emptyBtnGhost: {
-    flexDirection: "row", alignItems: "center", gap: 7, marginTop: 2,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    borderRadius: R.pill, paddingVertical: 11, paddingHorizontal: 24,
-  },
-  emptyBtnGhostText: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-
   // Top bar
   topBar: {
     position: "absolute", top: 0, left: 0, right: 0, zIndex: 50,
@@ -906,18 +855,28 @@ const ss = StyleSheet.create({
     width: 7, height: 7, borderRadius: 1.5, backgroundColor: C.ember,
   },
   logoText: {
-    fontSize: 23, fontWeight: "900", color: C.bone, letterSpacing: -0.9,
-    fontFamily: "Outfit_900Black",
+    ...T.display, fontSize: 23, letterSpacing: -0.9,
+    color: C.bone,
   },
+  // Standalone glass button — used by HomeEmpty's single menu control. 44px floor.
   glassBtn: {
-    width: 36, height: 36, borderRadius: R.circle, overflow: "hidden",
+    width: 44, height: 44, borderRadius: R.circle, overflow: "hidden",
     alignItems: "center", justifyContent: "center",
     borderWidth: 1, borderColor: C.glassBorder,
   },
-  topBarActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  // Frosted segmented action cluster — one connected control, three 44px segments.
+  actionCluster: {
+    flexDirection: "row", alignItems: "center", height: 44,
+    borderRadius: R.circle, overflow: "hidden",
+    borderWidth: 1, borderColor: C.glassBorder,
+  },
+  clusterBtn: {
+    width: 44, height: 44, alignItems: "center", justifyContent: "center",
+  },
+  clusterDivider: { width: 1, height: 22, backgroundColor: C.glassBorder },
   notifBadge: {
-    position: "absolute", top: -3, right: -3,
-    minWidth: 17, height: 17, borderRadius: 9, paddingHorizontal: 4,
+    position: "absolute", top: 5, right: 5,
+    minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4,
     backgroundColor: C.accent, alignItems: "center", justifyContent: "center",
     borderWidth: 1.5, borderColor: C.bg,
   },
@@ -930,27 +889,38 @@ const ss = StyleSheet.create({
   meshBg: { ...StyleSheet.absoluteFillObject },
   heroContent: {
     position: "absolute", bottom: 0, left: 0, right: 0,
-    paddingHorizontal: PAD, paddingBottom: 44, gap: 14,
+    paddingHorizontal: PAD, paddingBottom: 58, gap: 14,
   },
+  // Segmented position indicator — pinned to the hero's bottom-center, in the
+  // lower padding zone below the CTAs (replaces the old dots).
+  heroTrack: {
+    position: "absolute", bottom: 18, left: 0, right: 0,
+    flexDirection: "row", justifyContent: "center", gap: 6,
+  },
+  seg: { width: 16, height: 3, borderRadius: 2, backgroundColor: C.controlDim },
+  segActive: { width: 28, backgroundColor: C.accent },
   chipRow: { flexDirection: "row", gap: 7 },
   // Editorial outline tags — hairline border, no fill.
   chip: {
-    paddingHorizontal: 11, paddingVertical: 4, borderRadius: R.sm,
+    paddingHorizontal: 11, paddingVertical: 4, borderRadius: R.sm, overflow: "hidden",
     borderWidth: 1, borderColor: C.borderLight,
   },
   chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
   heroTitle: {
-    color: C.bone, fontSize: 36, fontWeight: "900", lineHeight: 40, letterSpacing: -1.0,
-    fontFamily: "Cairo_700Bold",
+    ...TAr.display, fontSize: 36, lineHeight: 40,
+    color: C.bone,
   },
   heroDesc: {
-    color: C.textSecondary, fontSize: 14, lineHeight: 22, fontFamily: "Cairo_500Medium",
-    maxWidth: 320,
+    ...TAr.body, color: C.textSecondary, maxWidth: 320,
   },
   heroButtons: { flexDirection: "row", gap: 10, marginTop: 6 },
-  btnPrimary: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.ember, borderRadius: R.pill, paddingVertical: 15,
+  btnPrimaryWrap: {
+    flex: 1, borderRadius: R.pill,
+    ...ELEVATION_GLOW,
+  },
+  btnPrimaryGrad: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 15, borderRadius: R.pill, overflow: "hidden",
   },
   btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
   // Editorial ghost — hairline outline, bone label (no frosted glass).
@@ -961,20 +931,18 @@ const ss = StyleSheet.create({
   },
   btnGlassText: { color: C.bone, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
-  // Dots
-  dots: {
-    position: "absolute", bottom: 16, left: 0, right: 0,
-    flexDirection: "row", justifyContent: "center", gap: 6,
+  // Resume shelf — frosted panel that sits cleanly below the hero (a small gap
+  // keeps its rounded top reading as a distinct floating surface, not fused to
+  // the hero art above it).
+  shelf: {
+    marginTop: S.md,
+    borderTopLeftRadius: R.xl, borderTopRightRadius: R.xl,
+    overflow: "hidden", paddingTop: 18, paddingBottom: 16,
+    borderTopWidth: 1, borderColor: C.glassBorder,
+    ...ELEVATION_NAV,
   },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "rgba(255,255,255,0.2)" },
-  dotActive: {
-    width: 24, backgroundColor: C.accent,
-  },
-
-  // Hairline divider under the hero — a quiet seam, not a glowing strip.
-  glowLine: {
-    height: 1, marginHorizontal: "10%",
-    backgroundColor: C.glowLine,
+  shelfHeader: {
+    paddingHorizontal: PAD, marginBottom: 14,
   },
 
   // Sections
@@ -989,7 +957,7 @@ const ss = StyleSheet.create({
     width: 3, height: 20, borderRadius: 0, backgroundColor: C.ember,
   },
   sectionTitle: {
-    color: C.bone, fontSize: 22, fontWeight: "900", letterSpacing: -0.4, fontFamily: "Cairo_700Bold",
+    ...TAr.h2, color: C.bone,
   },
   // "See all" stays ash — ember is reserved for the primary action.
   seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 3 },
@@ -1007,23 +975,6 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   seeAllCardText: { color: C.accent, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-
-  // Categories grid
-  catGrid: {
-    flexDirection: "row", flexWrap: "wrap", gap: 10,
-    paddingHorizontal: PAD,
-  },
-  catCard: {
-    width: (SW - PAD * 2 - 10) / 2, height: 60, borderRadius: R.lg, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.line,
-  },
-  catGrad: {
-    flex: 1, flexDirection: "row", alignItems: "center", gap: 11,
-    paddingHorizontal: 16,
-  },
-  catName: {
-    color: C.bone, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold",
-  },
 
   // Progress bar (continue watching)
   progressBarBg: {
@@ -1044,39 +995,14 @@ const ss = StyleSheet.create({
   },
   deleteBtn: {
     position: "absolute", top: 6, right: 6,
-    width: 20, height: 20, borderRadius: 10,
+    width: 28, height: 28, borderRadius: R.circle,
     backgroundColor: "rgba(0,0,0,0.6)", alignItems: "center", justifyContent: "center",
   },
 
-  // Anime cards
-  card: {
-    width: CARD_W, height: CARD_H, borderRadius: R.lg, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
-  },
-  cardGrad: { position: "absolute", bottom: 0, left: 0, right: 0, height: 80 },
-  cardRank: {
-    position: "absolute", bottom: -8, left: -4,
-    fontSize: 48, fontWeight: "900", lineHeight: 48, letterSpacing: -1.5,
-    color: "#ffffff", fontFamily: "Outfit_900Black",
-    textShadowColor: "rgba(0,0,0,0.6)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-    opacity: 0.95,
-  },
-  cardTitle: {
-    color: C.text, fontSize: 11, fontWeight: "600", lineHeight: 14,
-    marginTop: 10, width: CARD_W, fontFamily: "Cairo_600SemiBold",
-  },
-  cardType: {
-    color: C.textMuted, fontSize: 10, lineHeight: 13, marginTop: 3, width: CARD_W,
-    fontFamily: "Cairo_500Medium",
-  },
-
-  // Badges
+  // Badges (used by EpisodeCardView + ContinueCard)
   newBadge: {
     position: "absolute", top: 8, left: 8, zIndex: 2,
-    backgroundColor: C.accent, borderRadius: R.xs, paddingHorizontal: 7, paddingVertical: 3,
+    backgroundColor: C.ember, borderRadius: R.xs, paddingHorizontal: 7, paddingVertical: 3,
   },
   badgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "700", letterSpacing: 0.8,
@@ -1084,21 +1010,13 @@ const ss = StyleSheet.create({
   },
   epNumBadge: {
     position: "absolute", top: 8, left: 8, zIndex: 2,
-    backgroundColor: C.accent, borderRadius: R.sm,
+    backgroundColor: C.ember, borderRadius: R.sm,
     paddingHorizontal: 8, paddingVertical: 4,
     borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
   },
   epNumBadgeText: {
     color: "#ffffff", fontSize: 10, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.5,
   },
-  ratingBadge: {
-    position: "absolute", top: 8, right: 8, zIndex: 2,
-    flexDirection: "row", alignItems: "center", gap: 3,
-    backgroundColor: C.surfaceGlass, borderRadius: R.sm,
-    paddingHorizontal: 8, paddingVertical: 3,
-    borderWidth: 1, borderColor: C.glassBorder,
-  },
-  ratingText: { color: C.text, fontSize: 10, fontWeight: "700", fontFamily: "Outfit_700Bold" },
 
   // Episode cards
   epCard: {
@@ -1125,46 +1043,50 @@ const ss = StyleSheet.create({
     fontFamily: "Cairo_500Medium",
   },
 
-  // Episode action modal
-  modalBackdrop: {
-    flex: 1, backgroundColor: "rgba(0,0,0,0.75)",
-    alignItems: "center", justifyContent: "center", padding: 24,
+  // Episode action bottom sheet
+  sheetBackdrop: { backgroundColor: "rgba(0,0,0,0.72)" },
+  sheetAnchor: { flex: 1, justifyContent: "flex-end" },
+  sheetPanel: {
+    backgroundColor: C.playerSheet,
+    borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
+    paddingHorizontal: 20, paddingTop: 12,
+    borderTopWidth: 1, borderColor: C.border,
+    gap: 10,
+    ...ELEVATION_NAV,
   },
-  modalSheet: {
-    width: "100%", maxWidth: 360,
-    backgroundColor: C.bg, borderRadius: R.xl, padding: 20,
-    borderWidth: 1, borderColor: C.border,
-    alignItems: "stretch", gap: 10,
+  sheetGrabber: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: C.controlDim,
+    alignSelf: "center", marginBottom: 8,
   },
-  modalImage: {
+  sheetImage: {
     width: "100%", aspectRatio: 16 / 9, borderRadius: R.lg,
     backgroundColor: C.surface, marginBottom: 4,
   },
-  modalTitle: {
+  sheetTitle: {
     color: C.text, fontSize: 16, fontWeight: "700",
     fontFamily: "Cairo_700Bold", textAlign: "center",
   },
-  modalSub: {
+  sheetSub: {
     color: C.textMuted, fontSize: 12, textAlign: "center",
     fontFamily: "Cairo_500Medium", marginBottom: 6,
   },
-  modalBtnPrimary: {
+  sheetBtnPrimary: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.accent, paddingVertical: 12, borderRadius: R.pill,
+    backgroundColor: C.accent, paddingVertical: 14, borderRadius: R.pill,
   },
-  modalBtnPrimaryText: {
+  sheetBtnPrimaryText: {
     color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold",
   },
-  modalBtnSecondary: {
+  sheetBtnSecondary: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    paddingVertical: 12, borderRadius: R.pill,
+    paddingVertical: 14, borderRadius: R.pill,
   },
-  modalBtnSecondaryText: {
+  sheetBtnSecondaryText: {
     color: C.text, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold",
   },
-  modalCancel: { paddingVertical: 10, alignItems: "center" },
-  modalCancelText: {
+  sheetCancel: { paddingVertical: 10, alignItems: "center" },
+  sheetCancelText: {
     color: C.textMuted, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_500Medium",
   },
 });

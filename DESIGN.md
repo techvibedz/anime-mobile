@@ -1,94 +1,96 @@
 # Design
 
-Visual system for Pantoufa. Register: **product** (design serves the content).
-Identity: **SUMI — Ink & Ember**. A from-scratch language that replaced the old
-neon-on-navy "Void". Vibe: an editorial film-house / cinema journal — warm
-ink-black paper, bone-white type, a single ember spark. High-contrast, type-led,
-hairlines instead of glow. Deliberately departs from the AI-default "dark-navy +
-neon + glass" anime app.
+Visual system for Pantoufa. Register: **spatial** (glass panels floating in depth).
+Identity: **HOLO SPATIAL** — a from-scratch language that replaced "SUMI — Ink &
+Ember". Vibe: Apple Vision Pro / visionOS — a neutral near-black void with
+translucent LIGHT glass panels, heavy blur, soft periwinkle→mint iridescence, and
+generous rounding. Dimensional and layered where Sumi was flat editorial print.
 
-> Supersedes both the original green `#06C149` doc AND the interim quieter-Void
-> doc. Tokens below mirror `lib/theme.ts`, the single source of truth. Token
-> *names* were kept stable across the Void→Sumi switch so screens re-skin via
-> cascade; only the values changed.
+> Supersedes the Sumi (Ink & Ember) and Void docs. Tokens below mirror
+> `lib/theme.ts`, the single source of truth. Token *names* were kept stable
+> across Sumi→Holo so screens re-skin via cascade; only the values changed. The
+> `ember`/`violet` aliases now resolve to the Holo **periwinkle** accent.
 
 ## Color
 
-Warm ink ramp + one ember accent. Contrast ratios are against `bg` (#0A0A0B).
+Neutral void + a two-hue periwinkle/mint accent. Contrast is against `bg` (#08090C).
 
-### Backgrounds — tonal steps, not glass
-- `bg` / `ink` #0A0A0B — warm near-black canvas (OLED-true)
-- `bgDeep` #050506 — deepest void
-- `surface` / `inkRaised` #141416 — cards, rails, sheets
-- `surfaceLight` / `inkHigh` #1C1C1F — pressed / elevated
-- `player` #000000, `playerSheet` #0C0C0E — true-black video + sheets
+### Backgrounds — the void + glass panels
+- `bg` / `ink` #08090C — neutral near-black canvas (OLED-true)
+- `bgDeep` #050507 — deepest void
+- `surface` / `inkRaised` #14161C — opaque raised panel (cards/fallbacks, safe default)
+- `surfaceLight` / `inkHigh` #1C1F27 — pressed / elevated opaque
+- `surfaceGlass` rgba(255,255,255,0.08), `glass` rgba(255,255,255,0.07) — TRUE glass;
+  pair with `expo-blur` `BlurView` for the visionOS frosted-panel look
+- `player` #000000, `playerSheet` #0A0B0F — true-black video + sheets
 
-### Accent — EMBER (the single spark)
-- `accent` / `ember` #FF5A2C — Play · active · live · primary CTA only. Never a
-  default surface/border fill. Reserved so one ember reads as emphasis.
-- `accentSoft` rgba(255,90,44,0.12), `accentGlow` rgba(255,90,44,0.22)
-- `violet*` names survive but now resolve to the ember family (#FF7A4F) — Sumi is
-  single-accent; old call sites stay coherent.
+### Accent — two-hue iridescence
+- `accent` / `ember` / `periwinkle` #8B93FF — Play · active · live · primary CTA.
+  Light periwinkle → use `textOnAccent` #0A0B12 (dark ink) for labels on it.
+- `mint` #5EEAD4 — secondary hue; pairs with periwinkle in gradients/glows.
+- `accentSoft` rgba(139,147,255,0.14), `accentGlow` rgba(139,147,255,0.30).
+- Gradients: periwinkle→mint (`meshViolet`/`meshPink`) carry the spatial shimmer.
 
 ### Semantic (one meaning each)
-- `gold` #E8B84B (ratings), `success` #34D17E, `cyan` #5FC6D8 (Embed source tag),
-  `error` #FF5747.
+- `gold` #FFCE5C (ratings), `success` #4ADE80, `cyan`/`mint` #5EEAD4 (source tag),
+  `error` #FF6B6B.
 
-### Text — warm editorial ramp (AA-verified on ink)
-- `text` / `bone` #F4F1EA (~17:1) — headings, primary
-- `textSoft` rgba(244,241,234,0.86) — body
-- `textSecondary` / ash #A8A29A (~7:1) — secondary/meta
-- `textMuted` #8C867D (~4.9:1) — lowest readable (AA floor)
-- `textFaint` #565049 — DECORATIVE ONLY (idle icons, hairlines). Never text.
+### Text — pure-white ramp (AA-verified on the void)
+- `text` / `bone` #FFFFFF (~19:1) — headings, primary
+- `textSecondary` #B4B8C5 (~9:1) — secondary/meta
+- `textMuted` #8A8F9E (~5.2:1) — lowest readable (AA floor)
+- `textFaint` #4A4E5A — DECORATIVE ONLY (idle icons, hairlines). Never text.
 - Over artwork: lay a scrim so text clears 4.5:1 against the darkened plate.
 
-## Typography — type-led
+## Typography — clean spatial sans
 
-Paired on a contrast axis; never two similar sans.
-- **Outfit** (`F.display` = Outfit_900Black) — Latin display/headings, heavy + tight.
-- **DM Sans** (`F.body…`) — Latin body/labels (humanist contrast pair).
-- **Cairo** (`AR.*`) — ALL static Arabic chrome (incl. Arabic headings; Outfit
-  can't render Arabic). Latin fonts under-measure Arabic and spill in RTL rows.
-- Scale `T`: bigger + tighter at the top — `display 40/−1.0 · h1 30/−0.7 · h2 21 ·
-  body 14/23`. New `T.index` numeral (01/02…) is a Sumi section signature.
-- *(A true editorial serif display would be ideal but needs an APK build to
-  bundle a font — OTA can't add one. Grotesk carries the editorial weight now.)*
+Kept from Sumi (families are bundled in the APK — OTA can't add fonts — and the
+measures are proven). Holo carries identity through color/glass/depth/rounding,
+not a type overhaul.
+- **Outfit** (`F.display` = Outfit_900Black) — Latin display/headings.
+- **DM Sans** (`F.body…`) — Latin body/labels.
+- **Cairo** (`AR.*`) — ALL static Arabic chrome (Outfit can't render Arabic;
+  Latin fonts under-measure Arabic and spill in RTL rows).
+- Scale `T`: `display 40/−1.0 · h1 30/−0.7 · h2 21 · body 14/23`.
 
 ## Spacing & Radius
 
-- `S` 4pt scale, generous editorial rhythm (`marginSection 34`, section gaps >>
-  in-card gaps).
-- `R` crisper / more print than Void: posters `R.lg 10`, sheets `R.xl 14`,
-  pills `R.pill 100`. Less bubbly.
+- `S` 4pt scale, generous spatial rhythm (`marginSection 34`).
+- `R` **soft visionOS rounding** (bigger than Sumi's crisp print): posters
+  `R.lg 16`, sheets `R.xl 22`, chips `R.sm 12`, pills `R.pill 100`. Glass reads as
+  pebbles floating in depth.
 - Touch targets ≥44.
 
-## Elevation — hairlines, no glow
+## Elevation — depth + gentle bloom
 
-- `ELEVATION_CARD` — soft ambient black lift (the only shadow Sumi leans on).
-- `ELEVATION_GLOW` / `_VIOLET` — names survive but now resolve to a **neutral
-  ambient lift** (no colored halo), so every inherited "glow" call site is a clean
-  shadow. Ember is carried by fill/text/indicators, never by a halo.
+- `ELEVATION_CARD` — soft ambient float (glass hovers over the void; offset y10,
+  radius 24).
+- `ELEVATION_GLOW` / `_VIOLET` — **soft periwinkle bloom** on active/elevated glass
+  (visionOS light-spill). Holo permits a gentle colored halo (Sumi banned it).
 - `ELEVATION_NAV` — upward shadow for floating nav / sheets.
 
-## Motion
+## Motion — motion-forward
 
-- Ease-out + light spring on press. Reduced motion REQUIRED — `lib/motion.ts`
-  `useReducedMotion()` gates carousels/shimmers (already wired: home hero,
-  Shimmer, search skeleton). Never gate content visibility on a transition.
+Holo leans into motion (the identity is "heavily animated"). Use **Reanimated**
+(already a dep) on the UI thread for 60fps:
+- Staggered fade+rise entrances on rails/cards; parallax on the hero; spring on
+  press (scale ~0.97); shared-element-feel transitions where cheap.
+- Reduced motion REQUIRED — `lib/motion.ts` `useReducedMotion()` gates
+  carousels/parallax/stagger. Never gate content visibility on a transition.
 
-## Components & Patterns (Sumi)
+## Components & Patterns (Holo)
 
-- **Masthead** — bone wordmark led by an ember spark mark.
+- **Masthead** — bone wordmark led by a periwinkle spark; sits on a frosted
+  `BlurView` bar that fades in over the hero.
 - **Marquee hero** — full-bleed art, AA scrim, big bone display title, genres as
-  hairline outline tags, ember Play + ghost (outline) My List.
-- **Section header** — crisp 3px ember marginal rule + heavy bone Cairo title;
-  "see all" stays ash (ember reserved).
-- **Poster card** — artwork-first, `R.lg` crisp, hairline border, ambient lift,
-  no per-card glow; rank as oversized editorial numeral.
-- **Floating nav** — flat ink bar + hairline; active tab = quiet ink-high chip
-  with ember icon/label + a small ember spark dot (not a filled accent blob).
-- **Sidebar** — right-aligned RTL list, ember active rule on the reading edge.
-- **Glass** — purposeful on player/over-art overlays only, not decorative.
+  glass chips, periwinkle→mint gradient Play + frosted-glass ghost My List.
+- **Section header** — periwinkle marginal mark + heavy bone title; "see all" ash.
+- **Poster card** — artwork-first, `R.lg` soft, glass rim border, ambient float +
+  optional periwinkle bloom on press; rank as oversized numeral.
+- **Floating nav** — frosted `BlurView` bar + rim hairline; active tab = light
+  glass chip with periwinkle icon/label + a small periwinkle spark dot.
+- **Glass** — the Holo signature. Frosted `BlurView` panels for bars, sheets,
+  chips, and over-art overlays — purposeful depth, not flat fills everywhere.
 
 ## RTL & i18n
 
@@ -97,17 +99,27 @@ RTL-first. Static Arabic → `AR.*` (Cairo). Avoid `gap` with `row-reverse`
 
 ## Absolute bans
 
-- No colored glow anywhere (Sumi is hairlines + ambient shadow).
-- No gradient text. No accent as default surface/border fill — ember marks the
-  privileged action only. No muted text below the AA floor. No nested cards.
-- No side-stripe (>1px colored) accents on cards/rows (the sidebar active rule is
-  an intentional edge indicator, not a card stripe).
+- No neon (Holo bloom is SOFT, low-opacity — not a hard glow). No gradient text.
+- No periwinkle as a default surface/border fill — the accent marks the
+  privileged action/state only. No muted text below the AA floor. No nested cards.
+- White text directly on the periwinkle accent (too low contrast) — use
+  `textOnAccent` dark ink instead.
+
+## Styling mechanism
+
+Migrating to **NativeWind** (`className`), token values mirrored in
+`tailwind.config.js`. Hybrid by necessity: `className` for the static skin
+(color/radii/spacing/border/type); `style` retained for dynamic props (width,
+aspectRatio), RN shadows (`ELEVATION_*`), `textShadow`, `absoluteFill`, and
+third-party components (`expo-image`, `LinearGradient`, `BlurView`).
 
 ## Rollout status
 
-Proof shipped: `lib/theme.ts` (Sumi tokens, cascades everywhere), floating nav,
-sidebar crisp pass, and the **Home** screen recomposed editorially. Remaining
-screens adopt the palette via cascade; their per-screen structural recompose
-(detail, search, my-list, downloads, player, auth) is the next pass — plus a
-sweep of the last few hardcoded old-navy rgba values (CatalogCard, MalRating,
-title/[id]).
+- ✅ Token core swapped to Holo (`lib/theme.ts` + `tailwind.config.js`) — whole app
+  cascades to the new palette/radii/elevation. `tsc` green.
+- ✅ NativeWind wired (`tailwind.config.js` was the missing piece); `CatalogCard`
+  piloted to `className`.
+- ⏳ Per-screen structural recompose (real `BlurView` glass + Reanimated motion),
+  in priority order: home → anime detail → search → my-list → watch/player →
+  downloads → auth → the rest. Plus a sweep of hardcoded rgba values that don't
+  cascade (`CatalogCard` badge, `MalRating`, `title/[id]`).

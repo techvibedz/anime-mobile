@@ -9,8 +9,6 @@ import {
   StyleSheet,
   Dimensions,
 } from "react-native";
-import { Image } from "expo-image";
-import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,8 +16,11 @@ import { getFavorites, removeFavorite } from "../../lib/favorites";
 import type { FavoriteAnime, FavoriteList } from "../../lib/favorites";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
+import { PosterCard, PosterPill, PosterCornerBtn } from "../../components/PosterCard";
+import { StateView } from "../../components/StateView";
+import { Rise } from "../../components/Rise";
 import { useAuth } from "../../lib/auth";
-import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { C, S, R, TAr } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
 type ListFilter = "all" | FavoriteList;
@@ -69,54 +70,55 @@ export default function MyListScreen() {
 
   return (
     <View style={[ss.root, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={ss.header}>
-        <View>
-          <Text style={ss.heading}>{t.myListTitle}</Text>
-          {user?.email && <Text style={ss.userEmail} numberOfLines={1}>{user.email}</Text>}
-        </View>
-        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-          <Text style={ss.countLabel}>{favorites.length}</Text>
+      {/* ── Collection header — one cohesive surface lifted over the grid ── */}
+      <View style={ss.headerSurface}>
+        <Rise style={ss.header}>
+          <View style={ss.headerTitleWrap}>
+            <Text style={ss.heading}>{t.myListTitle}</Text>
+            {user?.email && <Text style={ss.userEmail} numberOfLines={1}>{user.email}</Text>}
+          </View>
           {isConfigured && user && (
             <Pressable onPress={signOut} hitSlop={8} style={ss.signOutBtn}>
               <Ionicons name="log-out-outline" size={18} color={C.textMuted} />
             </Pressable>
           )}
-        </View>
+        </Rise>
+
+        {/* Filter pills — horizontally scrollable so long labels never clip */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={ss.filterScroll}
+          contentContainerStyle={ss.filterRow}
+        >
+          {filters.map((f) => (
+            <Pressable key={f.key} onPress={() => setFilter(f.key)}>
+              <View style={[ss.filterPill, filter === f.key && ss.filterPillActive]}>
+                {/* Label first (leading), count last (trailing). The label uses the
+                    Cairo Arabic font so its glyphs are measured correctly and stay
+                    inside the Text box — no more spill onto the count badge. */}
+                <Text numberOfLines={1} style={[ss.filterText, filter === f.key && ss.filterTextActive]}>{f.label}</Text>
+                <View style={[ss.filterCount, filter === f.key && ss.filterCountActive]}>
+                  <Text style={[ss.filterCountText, filter === f.key && ss.filterCountTextActive]}>
+                    {f.count}
+                  </Text>
+                </View>
+              </View>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        {/* Surface bottom edge — separates the header from the scrolling grid */}
+        <View style={ss.headerEdge} />
       </View>
 
-      {/* Filter pills — horizontally scrollable so long labels never clip */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={ss.filterScroll}
-        contentContainerStyle={ss.filterRow}
-      >
-        {filters.map((f) => (
-          <Pressable key={f.key} onPress={() => setFilter(f.key)}>
-            <View style={[ss.filterPill, filter === f.key && ss.filterPillActive]}>
-              {/* Label first (leading), count last (trailing). The label uses the
-                  Cairo Arabic font so its glyphs are measured correctly and stay
-                  inside the Text box — no more spill onto the count badge. */}
-              <Text numberOfLines={1} style={[ss.filterText, filter === f.key && ss.filterTextActive]}>{f.label}</Text>
-              <View style={[ss.filterCount, filter === f.key && ss.filterCountActive]}>
-                <Text style={[ss.filterCountText, filter === f.key && ss.filterCountTextActive]}>
-                  {f.count}
-                </Text>
-              </View>
-            </View>
-          </Pressable>
-        ))}
-      </ScrollView>
-
       {visible.length === 0 ? (
-        <View style={ss.empty}>
-          <View style={ss.emptyCircle}>
-            <Ionicons name="heart-outline" size={28} color={C.textMuted} />
-          </View>
-          <Text style={ss.emptyTitle}>{t.emptyList}</Text>
-          <Text style={ss.emptyDesc}>{t.emptyListSub}</Text>
-        </View>
+        <StateView
+          icon="heart-outline"
+          variant="empty"
+          title={t.emptyList}
+          message={t.emptyListSub}
+        />
       ) : (
         <FlatList
           data={visible}
@@ -146,8 +148,7 @@ export default function MyListScreen() {
   );
 }
 
-/* Memoized poster card — keeps the grid from re-rendering every visible row
- * when an unrelated piece of screen state (filter, header count) changes. */
+/* Memoized poster card — built on the unified <PosterCard>. */
 const MyListCard = memo(function MyListCard({
   item,
   onRemove,
@@ -157,85 +158,57 @@ const MyListCard = memo(function MyListCard({
 }) {
   const watching = item.list === "watching";
   return (
-    <Pressable
+    <PosterCard
+      image={item.image}
+      title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
       onLongPress={() => onRemove(item.href)}
-      style={({ pressed }) => [{ width: CARD_W }, pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] }]}
-    >
-      {/* Poster */}
-      <View style={ss.imageWrap}>
-        {item.image ? (
-          <Image
-            source={{ uri: item.image }}
-            style={ss.image}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            recyclingKey={item.href}
-            transition={200}
-          />
-        ) : (
-          <View style={[ss.image, { alignItems: "center", justifyContent: "center" }]}>
-            <Ionicons name="image-outline" size={26} color={C.textMuted} />
-          </View>
-        )}
-
-        {/* Bottom gradient + play hint */}
-        <View style={ss.posterFooter} pointerEvents="none">
-          <LinearGradient
-            colors={["transparent", "rgba(0,0,0,0.85)"]}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={ss.playCircle}>
-            <Ionicons name="play" size={14} color="#fff" />
-          </View>
-        </View>
-
-        {/* Status badge (top-left) */}
-        <View style={[ss.statusBadge, { backgroundColor: watching ? "rgba(0,230,118,0.92)" : "rgba(255,90,44,0.92)" }]}>
-          <Ionicons
-            name={watching ? "play-circle" : "bookmark"}
-            size={11}
-            color="#fff"
-          />
+      width={CARD_W}
+      recyclingKey={item.href}
+      titleLines={2}
+      topLeft={
+        <PosterPill tint={watching ? "rgba(74,222,128,0.92)" : "rgba(110,119,230,0.94)"}>
+          <Ionicons name={watching ? "play-circle" : "bookmark"} size={11} color="#fff" />
           <Text style={ss.statusBadgeText}>
             {watching ? t.currentlyWatching : t.planToWatch}
           </Text>
+        </PosterPill>
+      }
+      topRight={<PosterCornerBtn icon="close" onPress={() => onRemove(item.href)} />}
+      bottomLeft={<MalCardBadge title={item.title} style={{ top: undefined as any, right: undefined as any, bottom: 8, left: 8 }} />}
+      bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} />}
+      centerOverlay={
+        <View style={ss.playHint}>
+          <Ionicons name="play" size={14} color="#fff" />
         </View>
-
-        {/* Remove (top-right) */}
-        <Pressable onPress={() => onRemove(item.href)} hitSlop={8} style={ss.removeBtn}>
-          <Ionicons name="close" size={15} color="#fff" />
-        </Pressable>
-
-        {/* MAL rating (bottom-left, clear of the status/remove/play controls) */}
-        <MalCardBadge title={item.title} style={{ top: undefined as any, right: undefined as any, bottom: 8, left: 8 }} />
-
-        {/* Completion badge (bottom-right) */}
-        <CompletionBadge hrefs={[item.href]} titles={[item.title]} />
-      </View>
-
-      {/* Title */}
-      <Text style={ss.cardTitle} numberOfLines={2}>{item.title}</Text>
-    </Pressable>
+      }
+    />
   );
 });
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
-  // Header
+  // Collection header — cohesive surface on the opaque canvas, softly lifted
+  // over the scrolling grid (matches the search console for cross-tab coherence).
+  headerSurface: {
+    backgroundColor: C.bg, zIndex: 10,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
+  },
+  headerEdge: { height: 0.5, backgroundColor: C.line },
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: S.paddingContent, paddingTop: 16, paddingBottom: 8,
   },
+  headerTitleWrap: { flex: 1, marginRight: 12 },
   heading: {
-    color: C.bone, fontSize: 30, fontWeight: "900", letterSpacing: -0.8,
-    fontFamily: "Cairo_700Bold",
+    ...TAr.h1, color: C.bone,
   },
-  countLabel: { color: C.textMuted, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   userEmail: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "Cairo_500Medium", maxWidth: 200 },
+  // 44px touch target (PRODUCT.md ≥44px floor).
   signOutBtn: {
-    width: 36, height: 36, borderRadius: 18,
+    width: 44, height: 44, borderRadius: R.circle,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
@@ -250,7 +223,7 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", flexShrink: 0,
     marginHorizontal: 3, height: 36,
     paddingHorizontal: 14, borderRadius: R.pill,
-    backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.borderLight,
   },
   filterPillActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
   filterText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0, includeFontPadding: false, textAlignVertical: "center" },
@@ -261,64 +234,17 @@ const ss = StyleSheet.create({
     paddingHorizontal: 6, paddingVertical: 1,
     marginStart: 8,
   },
-  filterCountActive: { backgroundColor: "rgba(255,90,44,0.1)" },
+  filterCountActive: { backgroundColor: C.accentSoft },
   filterCountText: { color: C.textMuted, fontSize: 10, fontWeight: "500" },
-  filterCountTextActive: { color: C.accent },
+  filterCountTextActive: { color: C.ember },
 
-  // Empty
-  empty: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, paddingBottom: 80 },
-  emptyCircle: {
-    width: 64, height: 64, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+  // Play hint (used as centerOverlay on PosterCard)
+  playHint: {
+    width: 36, height: 36, borderRadius: R.circle,
+    backgroundColor: C.ember,
     alignItems: "center", justifyContent: "center",
   },
-  emptyTitle: { color: C.textSecondary, fontSize: 16, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-  emptyDesc: {
-    color: C.textMuted, fontSize: 13, textAlign: "center", maxWidth: 200,
-    fontFamily: "Cairo_500Medium",
-  },
 
-  // Grid cards
-  imageWrap: {
-    width: CARD_W,
-    aspectRatio: 2 / 3,
-    borderRadius: R.xl,
-    overflow: "hidden",
-    backgroundColor: C.surface,
-    borderWidth: 1,
-    borderColor: C.border,
-    ...ELEVATION_CARD,
-  },
-  image: {
-    width: CARD_W,
-    aspectRatio: 2 / 3,
-    borderRadius: R.xl,
-    backgroundColor: C.surface,
-  },
-  posterFooter: {
-    position: "absolute", left: 0, right: 0, bottom: 0,
-    height: 64, justifyContent: "flex-end", alignItems: "flex-end", padding: 8,
-  },
-  playCircle: {
-    width: 32, height: 32, borderRadius: R.circle,
-    backgroundColor: "rgba(255,90,44,0.95)",
-    alignItems: "center", justifyContent: "center",
-  },
-  statusBadge: {
-    position: "absolute", top: 8, left: 8,
-    flexDirection: "row", alignItems: "center", gap: 4,
-    borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 4,
-  },
+  // Status badge text (used inside PosterPill)
   statusBadgeText: { color: "#fff", fontSize: 10, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
-  removeBtn: {
-    position: "absolute", top: 8, right: 8,
-    width: 28, height: 28, borderRadius: R.circle,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    alignItems: "center", justifyContent: "center",
-  },
-  cardTitle: {
-    color: C.text, fontSize: 13, fontWeight: "600", lineHeight: 17,
-    marginTop: 8, width: CARD_W,
-    fontFamily: "Cairo_600SemiBold",
-  },
 });

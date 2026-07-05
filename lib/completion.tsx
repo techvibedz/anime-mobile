@@ -14,7 +14,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { normHref, animeTitleKey, getCompletedSets, type CompletedSets } from "./history";
+import { normAnimeKey, animeTitleKey, getCompletedSets, type CompletedSets } from "./history";
 import { supabase, isSupabaseConfigured } from "./supabase";
 
 const KEY = "anime_completion_v2";
@@ -30,10 +30,6 @@ export interface AnimeCompletion {
   /** Caught up AND the series has finished airing (watched the real finale). */
   finished: boolean;
   updatedAt: number;
-}
-
-function titleKey(s: string | null | undefined): string {
-  return (s || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function uniq(arr: (string | null | undefined)[]): string[] {
@@ -104,7 +100,10 @@ export async function recordAnimeCompletion(rec: {
 }): Promise<void> {
   const hrefs = uniq(rec.hrefs);
   const titles = uniq(rec.titles);
-  const key = normHref(hrefs[0]) || titleKey(titles[0]);
+  // ponytail: TLD-stable key. Records written under the old full-URL scheme keep
+  // resolving via buildLookup (it re-indexes hrefs by normAnimeKey), so badges
+  // still show; a stale old-key record may briefly co-exist until it's re-written.
+  const key = normAnimeKey(hrefs[0]) || animeTitleKey(titles[0]);
   if (!key) return;
   const map = await getCompletionMap();
   const prev = map[key];
@@ -308,19 +307,22 @@ export interface CompletionLookup {
 function buildLookup(map: Record<string, AnimeCompletion>): CompletionLookup {
   const byHref = new Map<string, AnimeCompletion>();
   const byTitle = new Map<string, AnimeCompletion>();
+  // Index by the TLD-stable anime key + decoration-folded title so a badge
+  // resolves regardless of which rotating witanime TLD (.life/.you) or which
+  // source's decorated title a card carries vs. what was recorded.
   for (const rec of Object.values(map)) {
-    for (const h of rec.hrefs) byHref.set(normHref(h), rec);
-    for (const tt of rec.titles) byTitle.set(titleKey(tt), rec);
+    for (const h of rec.hrefs) byHref.set(normAnimeKey(h), rec);
+    for (const tt of rec.titles) byTitle.set(animeTitleKey(tt), rec);
   }
   return {
     byHref,
     byTitle,
     get({ hrefs, titles }) {
       for (const h of hrefs || []) {
-        if (h) { const r = byHref.get(normHref(h)); if (r) return r; }
+        if (h) { const r = byHref.get(normAnimeKey(h)); if (r) return r; }
       }
       for (const tt of titles || []) {
-        if (tt) { const r = byTitle.get(titleKey(tt)); if (r) return r; }
+        if (tt) { const r = byTitle.get(animeTitleKey(tt)); if (r) return r; }
       }
       return null;
     },

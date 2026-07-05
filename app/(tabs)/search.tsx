@@ -12,9 +12,8 @@ import {
   Dimensions,
   Animated,
 } from "react-native";
-import { Image } from "expo-image";
-import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { searchAnime, fetchAllAnime, fetchGenre } from "../../lib/api";
@@ -22,7 +21,10 @@ import type { SearchResult } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { GlassFill } from "../../components/GlassFill";
-import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { PosterCard, PosterPill } from "../../components/PosterCard";
+import { StateView } from "../../components/StateView";
+import { Rise } from "../../components/Rise";
+import { C, S, R, TAr, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
 
@@ -83,43 +85,29 @@ function SkeletonGrid() {
   );
 }
 
-/* Memoized result card — without this, every visible poster re-rendered on
- * each keystroke (the search-progress strip toggles parent state) and on every
- * pagination append. */
+/* Memoized result card — built on the unified <PosterCard>. Without this,
+ * every visible poster re-rendered on each keystroke (the search-progress strip
+ * toggles parent state) and on every pagination append. */
 const ResultCard = memo(function ResultCard({ item }: { item: SearchResult }) {
   return (
-    <Pressable
+    <PosterCard
+      image={item.image}
+      title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-      style={({ pressed }) => ({ width: CARD_W, opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] })}
-    >
-      <View style={ss.resultCard}>
-        {item.image ? (
-          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
-        ) : (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
-            <Ionicons name="image-outline" size={24} color={C.textMuted} />
-          </View>
-        )}
-        <LinearGradient
-          colors={["transparent", "rgba(10,10,11,0.6)"]}
-          style={ss.resultGrad}
-          pointerEvents="none"
-        />
-        <MalCardBadge title={item.title} />
-        {item.type ? (
-          <View style={ss.typeBadge}>
+      width={CARD_W}
+      aspectRatio={3 / 4}
+      recyclingKey={item.href}
+      titleLines={2}
+      topRight={<MalCardBadge title={item.title} />}
+      bottomLeft={
+        item.type ? (
+          <PosterPill>
             <Text style={ss.typeBadgeText}>{item.type}</Text>
-          </View>
-        ) : null}
-        {/* Completion badge — bottom-left, clear of the type pill (bottom-right) */}
-        <CompletionBadge
-          hrefs={[item.href]}
-          titles={[item.title]}
-          style={{ right: undefined as any, left: 6, bottom: 6 }}
-        />
-      </View>
-      <Text style={ss.resultTitle} numberOfLines={2}>{item.title}</Text>
-    </Pressable>
+          </PosterPill>
+        ) : null
+      }
+      bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} />}
+    />
   );
 });
 
@@ -331,25 +319,27 @@ export default function SearchScreen() {
 
   return (
     <View style={[ss.root, { paddingTop: insets.top }]}>
-      {/* Header */}
+      {/* ── Search console — one cohesive surface lifted over the grid ── */}
       <View style={ss.header}>
-        <Text style={ss.heading}>اكتشف</Text>
-        {!loading && items.length > 0 && (
-          <View style={ss.countPill}>
-            <Text style={ss.countPillText}>{items.length}</Text>
-          </View>
-        )}
-      </View>
+        <Rise style={ss.headerTop}>
+          <Text style={ss.heading}>{t.discover}</Text>
+          {!loading && items.length > 0 && (
+            <View style={ss.countPill}>
+              <Text style={ss.countPillText}>{items.length}</Text>
+            </View>
+          )}
+        </Rise>
 
-      {/* Glass search bar */}
-      <View style={ss.searchWrap}>
+        {/* Glass search field — the hero control */}
         <View style={[ss.searchBar, searching && ss.searchBarActive]}>
           <GlassFill intensity={16} />
-          {searching ? (
-            <ActivityIndicator size="small" color={C.accent} />
-          ) : (
-            <Ionicons name="search" size={18} color={C.textMuted} />
-          )}
+          <View style={[ss.searchIcon, searching && ss.searchIconActive]}>
+            {searching ? (
+              <ActivityIndicator size="small" color={C.accent} />
+            ) : (
+              <Ionicons name="search" size={18} color={C.textMuted} />
+            )}
+          </View>
           <TextInput
             ref={inputRef}
             style={ss.input}
@@ -364,45 +354,46 @@ export default function SearchScreen() {
             textAlign="right"
           />
           {query.length > 0 && (
-            <Pressable onPress={handleClear} hitSlop={8}>
+            <Pressable onPress={handleClear} hitSlop={8} style={ss.clearBtn}>
               <Ionicons name="close-circle" size={18} color={C.textMuted} />
             </Pressable>
           )}
         </View>
-      </View>
 
-      {/* Genre filter chips — fixed container prevents vertical scroll capture */}
-      <View style={ss.chipContainer}>
-        <ScrollView
-          horizontal
-          nestedScrollEnabled
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={ss.chipScroll}
-          keyboardShouldPersistTaps="handled"
-        >
-          {GENRES.map((g) => (
-            <Pressable key={g} onPress={() => handleGenre(g)}>
-              <View style={[ss.chip, activeGenre === g && ss.chipActive]}>
-                <Text style={[ss.chipText, activeGenre === g && ss.chipTextActive]}>{GENRE_LABELS[g] || g}</Text>
-              </View>
-            </Pressable>
-          ))}
-        </ScrollView>
-      </View>
+        {/* Genre filter strip — part of the console, prevents vertical scroll capture */}
+        <View style={ss.chipContainer}>
+          <ScrollView
+            horizontal
+            nestedScrollEnabled
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={ss.chipScroll}
+            keyboardShouldPersistTaps="handled"
+          >
+            {GENRES.map((g) => (
+              <Pressable key={g} onPress={() => handleGenre(g)}>
+                <View style={[ss.chip, activeGenre === g && ss.chipActive]}>
+                  <Text style={[ss.chipText, activeGenre === g && ss.chipTextActive]}>{GENRE_LABELS[g] || g}</Text>
+                </View>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
 
-      {/* Slim progress strip while a search/genre refresh is in flight */}
-      <View style={ss.glowLineWrap}>
-        <View style={ss.glowLine} />
-        {searching && (
-          <View style={ss.progressStrip}>
-            <LinearGradient
-              colors={["transparent", C.accent, "transparent"]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={StyleSheet.absoluteFill}
-            />
-          </View>
-        )}
+        {/* Console bottom edge — full-width hairline that doubles as the live
+            search-progress strip while a search/genre refresh is in flight */}
+        <View style={ss.glowLineWrap}>
+          <View style={ss.glowLine} />
+          {searching && (
+            <View style={ss.progressStrip}>
+              <LinearGradient
+                colors={["transparent", C.accent, "transparent"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={StyleSheet.absoluteFill}
+              />
+            </View>
+          )}
+        </View>
       </View>
 
       {/* Content */}
@@ -434,25 +425,19 @@ export default function SearchScreen() {
             />
           }
           ListHeaderComponent={showingSearch ? (
-            <Text style={ss.resultsLabel}>{`نتائج البحث عن "${query.trim()}"`}</Text>
+            <Text style={ss.resultsLabel}>{t.searchResultsFor(query.trim())}</Text>
           ) : null}
           ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
           renderItem={({ item }) => <ResultCard item={item} />}
         />
       ) : (
-        <View style={ss.center}>
-          <View style={ss.emptyCircle}>
-            <Ionicons name="search-outline" size={28} color={C.textMuted} />
-          </View>
-          <Text style={ss.emptyTitle}>{t.noResults}</Text>
-          <Text style={ss.emptyDesc}>{t.searchSub}</Text>
-          {showingSearch && (
-            <Pressable onPress={handleClear} style={ss.emptyBtn}>
-              <Ionicons name="grid-outline" size={14} color={C.accent} />
-              <Text style={ss.emptyBtnText}>تصفح كل الأنميات</Text>
-            </Pressable>
-          )}
-        </View>
+        <StateView
+          icon="search-outline"
+          variant="empty"
+          title={t.noResults}
+          message={t.searchSub}
+          primary={showingSearch ? { label: t.browseAll, onPress: handleClear, icon: "grid-outline" } : undefined}
+        />
       )}
     </View>
   );
@@ -462,30 +447,42 @@ const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, paddingBottom: 80 },
 
+  // Search console — a cohesive surface on the opaque canvas, softly lifted over
+  // the scrolling grid (opaque bg so scrolled content never bleeds through).
   header: {
+    backgroundColor: C.bg, zIndex: 10,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
+  },
+  headerTop: {
     flexDirection: "row", alignItems: "center", gap: 10,
-    paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 8,
+    paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 12,
   },
   heading: {
-    color: C.bone, fontSize: 30, fontWeight: "900", letterSpacing: -0.8,
-    fontFamily: "Cairo_700Bold",
+    ...TAr.h1, color: C.bone,
   },
   countPill: {
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
     borderRadius: R.pill, paddingHorizontal: 10, paddingVertical: 3,
   },
-  countPillText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  countPillText: { color: C.ember, fontSize: 11, fontWeight: "700", fontFamily: "Outfit_700Bold" },
 
-  // Search bar
-  searchWrap: { paddingHorizontal: PAD, paddingBottom: 12 },
+  // Search bar — the hero control: taller, big soft radius, accent ring on active.
   searchBar: {
     flexDirection: "row", alignItems: "center", gap: 10,
-    borderRadius: R.xl, height: S.inputHeight, paddingHorizontal: 16,
+    marginHorizontal: PAD, marginBottom: 14,
+    borderRadius: R.xl, height: 56, paddingHorizontal: 10, paddingRight: 16,
     overflow: "hidden", borderWidth: 1, borderColor: C.line,
   },
-  searchBarActive: { borderColor: C.borderAccent },
+  searchBarActive: { borderColor: C.borderAccent, ...ELEVATION_GLOW },
+  searchIcon: {
+    width: 36, height: 36, borderRadius: R.circle,
+    alignItems: "center", justifyContent: "center",
+  },
+  searchIconActive: { backgroundColor: C.accentSoft },
+  clearBtn: { padding: 2 },
   input: {
-    flex: 1, color: C.text, fontSize: 14, height: S.inputHeight,
+    flex: 1, color: C.text, fontSize: 15, height: 56,
     fontFamily: "Cairo_500Medium",
   },
 
@@ -495,43 +492,27 @@ const ss = StyleSheet.create({
   chip: {
     height: 36, justifyContent: "center",
     paddingHorizontal: 15, borderRadius: R.pill,
-    backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
+    backgroundColor: C.glass, borderWidth: 1, borderColor: C.borderLight,
   },
   chipActive: { backgroundColor: C.ember, borderColor: "transparent" },
   chipText: { color: C.textSecondary, fontSize: 13, lineHeight: 20, fontWeight: "600", fontFamily: "Cairo_600SemiBold", includeFontPadding: false, textAlignVertical: "center" },
   chipTextActive: { color: C.textOnAccent },
 
-  // Hairline divider + search-progress strip
-  glowLineWrap: { height: 2, marginHorizontal: PAD, justifyContent: "center" },
+  // Console bottom edge — full-width hairline + search-progress strip
+  glowLineWrap: { height: 2, justifyContent: "center" },
   glowLine: {
     height: 0.5,
-    backgroundColor: C.violetSoft,
+    backgroundColor: C.line,
   },
   progressStrip: { ...StyleSheet.absoluteFillObject, overflow: "hidden", borderRadius: 1 },
 
   // Results
   resultsLabel: {
-    color: C.textSecondary, fontSize: 12, fontWeight: "600",
-    fontFamily: "Cairo_600SemiBold", textAlign: "right",
+    ...TAr.bodySmall, color: C.textSecondary,
+    textAlign: "right",
     marginBottom: 12,
   },
-  resultCard: {
-    width: CARD_W, aspectRatio: 3 / 4, borderRadius: R.lg, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
-  },
-  resultGrad: { position: "absolute", bottom: 0, left: 0, right: 0, height: 50 },
-  typeBadge: {
-    position: "absolute", bottom: 6, right: 6,
-    backgroundColor: "rgba(0,0,0,0.65)", borderRadius: R.sm,
-    paddingHorizontal: 6, paddingVertical: 2,
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
-  },
   typeBadgeText: { color: C.textSoft, fontSize: 8, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
-  resultTitle: {
-    color: C.text, fontSize: 11, fontWeight: "600", lineHeight: 15,
-    marginTop: 6, width: CARD_W, fontFamily: "Cairo_600SemiBold",
-  },
 
   // Skeletons
   skeletonWrap: {
@@ -550,19 +531,4 @@ const ss = StyleSheet.create({
     width: CARD_W * 0.5, height: 10, borderRadius: 5, marginTop: 5,
     backgroundColor: C.surfaceLight,
   },
-
-  // Empty
-  emptyCircle: {
-    width: 64, height: 64, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    alignItems: "center", justifyContent: "center",
-  },
-  emptyTitle: { color: C.textSecondary, fontSize: 16, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-  emptyDesc: { color: C.textMuted, fontSize: 13, textAlign: "center", fontFamily: "Cairo_500Medium" },
-  emptyBtn: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
-    borderRadius: R.pill, paddingHorizontal: 16, paddingVertical: 9,
-  },
-  emptyBtnText: { color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 });

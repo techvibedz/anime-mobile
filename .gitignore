@@ -55,3 +55,5 @@ supabase/.temp/
 .claude/
 .codex/
 .icon-backup-void/
+
+.stitch/

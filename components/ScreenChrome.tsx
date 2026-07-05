@@ -12,35 +12,33 @@
 
 import { type ReactNode } from "react";
 import { View, Text, Pressable, StyleSheet, I18nManager } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { C, R, S, AR } from "../lib/theme";
+import { C, R, S, AR, TAr, ELEVATION_NAV } from "../lib/theme";
 import { useSidebar } from "./Sidebar";
 import { t } from "../lib/i18n";
+import { StateView } from "./StateView";
 
 /* ── Aurora backdrop ─────────────────────────────
- * A FULL-SCREEN wash whose glow is concentrated at the top and fades smoothly to
- * the base background over the whole page (via gradient `locations`). It used to
- * be a 300px-tall band, which left a hard "two-tone cut" where the band ended
- * and the flat base color began — and because it sat behind a transparent
- * scroll view, that cut stayed locked on screen while content scrolled past it.
- * Spanning the full height removes the boundary entirely. */
+ * HOLO signature backdrop for secondary screens: a neutral tonal lift plus a
+ * soft two-hue (periwinkle + mint) iridescent wash at the top, evoking the
+ * visionOS spatial glow. Low-opacity by design — a gentle bloom, never neon.
+ * pointerEvents:none so it never intercepts touches. */
 export function Aurora() {
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: C.inkRaised, opacity: 0.4 }]} />
       <LinearGradient
-        colors={[C.violetSoft, "transparent"]}
-        locations={[0, 0.55]}
-        start={{ x: 0.15, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
+        colors={[C.meshViolet, "transparent"]}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.85, y: 0.5 }}
         style={StyleSheet.absoluteFill}
       />
       <LinearGradient
         colors={[C.meshPink, "transparent"]}
-        locations={[0, 0.45]}
-        start={{ x: 1, y: 0 }}
-        end={{ x: 0.4, y: 1 }}
+        start={{ x: 0.95, y: 0 }}
+        end={{ x: 0.3, y: 0.55 }}
         style={StyleSheet.absoluteFill}
       />
     </View>
@@ -105,9 +103,9 @@ export function ScreenHeader({
 }
 
 /* ── Offline / no-content notice ──────────────────
- * Shared full-area state for the network-dependent browse screens. Always offers
- * a route to the user's offline downloads (which play with no connection), plus
- * an optional retry. `offline=false` keeps the same layout but uses the softer
+ * Shared full-area state for the network-dependent browse screens. Delegates to
+ * the unified <StateView> so every empty/error/offline surface shares one
+ * anatomy. `offline=false` keeps the same layout but uses the softer
  * "couldn't load" copy for an online-but-failed fetch. */
 export function OfflineNotice({
   onRetry,
@@ -117,29 +115,14 @@ export function OfflineNotice({
   offline?: boolean;
 }) {
   return (
-    <View style={hs.offlineWrap}>
-      <View style={hs.offlineIcon}>
-        <Ionicons name={offline ? "cloud-offline-outline" : "alert-circle-outline"} size={38} color={C.accent} />
-      </View>
-      <Text style={hs.offlineTitle}>{offline ? t.offlineTitle : t.homeEmptyTitle}</Text>
-      <Text style={hs.offlineSub}>{offline ? t.offlineSub : t.homeEmptySub}</Text>
-      <Pressable
-        style={({ pressed }) => [hs.offlinePrimary, pressed && { opacity: 0.9 }]}
-        onPress={() => router.push("/downloads")}
-      >
-        <Ionicons name="download" size={16} color={C.textOnAccent} />
-        <Text style={hs.offlinePrimaryText}>{t.watchDownloads}</Text>
-      </Pressable>
-      {onRetry ? (
-        <Pressable
-          style={({ pressed }) => [hs.offlineSecondary, pressed && { opacity: 0.85 }]}
-          onPress={onRetry}
-        >
-          <Ionicons name="refresh" size={15} color={C.text} />
-          <Text style={hs.offlineSecondaryText}>{t.retry}</Text>
-        </Pressable>
-      ) : null}
-    </View>
+    <StateView
+      icon={offline ? "cloud-offline-outline" : "alert-circle-outline"}
+      variant={offline ? "offline" : "error"}
+      title={offline ? t.offlineTitle : t.homeEmptyTitle}
+      message={offline ? t.offlineSub : t.homeEmptySub}
+      primary={{ label: t.watchDownloads, onPress: () => router.push("/downloads"), icon: "download" }}
+      secondary={onRetry ? { label: t.retry, onPress: onRetry, icon: "refresh" } : undefined}
+    />
   );
 }
 
@@ -155,7 +138,7 @@ export function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-const ICON_BTN = 42;
+const ICON_BTN = 44;
 
 const hs = StyleSheet.create({
   header: {
@@ -177,39 +160,17 @@ const hs = StyleSheet.create({
   },
   iconBtnPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.94 }] },
 
-  // flex:1 centered title between the two 42px rails keeps it optically centered.
-  title: { flex: 1, textAlign: "center", color: C.bone, fontSize: 19, letterSpacing: -0.3, fontFamily: AR.bold },
+  // flex:1 centered title between the two 44px rails keeps it optically centered.
+  title: { ...TAr.h2, flex: 1, textAlign: "center", color: C.bone, letterSpacing: -0.3 },
   rightSlot: { minWidth: ICON_BTN, height: ICON_BTN, flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
   menuSpacer: { marginLeft: 8 },
-
-  // paddingTop (not flex:1) so it renders correctly both standalone AND inside a
-  // FlatList's ListEmptyComponent, where a flex child would collapse to 0 height.
-  offlineWrap: { alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingTop: 80, paddingBottom: 40, gap: 10 },
-  offlineIcon: {
-    width: 84, height: 84, borderRadius: 42, backgroundColor: C.glass,
-    borderWidth: 1, borderColor: C.glassBorder, alignItems: "center", justifyContent: "center", marginBottom: 6,
-  },
-  offlineTitle: { color: C.text, fontSize: 18, fontFamily: AR.bold, textAlign: "center" },
-  offlineSub: { color: C.textSecondary, fontSize: 13, lineHeight: 21, textAlign: "center", maxWidth: 300, fontFamily: "Cairo_500Medium" },
-  offlinePrimary: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.accent, borderRadius: R.pill, paddingHorizontal: 22, paddingVertical: 13, marginTop: 10,
-  },
-  offlinePrimaryText: { color: C.textOnAccent, fontSize: 14, fontFamily: "Cairo_700Bold" },
-  offlineSecondary: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    borderRadius: R.pill, paddingHorizontal: 20, paddingVertical: 11,
-  },
-  offlineSecondaryText: { color: C.text, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
 
   sectionLabel: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", marginBottom: 12 },
   sectionText: {
     color: C.textSecondary,
-    fontSize: 13,
-    fontFamily: AR.bold,
+    ...TAr.bodySmall,
     letterSpacing: 0.3,
     marginRight: 8,
   },
-  sectionTick: { width: 3, height: 14, borderRadius: 2, backgroundColor: C.accent },
+  sectionTick: { width: 3, height: 14, borderRadius: 2, backgroundColor: C.ember },
 });

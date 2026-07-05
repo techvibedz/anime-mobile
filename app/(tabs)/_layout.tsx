@@ -14,7 +14,17 @@ const TABS = [
 export default function TabLayout() {
   return (
     <Tabs
-      screenOptions={{ headerShown: false, tabBarStyle: { display: "none" } }}
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: { display: "none" },
+        // Scene container background — without this the bottom-tabs wrapper
+        // defaults to the system window background (white), so every tab
+        // switch briefly flashes white before the screen's root View paints.
+        // Lock it to the app's ink bg so transitions stay dark.
+        sceneStyle: { backgroundColor: C.bg },
+        // Pre-mount every tab so the first visit to each doesn't mount-and-flash.
+        lazy: false,
+      }}
       tabBar={(props) => <FloatingNav {...props} />}
     >
       {TABS.map((tab) => (

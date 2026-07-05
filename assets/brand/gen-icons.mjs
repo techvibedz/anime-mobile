@@ -1,6 +1,7 @@
-// Pantoufa — SUMI "Ink & Ember" brand mark generator.
+// Pantoufa — HOLO SPATIAL brand mark generator.
 // Renders icon / adaptive-icon / splash / favicon from a single vector source.
-// The mark: a geometric "P" whose counter is a play ▶ triangle (Pantoufa = play).
+// The mark: a geometric "P" whose counter is a play ▶ triangle (Pantoufa = play),
+// filled with the HOLO periwinkle→mint iridescence over the neutral void.
 //   run:  node assets/brand/gen-icons.mjs
 import sharp from "sharp";
 import { writeFileSync } from "node:fs";
@@ -10,7 +11,7 @@ import { dirname, resolve } from "node:path";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const out = (p) => resolve(root, "assets", p);
 
-const INK = "#0A0A0B";
+const INK = "#08090C"; // HOLO void
 
 // --- the glyph, drawn in a 360 x 620 box -----------------------------------
 // Outer "P": rounded stem on the left + a right-bulging semicircular bowl.
@@ -43,24 +44,24 @@ function glyph(canvas, targetH, { shadow = true } = {}) {
     </g>`;
 }
 
-const DEFS = (glowR = 0.55, glowO = 0.32) => `
+const DEFS = (glowR = 0.55, glowO = 0.30) => `
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#111114"/>
-      <stop offset="1" stop-color="#050506"/>
+      <stop offset="0" stop-color="#14161C"/>
+      <stop offset="1" stop-color="#050507"/>
     </linearGradient>
     <radialGradient id="glow" cx="0.5" cy="0.34" r="${glowR}">
-      <stop offset="0"   stop-color="#FF5A2C" stop-opacity="${glowO}"/>
-      <stop offset="0.55" stop-color="#FF5A2C" stop-opacity="0.07"/>
-      <stop offset="1"   stop-color="#FF5A2C" stop-opacity="0"/>
+      <stop offset="0"    stop-color="#8B93FF" stop-opacity="${glowO}"/>
+      <stop offset="0.55" stop-color="#8B93FF" stop-opacity="0.06"/>
+      <stop offset="1"    stop-color="#8B93FF" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="ember" x1="0.15" y1="0" x2="0.35" y2="1">
-      <stop offset="0"    stop-color="#FF9159"/>
-      <stop offset="0.45" stop-color="#FF5A2C"/>
-      <stop offset="1"    stop-color="#D6431D"/>
+    <linearGradient id="ember" x1="0.1" y1="0" x2="0.5" y2="1">
+      <stop offset="0"    stop-color="#A5ABFF"/>
+      <stop offset="0.5"  stop-color="#8B93FF"/>
+      <stop offset="1"    stop-color="#5EEAD4"/>
     </linearGradient>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0"   stop-color="#FFD2B8" stop-opacity="0.9"/>
+      <stop offset="0"   stop-color="#EDEFFF" stop-opacity="0.9"/>
       <stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
     <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">

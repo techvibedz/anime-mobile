@@ -103,6 +103,29 @@ function norm(s: string): string {
     .trim();
 }
 
+// Stabilize a per-anime key across witanime's rotating TLD (.life/.you/...).
+// The app builds anime_key from the FULL anime URL, so the SAME episode reported
+// by a client resolving a different TLD becomes a DIFFERENT key — which used to
+// defeat BOTH dedup layers (episode_queue PK + notified_episodes) and re-push
+// episodes users had already seen. We collapse the host to its second-level
+// label (drop the TLD) + path, e.g. witanime/anime/one-piece, so .life and .you
+// map to one identity. Different sources keep distinct labels (witanime vs
+// anime4up), so cross-source slugs can't collide. Non-URL keys (title fallback)
+// pass through lower/trimmed. MUST stay byte-identical to normAnimeKey() in
+// lib/notifications.ts AND to the SQL used to migrate notified_episodes.
+function normAnimeKey(k: string): string {
+  if (!k) return "";
+  try {
+    const u = new URL(k);
+    const host = u.hostname.replace(/^www\./, "");
+    const labels = host.split(".");
+    const sld = labels.length >= 2 ? labels[labels.length - 2] : host;
+    return (sld + u.pathname).replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return k.trim().toLowerCase();
+  }
+}
+
 /* ── Expo push ─────────────────────────────────────────────────── */
 
 interface PushMessage {
@@ -241,7 +264,9 @@ Deno.serve(async (req) => {
       if (!mylistTokensByUser.has(f.user_id)) continue;
       let hrefs = favHrefsByUser.get(f.user_id);
       if (!hrefs) { hrefs = new Set(); favHrefsByUser.set(f.user_id, hrefs); }
-      hrefs.add(f.href);
+      // Store the TLD-normalized key so a favorite saved under one witanime TLD
+      // still matches a queue row reported under another (mirrors the dedup key).
+      hrefs.add(normAnimeKey(f.href));
       let titles = favTitlesByUser.get(f.user_id);
       if (!titles) { titles = new Set(); favTitlesByUser.set(f.user_id, titles); }
       const nt = norm(f.title);
@@ -257,7 +282,16 @@ Deno.serve(async (req) => {
     .gte("created_at", cutoff)
     .order("created_at", { ascending: true })
     .limit(500);
-  const queue = ((queueRows ?? []) as QueueRow[]).filter(isPlausibleRow).map(sanitizeRow);
+  const sanitized = ((queueRows ?? []) as QueueRow[]).filter(isPlausibleRow).map(sanitizeRow);
+  // Collapse rows that are the SAME episode under different witanime TLDs
+  // (.life vs .you) to one, keeping the earliest (rows arrive created_at-asc).
+  // Halves the work below and removes any dependence on claim ordering.
+  const queueByKey = new Map<string, QueueRow>();
+  for (const q of sanitized) {
+    const ek = `${normAnimeKey(q.anime_key)}#${q.episode_number}`;
+    if (!queueByKey.has(ek)) queueByKey.set(ek, q);
+  }
+  const queue = [...queueByKey.values()];
 
   // ── Flood guard: never push episodes that predate the token ──────
   // The bug this fixes: the OLD guard only protected users with ZERO notification
@@ -284,7 +318,7 @@ Deno.serve(async (req) => {
     for (const userId of relevantUserIds) {
       for (const q of queue) {
         if (predatesToken(userId, q)) {
-          seedRows.push({ user_id: userId, anime_key: q.anime_key, episode_number: q.episode_number });
+          seedRows.push({ user_id: userId, anime_key: normAnimeKey(q.anime_key), episode_number: q.episode_number });
         }
       }
     }
@@ -304,47 +338,45 @@ Deno.serve(async (req) => {
   let pushedCount = 0;
 
   // Claim (user, anime_key, episode) for dedup; true the first time only.
+  // `animeKey` MUST already be normalized (normAnimeKey) so .life/.you collapse.
+  // Race-safe: a bare INSERT lets the unique constraint arbitrate when the cron
+  // and an app-nudge run concurrently — the loser sees 23505 and skips, instead
+  // of a SELECT-then-INSERT gap that would double-push.
   async function claimEpisode(userId: string, animeKey: string, episode: number): Promise<boolean> {
-    const { data: already } = await supabase
-      .from("notified_episodes")
-      .select("episode_number")
-      .eq("user_id", userId)
-      .eq("anime_key", animeKey)
-      .eq("episode_number", episode)
-      .maybeSingle();
-    if (already) return false;
-    await supabase.from("notified_episodes").insert({
+    const { error } = await supabase.from("notified_episodes").insert({
       user_id: userId,
       anime_key: animeKey,
       episode_number: episode,
     });
-    return true;
+    return !error; // 23505 (already claimed) or any error → don't push
   }
 
   for (const q of queue) {
     const normTitle = norm(q.anime_title);
+    const nKey = normAnimeKey(q.anime_key); // TLD-stable dedup identity
 
     // "all" users → everyone whose token predates nothing for this episode.
     for (const [userId, tokens] of allTokensByUser) {
       if (predatesToken(userId, q)) continue; // older than token → seeded silently above
-      if (!(await claimEpisode(userId, q.anime_key, q.episode_number))) continue;
+      if (!(await claimEpisode(userId, nKey, q.episode_number))) continue;
       for (const to of tokens) {
         messages.push(buildMessage(to, q));
         pushedCount++;
       }
     }
 
-    // "mylist" users → only if this anime is in their favorites.
+    // "mylist" users → only if this anime is in their favorites. Favorite hrefs
+    // are stored TLD-normalized, so compare against normalized keys too.
     for (const [userId, tokens] of mylistTokensByUser) {
       if (predatesToken(userId, q)) continue; // older than token → seeded silently above
       const hrefs = favHrefsByUser.get(userId);
       const titles = favTitlesByUser.get(userId);
       const matches =
-        (q.anime_href && hrefs?.has(q.anime_href)) ||
-        (q.anime_key && hrefs?.has(q.anime_key)) ||
+        (nKey && hrefs?.has(nKey)) ||
+        (q.anime_href && hrefs?.has(normAnimeKey(q.anime_href))) ||
         (normTitle && titles?.has(normTitle));
       if (!matches) continue;
-      if (!(await claimEpisode(userId, q.anime_key, q.episode_number))) continue;
+      if (!(await claimEpisode(userId, nKey, q.episode_number))) continue;
       for (const to of tokens) {
         messages.push(buildMessage(to, q));
         pushedCount++;

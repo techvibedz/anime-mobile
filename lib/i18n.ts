@@ -111,6 +111,7 @@ export const ar = {
   caughtUpBadge: "آخر حلقة",
   latestEpBadge: "الأحدث",
   titleCopied: "تم نسخ العنوان",
+  shareAnime: (title: string) => `شاهد "${title}" على بانتوفة`,
 
   // Next-episode countdown
   nextEpIn: (n: number) => `الحلقة ${n} بعد`,
@@ -132,9 +133,13 @@ export const ar = {
   emptyListSub: "ابحث عن أنمي وأضِفه إلى قائمتك.",
 
   // Search
+  discover: "اكتشف",
   searchPlaceholder: "ابحث عن أنمي…",
   searchSub: "اكتب اسم الأنمي للبدء",
   noResults: "لا توجد نتائج",
+  browseAll: "تصفّح كل الأنميات",
+  searchResultsFor: (q: string) => `نتائج البحث عن "${q}"`,
+  showMore: (n: number) => `عرض المزيد (${n})`,
 
   // Watch / Player
   loadingServers: "جاري تحميل المصادر…",
@@ -145,6 +150,8 @@ export const ar = {
   skipIntro: "تخطّي المقدمة",
   resolving: "جاري التحضير…",
   loadingPlayer: "جاري تحميل المشغّل…",
+  connecting: "جارٍ الاتصال…",
+  allServersFailed: "فشلت جميع السيرفرات",
   fallbackPlayer: "المشغّل الاحتياطي",
   unlock: "إلغاء القفل",
   // Server selection (shown before the player starts)
@@ -427,6 +434,39 @@ export const ar = {
   userYesterday: "أمس",
   userNoDays: "لا توجد أيام مسجّلة بعد",
   userNoDaysSub: "ستظهر هنا تفاصيل كل يوم يفتح فيه المستخدم التطبيق ومدّة استخدامه.",
+
+  // Watch Party — "شاهد معاً"
+  wpTitle: "المشاهدة المشتركة",
+  wpSub: "أنشئ غرفة وشاهد الأنمي مع أصدقائك في نفس اللحظة.",
+  wpCreate: "إنشاء غرفة",
+  wpCreating: "جارٍ الإنشاء…",
+  wpJoin: "انضمام",
+  wpJoinPlaceholder: "أدخل رمز الغرفة",
+  wpRoomCode: "رمز الغرفة",
+  wpShareHint: "شارك هذا الرمز مع أصدقائك لينضموا.",
+  wpWaiting: "بانتظار انضمام الأصدقاء…",
+  wpInRoom: (n: number) => `${n} في الغرفة`,
+  wpHost: "المضيف",
+  wpYou: "أنت",
+  wpHostPicking: "بانتظار أن يختار المضيف حلقة…",
+  wpStartWatching: "ابدأ المشاهدة",
+  wpStartWatchingHint: "افتح أي حلقة الآن لبثها إلى ضيوفك.",
+  wpLeave: "مغادرة الغرفة",
+  wpLeaveParty: "إنهاء المشاركة",
+  wpInvalidCode: "رمز غير صالح",
+  wpSignInRequired: "سجّل الدخول لاستخدام المشاهدة المشتركة.",
+  wpHostPaused: "أوقف المضيف التشغيل",
+  wpHostPlaying: "يتحكم المضيف بالتشغيل",
+  wpFollowing: "تتابع المضيف",
+  wpPartyBtn: "شاهد معاً",
+  wpReady: "جاهز",
+  wpBuffering: "يحمّل…",
+  wpAllReady: "الجميع جاهز",
+  wpWaitingReady: (n: number) => `بانتظار جاهزية ${n} ${n === 1 ? "مشاهد" : "مشاهدين"}…`,
+  wpWaitingHost: "بانتظار أن يصبح الجميع جاهزاً…",
+  wpStartForEveryone: "ابدأ للجميع",
+  wpWaitingToStart: "بانتظار أن يبدأ المضيف…",
+  wpReadyOf: (r: number, n: number) => `${r}/${n} جاهز`,
 };
 
 export const t = ar;

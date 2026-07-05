@@ -5,8 +5,9 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
-import { C, R, S, ELEVATION_GLOW } from "../../lib/theme";
+import { C, R, S, ELEVATION_GLOW, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { Aurora } from "../../components/ScreenChrome";
 
 export default function Register() {
   const insets = useSafeAreaInsets();
@@ -43,7 +44,7 @@ export default function Register() {
   if (needsConfirmation) {
     return (
       <View style={[ss.root, { paddingTop: insets.top + 40, paddingHorizontal: S.paddingContent }]}>
-        <View style={ss.orb1} />
+        <Aurora />
         <LinearGradient
           colors={[C.violet, C.accent]}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
@@ -71,12 +72,7 @@ export default function Register() {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={ss.root}>
-      <LinearGradient
-        colors={[C.violet + "33", "transparent"]}
-        style={[StyleSheet.absoluteFill, { height: 380 }]}
-      />
-      <View style={ss.orb1} />
-      <View style={ss.orb2} />
+      <Aurora />
 
       <ScrollView
         contentContainerStyle={[ss.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}
@@ -92,6 +88,7 @@ export default function Register() {
           <Text style={ss.heading}>{t.createAccount}</Text>
           <Text style={ss.sub}>{t.signupSub}</Text>
 
+          <View style={ss.authCard}>
           {!isConfigured && (
             <View style={ss.warnBanner}>
               <Ionicons name="warning" size={14} color={C.gold} />
@@ -208,6 +205,7 @@ export default function Register() {
               )}
             </LinearGradient>
           </Pressable>
+          </View>
 
           <View style={ss.footer}>
             <Pressable onPress={() => router.replace("/(auth)/login")}>
@@ -223,9 +221,13 @@ export default function Register() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  orb1: { position: "absolute", width: 320, height: 320, borderRadius: 160, backgroundColor: C.violet + "22", top: -80, right: -100 },
-  orb2: { position: "absolute", width: 280, height: 280, borderRadius: 140, backgroundColor: C.accent + "22", top: 240, left: -100 },
   scroll: { flexGrow: 1, paddingHorizontal: S.paddingContent },
+  // The form floats as one cohesive glass card over the Aurora backdrop.
+  authCard: {
+    borderRadius: R.xxl, padding: 18, marginTop: 4,
+    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
+    ...ELEVATION_CARD,
+  },
   header: { flexDirection: "row", marginBottom: 24 },
   backBtn: {
     width: 40, height: 40, borderRadius: 20,

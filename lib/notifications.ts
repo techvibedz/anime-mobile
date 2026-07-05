@@ -23,12 +23,16 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchRecent } from "./api";
 import { reconcileCompletionFromEpisodes } from "./completion";
 import { getFavorites, toAnimeUrl, type FavoriteAnime } from "./favorites";
+import { normAnimeKey } from "./history";
 import { getNotificationScope, type NotificationScope } from "./settings";
 import { supabase, isSupabaseConfigured } from "./supabase";
 
 const LIST_KEY = "@notifications_v1";
-const SEEN_KEYS_KEY = "@notif_seen_keys_v2"; // { scope, keys: string[] } — dedup of notified episodes
-const QUEUE_SEEN_KEY = "@queue_seen_v1"; // scope-independent keys already reported to the server
+// v3: dedup keys switched to the TLD-normalized anime key (see normAnimeKey).
+// Bumping the storage key discards the old full-URL keys so the new format
+// re-seeds silently on first run instead of flooding the in-app center.
+const SEEN_KEYS_KEY = "@notif_seen_keys_v3"; // { scope, keys: string[] } — dedup of notified episodes
+const QUEUE_SEEN_KEY = "@queue_seen_v2"; // scope-independent keys already reported to the server
 const MAX_STORED = 60;
 const MAX_SEEN_KEYS = 1000; // cap the dedup set (recent feed ages old keys out anyway)
 
@@ -38,6 +42,13 @@ const MAX_SEEN_KEYS = 1000; // cap the dedup set (recent feed ages old keys out 
 // feed is shared/global and the cron is the backstop, so this is plenty.
 const REPORT_THROTTLE_MS = 10 * 60 * 1000; // 10 min
 let lastReportAt = 0;
+
+// syncEpisodeNotifications now runs on every app-foreground (not just home mount),
+// so a stale "caught up" badge clears the moment the user returns after a new
+// episode drops — without a full app restart. Throttle the feed re-scrape so
+// flicking in/out doesn't hammer it; `force` bypasses it for the initial mount.
+const SYNC_THROTTLE_MS = 5 * 60 * 1000; // 5 min
+let lastSyncAt = 0;
 
 export interface AppNotification {
   /** Stable id: `${animeHref}#${episodeNumber}` so the same episode never duplicates. */
@@ -156,7 +167,7 @@ type RawEpisode = { title: string; href: string; image: string; animeTitle: stri
 /** Resolve a stable per-anime key for an episode (anime URL, else normalized title). */
 function animeKeyFor(ep: RawEpisode): string {
   const url = ep.animeHref?.includes("/anime/") ? ep.animeHref : toAnimeUrl(ep.animeHref || ep.href);
-  return url || norm(ep.animeTitle) || ep.href;
+  return normAnimeKey(url || norm(ep.animeTitle) || ep.href);
 }
 
 /** Resolve the /anime/ URL for an episode (best effort). */
@@ -192,8 +203,10 @@ async function fetchRecentFeed(): Promise<RawEpisode[]> {
  *
  * Returns the number of NEW notifications created (0 on any failure).
  */
-export async function syncEpisodeNotifications(): Promise<number> {
+export async function syncEpisodeNotifications(opts?: { force?: boolean }): Promise<number> {
   try {
+    if (!opts?.force && Date.now() - lastSyncAt < SYNC_THROTTLE_MS) return 0;
+    lastSyncAt = Date.now();
     const scope = await getNotificationScope();
 
     // Pull a couple of pages of recent episodes (newest first). Fetched before

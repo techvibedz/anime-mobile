@@ -1,6 +1,6 @@
 {
   "name": "anime-mobile",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
@@ -8,11 +8,13 @@
     "ios": "expo start --ios",
     "prebuild": "expo prebuild",
     "publish-ota": "bash scripts/publish-ota.sh",
-    "test": "npx --yes tsc --noEmit && npx --yes tsx lib/relations.test.ts && npx --yes tsx lib/fuzzy.test.ts"
+    "test": "npx --yes tsc --noEmit && npx --yes tsx lib/relations.test.ts && npx --yes tsx lib/fuzzy.test.ts && npx --yes tsx lib/watchParty.test.ts && npx --yes tsx lib/scraper/seasonNum.test.ts"
   },
   "dependencies": {
     "@expo-google-fonts/cairo": "^0.4.2",
     "@expo-google-fonts/dm-sans": "^0.4.2",
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@expo-google-fonts/montserrat": "^0.4.2",
     "@expo-google-fonts/outfit": "^0.4.3",
     "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "^15.0.3",

@@ -5,8 +5,9 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
-import { C, R, S, ELEVATION_GLOW } from "../../lib/theme";
+import { C, R, S, ELEVATION_GLOW, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { Aurora } from "../../components/ScreenChrome";
 
 export default function Login() {
   const insets = useSafeAreaInsets();
@@ -37,12 +38,7 @@ export default function Login() {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={ss.root}>
-      <LinearGradient
-        colors={[C.accent + "33", "transparent"]}
-        style={[StyleSheet.absoluteFill, { height: 380 }]}
-      />
-      <View style={ss.orb1} />
-      <View style={ss.orb2} />
+      <Aurora />
 
       <ScrollView
         contentContainerStyle={[ss.scroll, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}
@@ -58,6 +54,7 @@ export default function Login() {
           <Text style={ss.heading}>{t.welcomeBack}</Text>
           <Text style={ss.sub}>{t.loginSub}</Text>
 
+          <View style={ss.authCard}>
           {!isConfigured && (
             <View style={ss.warnBanner}>
               <Ionicons name="warning" size={14} color={C.gold} />
@@ -170,6 +167,7 @@ export default function Login() {
               )}
             </LinearGradient>
           </Pressable>
+          </View>
 
           <View style={ss.footer}>
             <Pressable onPress={() => router.replace("/(auth)/register")}>
@@ -185,9 +183,13 @@ export default function Login() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  orb1: { position: "absolute", width: 320, height: 320, borderRadius: 160, backgroundColor: C.accent + "22", top: -80, right: -100 },
-  orb2: { position: "absolute", width: 280, height: 280, borderRadius: 140, backgroundColor: C.violet + "22", top: 200, left: -100 },
   scroll: { flexGrow: 1, paddingHorizontal: S.paddingContent },
+  // The form floats as one cohesive glass card over the Aurora backdrop.
+  authCard: {
+    borderRadius: R.xxl, padding: 18, marginTop: 4,
+    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
+    ...ELEVATION_CARD,
+  },
   header: { flexDirection: "row", marginBottom: 24 },
   backBtn: {
     width: 40, height: 40, borderRadius: 20,

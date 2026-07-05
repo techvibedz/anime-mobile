@@ -165,6 +165,7 @@ function Sidebar() {
     { icon: "home-outline", label: t.home, onPress: () => go("/(tabs)"), match: "/(tabs)" },
     { icon: "person-outline", label: t.profile, onPress: () => go("/profile"), match: "/profile" },
     { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
+    { icon: "people-outline", label: t.wpTitle, onPress: () => go("/watch-party"), match: "/watch-party" },
     { icon: "download-outline", label: t.downloadsTitle, onPress: () => go("/downloads"), match: "/downloads" },
     { icon: "newspaper-outline", label: t.newsTitle, onPress: () => go("/news"), match: "/news" },
     { icon: "calendar-outline", label: t.scheduleTitle, onPress: () => go("/schedule"), match: "/schedule" },
@@ -209,35 +210,13 @@ function Sidebar() {
       <Animated.View
         style={[st.panel, { width: PANEL_W, paddingTop: insets.top + 16, transform: [{ translateX }] }]}
       >
-        {/* Layered ambient glow — spans the whole panel and fades smoothly to the
-            base (via `locations`) so there's no hard two-tone cut where a fixed
-            band would have ended. */}
+        {/* Subtle neutral tonal lift — no colored glow (Sumi: hairlines, not halos). */}
         <View style={st.glow} pointerEvents="none">
-          <LinearGradient
-            colors={[C.violetSoft, "transparent"]}
-            locations={[0, 0.5]}
-            start={{ x: 0.05, y: 0 }}
-            end={{ x: 0.7, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          <LinearGradient
-            colors={[C.meshPink, "transparent"]}
-            locations={[0, 0.45]}
-            start={{ x: 1, y: 0 }}
-            end={{ x: 0.2, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          <LinearGradient
-            colors={[C.meshCyan, "transparent"]}
-            locations={[0, 0.55]}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.inkRaised, opacity: 0.4 }]} />
         </View>
-        {/* Accent hairline on the panel's leading edge */}
+        {/* Accent hairline on the panel's leading edge — single ember color. */}
         <LinearGradient
-          colors={[C.accent, C.violet, "transparent"]}
+          colors={[C.ember, "transparent"]}
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
           style={st.edgeLine}
@@ -256,14 +235,9 @@ function Sidebar() {
                 <Text style={st.brandTag}>{t.settingsTagline}</Text>
               </View>
               <View style={st.logoWrap}>
-                <LinearGradient
-                  colors={[C.accent, C.violet]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={st.logoMark}
-                >
+                <View style={st.logoMark}>
                   <Text style={st.logoGlyph}>P</Text>
-                </LinearGradient>
+                </View>
               </View>
             </View>
           </View>
@@ -272,17 +246,11 @@ function Sidebar() {
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
           >
-            {/* Hero profile card */}
+            {/* Hero profile card — identity + quick stats in one cohesive block */}
             <Pressable
               style={({ pressed }) => [st.hero, pressed && st.heroPressed]}
               onPress={() => go("/profile")}
             >
-              <LinearGradient
-                colors={[C.violetSoft, "transparent"]}
-                start={{ x: 1, y: 0 }}
-                end={{ x: 0, y: 1 }}
-                style={StyleSheet.absoluteFill}
-              />
               <View style={st.heroRow}>
                 <View style={st.heroChevron}>
                   <Ionicons name={CHEVRON} size={18} color={C.textMuted} />
@@ -295,7 +263,7 @@ function Sidebar() {
                   </View>
                 </View>
                 <View style={st.avatarOuter}>
-                  <LinearGradient colors={[C.accent, C.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={st.avatarRing}>
+                  <View style={st.avatarRing}>
                     <View style={st.avatarInner}>
                       {avatarUrl ? (
                         <Image source={{ uri: avatarUrl }} style={st.avatar} contentFit="cover" transition={150} />
@@ -305,17 +273,18 @@ function Sidebar() {
                         </View>
                       )}
                     </View>
-                  </LinearGradient>
+                  </View>
                 </View>
               </View>
-            </Pressable>
 
-            {/* Quick stats */}
-            <View style={st.statsRow}>
-              <StatTile icon="albums-outline" value={stats.animeCount} label={t.statsAnimeInList} tint={C.violet} />
-              <View style={st.statGap} />
-              <StatTile icon="play-circle-outline" value={stats.episodesWatched} label={t.statsEpisodesWatched} tint={C.accent} />
-            </View>
+              {/* Inline stat footer — bare stats (no nested cards) */}
+              <View style={st.heroDivider} />
+              <View style={st.heroStats}>
+                <StatTile icon="albums-outline" value={stats.animeCount} label={t.statsAnimeInList} tint={C.violet} />
+                <View style={st.heroStatDivider} />
+                <StatTile icon="play-circle-outline" value={stats.episodesWatched} label={t.statsEpisodesWatched} tint={C.accent} />
+              </View>
+            </Pressable>
 
             {/* Nav */}
             <Text style={st.sectionCap}>{t.menu}</Text>
@@ -388,20 +357,14 @@ function StatTile({
   tint: string;
 }) {
   return (
-    <View style={[st.statCard, { borderColor: tint + "33" }]}>
-      <LinearGradient
-        colors={[tint + "22", "transparent"]}
-        start={{ x: 1, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      <View style={st.statHead}>
-        <View style={[st.statIcon, { backgroundColor: tint + "22" }]}>
-          <Ionicons name={icon} size={15} color={tint} />
+    <View style={st.heroStat}>
+      <View style={st.heroStatHead}>
+        <View style={[st.heroStatIcon, { backgroundColor: tint + "22" }]}>
+          <Ionicons name={icon} size={14} color={tint} />
         </View>
-        <Text style={[st.statNum, { color: tint }]}>{value}</Text>
+        <Text style={st.heroStatNum}>{value}</Text>
       </View>
-      <Text style={st.statLabel} numberOfLines={1}>{label}</Text>
+      <Text style={st.heroStatLabel} numberOfLines={1}>{label}</Text>
     </View>
   );
 }
@@ -415,7 +378,7 @@ const st = StyleSheet.create({
   panel: {
     position: "absolute", top: 0, bottom: 0, right: 0,
     backgroundColor: C.bgDeep,
-    borderTopLeftRadius: 24, borderBottomLeftRadius: 24,
+    borderTopLeftRadius: R.xxl, borderBottomLeftRadius: R.xxl,
     borderLeftWidth: 1, borderColor: C.line,
     paddingHorizontal: 16,
     overflow: "hidden",
@@ -450,6 +413,7 @@ const st = StyleSheet.create({
   },
   logoMark: {
     width: 44, height: 44, borderRadius: 13,
+    backgroundColor: C.ember,
     alignItems: "center", justifyContent: "center",
   },
   logoGlyph: { color: "#fff", fontSize: 23, fontWeight: "900", fontFamily: "Outfit_900Black" },
@@ -463,11 +427,11 @@ const st = StyleSheet.create({
   // Hero profile card
   hero: {
     borderRadius: R.xxl, padding: 16,
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.borderViolet,
+    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
     marginBottom: 16, overflow: "hidden",
     ...ELEVATION_CARD,
   },
-  heroPressed: { transform: [{ scale: 0.99 }], borderColor: C.borderAccent },
+  heroPressed: { transform: [{ scale: 0.99 }], borderColor: C.borderLight },
   heroRow: { flexDirection: "row", alignItems: "center" },
   heroChevron: { alignSelf: "center" },
   heroText: { flex: 1, marginHorizontal: 12, alignItems: "flex-end" },
@@ -478,6 +442,7 @@ const st = StyleSheet.create({
   },
   avatarRing: {
     width: 62, height: 62, borderRadius: R.circle,
+    backgroundColor: C.ember,
     alignItems: "center", justifyContent: "center", padding: 2.5,
   },
   avatarInner: {
@@ -495,16 +460,15 @@ const st = StyleSheet.create({
   },
   heroBadgeText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
-  statsRow: { flexDirection: "row", marginBottom: 22 },
-  statGap: { width: 12 },
-  statCard: {
-    flex: 1, borderRadius: R.xl, padding: 14, overflow: "hidden",
-    backgroundColor: C.glass, borderWidth: 1,
-  },
-  statHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  statIcon: { width: 30, height: 30, borderRadius: R.circle, alignItems: "center", justifyContent: "center" },
-  statNum: { fontSize: 28, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  statLabel: { color: C.textSecondary, fontSize: 11, marginTop: 8, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  // Inline stat footer inside the hero card (bare — no nested cards).
+  heroDivider: { height: 1, backgroundColor: C.border, marginTop: 15, marginBottom: 13 },
+  heroStats: { flexDirection: "row", alignItems: "center" },
+  heroStatDivider: { width: 1, height: 34, backgroundColor: C.border },
+  heroStat: { flex: 1, alignItems: "center" },
+  heroStatHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  heroStatIcon: { width: 28, height: 28, borderRadius: R.circle, alignItems: "center", justifyContent: "center" },
+  heroStatNum: { color: C.bone, fontSize: 24, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  heroStatLabel: { color: C.textSecondary, fontSize: 11, marginTop: 7, fontFamily: "Cairo_500Medium", textAlign: "center" },
 
   // Quiet uppercase-style caption that introduces the nav list.
   sectionCap: {

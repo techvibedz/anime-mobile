@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, memo, startTransition } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, memo, startTransition } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,9 @@ import {
   ActivityIndicator,
   RefreshControl,
   InteractionManager,
+  Share,
+  Animated,
+  Easing,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
@@ -33,8 +36,12 @@ import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
 import { GlassFill } from "../../components/GlassFill";
 import { DownloadPicker } from "../../components/DownloadPicker";
-import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
+import { PosterCard } from "../../components/PosterCard";
+import { C, R, S, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV } from "../../lib/theme";
+import { posterUrl } from "../../lib/img";
 import { t } from "../../lib/i18n";
+import { Rise } from "../../components/Rise";
+import { useReducedMotion } from "../../lib/motion";
 
 // Core React Native bundles a Clipboard native module (no extra dependency), so
 // copying works over OTA on the existing build. Deep-import since the top-level
@@ -257,6 +264,13 @@ export default function AnimeDetailScreen() {
     setTimeout(() => setTitleCopied(false), 1500);
   }, [data?.title]);
 
+  // Share the anime by title. The href is a rotating scraper URL (not a stable
+  // public link), so we share the title text — the recipient finds it in-app.
+  const shareAnime = useCallback(() => {
+    if (!data?.title) return;
+    Share.share({ message: t.shareAnime(data.title) }).catch(() => {});
+  }, [data?.title]);
+
   // Pull-to-refresh: re-scrape the page, its anime4up enrichment, and retry the
   // MAL rating (handy when a transient Jikan/CF blip left it without a score).
   const reload = useCallback(async () => {
@@ -318,25 +332,11 @@ export default function AnimeDetailScreen() {
           />
         }
       >
-        {/* ── Banner with mesh gradient ──────── */}
+        {/* ── Banner ─────────────────────────── */}
         <View style={ss.banner}>
-          <View style={ss.meshBg}>
-            <LinearGradient
-              colors={[C.meshViolet, "transparent"]}
-              start={{ x: 0.2, y: 0.5 }}
-              end={{ x: 0.8, y: 0.5 }}
-              style={[StyleSheet.absoluteFill, { opacity: 0.8 }]}
-            />
-            <LinearGradient
-              colors={[C.meshPink, "transparent"]}
-              start={{ x: 0.8, y: 0.2 }}
-              end={{ x: 0.2, y: 0.8 }}
-              style={[StyleSheet.absoluteFill, { opacity: 0.6 }]}
-            />
-          </View>
           {(data.banner || data.poster) ? (
             <Image
-              source={{ uri: data.banner || data.poster }}
+              source={{ uri: posterUrl(data.banner || data.poster, SW) }}
               style={{ width: SW, height: BANNER_H }}
               contentFit="cover"
               cachePolicy="memory-disk"
@@ -350,51 +350,50 @@ export default function AnimeDetailScreen() {
           />
         </View>
 
-        {/* ── Info Section ──────────────────── */}
-        <View style={ss.infoSection}>
-          <Pressable onLongPress={copyTitle} delayLongPress={350}>
-            <Text style={ss.title}>{data.title}</Text>
-          </Pressable>
-          {titleCopied && (
-            <View style={ss.copiedPill}>
-              <Ionicons name="checkmark-circle" size={13} color={C.accent} />
-              <Text style={ss.copiedText}>{t.titleCopied}</Text>
-            </View>
-          )}
+        {/* ── Hero — poster punches through the banner ──────── */}
+        <Rise style={ss.hero}>
+          <View style={ss.heroRow}>
+            {data.poster ? (
+              <Image
+                source={{ uri: posterUrl(data.poster, 240) }}
+                style={ss.heroPoster}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={200}
+              />
+            ) : (
+              <View style={[ss.heroPoster, ss.heroPosterFallback]}>
+                <Ionicons name="image-outline" size={26} color={C.textMuted} />
+              </View>
+            )}
+            <View style={ss.heroText}>
+              <Pressable onLongPress={copyTitle} delayLongPress={350}>
+                <Text style={ss.title}>{data.title}</Text>
+              </Pressable>
+              {titleCopied && (
+                <View style={ss.copiedPill}>
+                  <Ionicons name="checkmark-circle" size={13} color={C.accent} />
+                  <Text style={ss.copiedText}>{t.titleCopied}</Text>
+                </View>
+              )}
 
-          {/* Quick meta — MAL rating badge; full genre list lives below the synopsis */}
-          {(malScore != null || data.rating) && (
-            <View style={ss.quickMeta}>
-              <MalBadge score={malScore} />
-              {data.rating && (
-                <View style={ss.ratingPill}>
-                  <Ionicons name="star" size={12} color={C.gold} />
-                  <Text style={ss.ratingText}>{data.rating}</Text>
+              {/* Quick meta — MAL rating badge; full genre list lives below the synopsis */}
+              {(malScore != null || data.rating) && (
+                <View style={ss.quickMeta}>
+                  <MalBadge score={malScore} />
+                  {data.rating && (
+                    <View style={ss.ratingPill}>
+                      <Ionicons name="star" size={12} color={C.gold} />
+                      <Text style={ss.ratingText}>{data.rating}</Text>
+                    </View>
+                  )}
                 </View>
               )}
             </View>
-          )}
+          </View>
 
           {/* Next-episode countdown — only shows for currently-airing anime */}
           <AiringCountdown title={data.title} />
-
-          {/* Action buttons */}
-          <View style={ss.actions}>
-            <Pressable
-              style={ss.btnPrimary}
-              onPress={() => firstPlayable?.href && router.push(`/watch/${encodeURIComponent(firstPlayable.href)}`)}
-            >
-              <Ionicons name="play" size={16} color={C.textOnAccent} />
-              <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
-            </Pressable>
-            <Pressable style={ss.btnGlass} onPress={toggleBookmark}>
-              <Ionicons
-                name={bookmarked ? "heart" : "heart-outline"}
-                size={18}
-                color={bookmarked ? C.accent : C.text}
-              />
-            </Pressable>
-          </View>
 
           {/* Synopsis */}
           {data.synopsis ? (
@@ -410,11 +409,12 @@ export default function AnimeDetailScreen() {
           <View style={ss.chipRow}>
             {data.genres.map((g, i) => (
               <View key={i} style={ss.chip}>
+                <GlassFill intensity={16} />
                 <Text style={ss.chipText}>{g}</Text>
               </View>
             ))}
           </View>
-        </View>
+        </Rise>
 
         {/* ── Glow divider ──────────────────── */}
         <View style={ss.glowLine} />
@@ -460,27 +460,79 @@ export default function AnimeDetailScreen() {
         </View>
       </ScrollView>
 
-      {/* ── Floating top buttons ─────────────── */}
+      {/* ── Floating back button ─────────────── */}
       <View style={[ss.topBar, { top: insets.top + 8 }]}>
         <GlassCircleBtn icon="chevron-back" onPress={() => router.back()} />
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <GlassCircleBtn icon="share-outline" />
-          <GlassCircleBtn
-            icon={bookmarked ? "heart" : "heart-outline"}
-            color={bookmarked ? C.accent : C.text}
-            onPress={toggleBookmark}
-          />
-        </View>
       </View>
 
-      {/* ── Add-to-list picker ───────────────── */}
-      <Modal transparent animationType="fade" visible={pickerOpen} onRequestClose={() => setPickerOpen(false)}>
-        <Pressable style={ss.pickerBackdrop} onPress={() => setPickerOpen(false)}>
-          <Pressable style={ss.pickerSheet} onPress={() => {}}>
-            <Text style={ss.pickerTitle}>{t.addToList}</Text>
-            <Text style={ss.pickerSub}>{t.saveWhere(data.title)}</Text>
+      {/* ── Floating action bar — playback is always one tap away ── */}
+      <View style={[ss.actionBar, { paddingBottom: insets.bottom + 10 }]}>
+        <GlassFill intensity={26} />
+        <Pressable
+          style={ss.actionPlayWrap}
+          onPress={() => firstPlayable?.href && router.push(`/watch/${encodeURIComponent(firstPlayable.href)}`)}
+        >
+          <LinearGradient colors={[C.accent, C.mint]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ss.actionPlayGrad}>
+            <Ionicons name="play" size={16} color={C.textOnAccent} />
+            <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
+          </LinearGradient>
+        </Pressable>
+        <Pressable style={ss.actionIcon} onPress={toggleBookmark}>
+          <Ionicons name={bookmarked ? "heart" : "heart-outline"} size={20} color={bookmarked ? C.accent : C.text} />
+        </Pressable>
+        <Pressable style={ss.actionIcon} onPress={shareAnime}>
+          <Ionicons name="share-outline" size={19} color={C.text} />
+        </Pressable>
+      </View>
 
-            <Pressable style={ss.pickerOption} onPress={() => saveToList("watching")}>
+      {/* ── Add-to-list picker (slide-up sheet) ───────────────── */}
+      {pickerOpen && (
+        <ListPickerSheet title={data.title} onPick={saveToList} onClose={() => setPickerOpen(false)} />
+      )}
+    </View>
+  );
+}
+
+/* ── Add-to-list bottom sheet ────────────────── */
+
+function ListPickerSheet({ title, onPick, onClose }: { title: string; onPick: (list: FavoriteList) => void; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const reduced = useReducedMotion();
+  const translateY = useRef(new Animated.Value(reduced ? 0 : 520)).current;
+  const backdrop = useRef(new Animated.Value(reduced ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (reduced) return;
+    Animated.parallel([
+      Animated.timing(translateY, { toValue: 0, duration: 300, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const animateClose = () => {
+    if (reduced) { onClose(); return; }
+    Animated.parallel([
+      Animated.timing(translateY, { toValue: 520, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) onClose(); });
+  };
+
+  return (
+    <Modal transparent visible animationType="none" onRequestClose={animateClose}>
+      <View style={{ flex: 1 }}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={animateClose}>
+          <Animated.View style={[StyleSheet.absoluteFill, ss.sheetBackdrop, { opacity: backdrop }]} />
+        </Pressable>
+        <View style={ss.sheetAnchor} pointerEvents="box-none">
+          <Animated.View
+            style={[ss.sheetPanel, { paddingBottom: insets.bottom + 16, transform: [{ translateY }] }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={ss.sheetGrabber} />
+            <Text style={ss.pickerTitle}>{t.addToList}</Text>
+            <Text style={ss.pickerSub}>{t.saveWhere(title)}</Text>
+
+            <Pressable style={ss.pickerOption} onPress={() => onPick("watching")}>
               <View style={[ss.pickerIcon, { backgroundColor: C.accent + "22" }]}>
                 <Ionicons name="play-circle" size={22} color={C.accent} />
               </View>
@@ -491,7 +543,7 @@ export default function AnimeDetailScreen() {
               <Ionicons name={I18nManager.isRTL ? "chevron-back" : "chevron-forward"} size={18} color={C.textMuted} />
             </Pressable>
 
-            <Pressable style={ss.pickerOption} onPress={() => saveToList("planned")}>
+            <Pressable style={ss.pickerOption} onPress={() => onPick("planned")}>
               <View style={[ss.pickerIcon, { backgroundColor: C.accent + "22" }]}>
                 <Ionicons name="bookmark" size={20} color={C.accent} />
               </View>
@@ -502,13 +554,13 @@ export default function AnimeDetailScreen() {
               <Ionicons name={I18nManager.isRTL ? "chevron-back" : "chevron-forward"} size={18} color={C.textMuted} />
             </Pressable>
 
-            <Pressable style={ss.pickerCancel} onPress={() => setPickerOpen(false)}>
+            <Pressable style={ss.pickerCancel} onPress={animateClose}>
               <Text style={ss.pickerCancelText}>{t.cancel}</Text>
             </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
-    </View>
+          </Animated.View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -814,7 +866,7 @@ function EpisodesTab({
         >
           <Ionicons name="chevron-down" size={16} color={C.text} />
           <Text style={{ color: C.text, fontWeight: "600", fontSize: 13 }}>
-            {`عرض المزيد (${sorted.length - visibleCount})`}
+            {t.showMore(sorted.length - visibleCount)}
           </Text>
         </Pressable>
       )}
@@ -925,7 +977,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
         )}
         {ep.href4up && !watched && (
           <View style={ss.epCardSourceBadge}>
-            <Text style={ss.epCardSourceText}>2X</Text>
+            <Ionicons name="layers" size={10} color="#000" />
           </View>
         )}
         {/* Download button — top-left. Stops propagation so it never opens the
@@ -1013,47 +1065,69 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
     if (resolvingId != null) return;
     setResolvingId(entry.anilistId);
     setNotFoundId(null);
+
+    // Score a result against the related card: title similarity (season-aware,
+    // either language) that MUST clear MIN_RELATED_TITLE_SCORE, biased hard by
+    // format so a 1-episode OVA card doesn't resolve to the 12-episode series.
+    // `strong` = safe to open from a still-incomplete (partial) pool: a near-exact
+    // title (≥82) with a compatible format. Anything weaker waits for the full
+    // pool so a better candidate can still win.
+    const wantFmt = formatCat(entry.format);
+    const scoreOf = (r: SearchResult): { sc: number; strong: boolean } | null => {
+      const titleScore = bestRelatedMatch(entry, r.title);
+      if (titleScore < MIN_RELATED_TITLE_SCORE) return null; // too weak — skip
+      let sc = titleScore;
+      let fmtOk = true;
+      if (wantFmt) {
+        const gotFmt = formatCat(r.type) || formatCat(r.title);
+        if (gotFmt) { sc += gotFmt === wantFmt ? 45 : -45; fmtOk = gotFmt === wantFmt; }
+        else { if (wantFmt !== "tv") sc -= 15; fmtOk = wantFmt === "tv"; } // unmarked ≈ series
+      }
+      return { sc, strong: titleScore >= 82 && fmtOk };
+    };
+
+    // Search the source sites by BOTH names AniList knows (romaji + English) — a
+    // site may index an anime under only one language. Run the queries in PARALLEL
+    // and navigate the INSTANT a streamed partial yields a strong match, instead
+    // of awaiting every source of every query serially (which cost ~30s worst
+    // case). `navigated` doubles as the abort flag: still-running search jobs on
+    // the serial bus just get their late partials ignored.
+    const seen = new Set<string>();
+    const pooled: SearchResult[] = [];
+    let navigated = false;
+    const go = (href: string) => {
+      if (navigated) return;
+      navigated = true;
+      router.push(`/anime/${encodeURIComponent(href)}`);
+    };
+    const consider = (results: SearchResult[]) => {
+      if (navigated) return;
+      for (const r of results) {
+        if (r?.href && !seen.has(r.href)) { seen.add(r.href); pooled.push(r); }
+      }
+      for (const r of pooled) {
+        if (scoreOf(r)?.strong) { go(r.href); return; }
+      }
+    };
+
     try {
-      // Search the source sites by BOTH names AniList knows (romaji + English):
-      // a site may index an anime under only one language, so a single-query
-      // search returned no good candidate and we'd settle for a wrong one. Pool
-      // and de-dupe (by href) the results of every query.
       const queries = [entry.title, entry.titleEnglish]
         .filter((q): q is string => !!q && q.trim().length > 0)
         .filter((q, i, a) => a.findIndex((x) => x.toLowerCase() === q.toLowerCase()) === i);
-      const seen = new Set<string>();
-      const pooled: SearchResult[] = [];
-      for (const q of queries) {
-        const res = await searchAnime(q);
-        for (const r of res.data.results) {
-          if (r?.href && !seen.has(r.href)) { seen.add(r.href); pooled.push(r); }
-        }
-      }
-      // Pick the BEST match, not just the first result. The source sites' search
-      // is fuzzy, so results[0] for a query was sometimes a different anime
-      // entirely — opening the "wrong" page. Score each result against the
-      // related title (season-aware, either language) AND its format: an OVA /
-      // movie / special shares the base title with the main TV series, so without
-      // a format check a 1-episode OVA card would resolve to the 12-episode
-      // series. We bias hard toward the result whose format matches the card's.
-      // A result must clear MIN_RELATED_TITLE_SCORE on TITLE alone to be eligible
-      // — otherwise we'd rather report "not found" than open a different anime.
-      const wantFmt = formatCat(entry.format);
+      await Promise.all(queries.map((q) =>
+        searchAnime(q, consider).then((res) => consider(res.data.results)).catch(() => {}),
+      ));
+      if (navigated) return;
+
+      // No strong early hit — pick the best of the full pool.
       let hit: SearchResult | undefined;
       let best = -Infinity;
       for (const r of pooled) {
-        const titleScore = bestRelatedMatch(entry, r.title);
-        if (titleScore < MIN_RELATED_TITLE_SCORE) continue; // too weak — skip
-        let sc = titleScore;
-        if (wantFmt) {
-          const gotFmt = formatCat(r.type) || formatCat(r.title);
-          if (gotFmt) sc += gotFmt === wantFmt ? 45 : -45;
-          else if (wantFmt !== "tv") sc -= 15; // unmarked result is usually the series
-        }
-        if (sc > best) { best = sc; hit = r; }
+        const s = scoreOf(r);
+        if (s && s.sc > best) { best = s.sc; hit = r; }
       }
       if (hit?.href) {
-        router.push(`/anime/${encodeURIComponent(hit.href)}`);
+        go(hit.href);
       } else {
         setNotFoundId(entry.anilistId);
         setTimeout(() => setNotFoundId((id) => (id === entry.anilistId ? null : id)), 2500);
@@ -1079,26 +1153,28 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
       {items.map((item) => {
         const resolving = resolvingId === item.anilistId;
         const notFound = notFoundId === item.anilistId;
+        // 2 columns — bigger, more readable posters than the old 3-col grid,
+        // and a partial last row leaves a far smaller gap on the trailing
+        // (left, in RTL) edge.
+        const cardW = (SW - PAD * 2 - 12) / 2;
         return (
-          <Pressable
+          <PosterCard
             key={item.anilistId}
+            image={item.image}
+            title={item.title}
+            subtitle={item.format || undefined}
             onPress={() => openRelated(item)}
-            style={({ pressed }) => [ss.relatedCard, { opacity: pressed ? 0.85 : 1 }]}
-          >
-            <View style={ss.relatedImageWrap}>
-              {item.image ? (
-                <Image source={{ uri: item.image }} style={ss.relatedImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={String(item.anilistId)} transition={200} />
-              ) : (
-                <View style={[ss.relatedImage, { alignItems: "center", justifyContent: "center" }]}>
-                  <Ionicons name="image-outline" size={24} color={C.textMuted} />
-                </View>
-              )}
-              <MalCardBadge title={item.title} />
-              {/* Relation type ribbon — "تكملة" (sequel), "قصة جانبية" (side story), … */}
+            width={cardW}
+            recyclingKey={String(item.anilistId)}
+            titleLines={2}
+            topRight={<MalCardBadge title={item.title} />}
+            footer={
               <View style={ss.relationBadge}>
                 <Text style={ss.relationBadgeText} numberOfLines={1}>{item.relation}</Text>
               </View>
-              {(resolving || notFound) && (
+            }
+            centerOverlay={
+              (resolving || notFound) ? (
                 <View style={ss.relatedOverlay}>
                   {resolving ? (
                     <ActivityIndicator color="#fff" />
@@ -1109,11 +1185,9 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
                     </>
                   )}
                 </View>
-              )}
-            </View>
-            <Text style={ss.relatedTitle} numberOfLines={2}>{item.title}</Text>
-            {item.format && <Text style={ss.relatedType}>{item.format}</Text>}
-          </Pressable>
+              ) : null
+            }
+          />
         );
       })}
     </View>
@@ -1175,14 +1249,16 @@ function DetailSkeleton() {
   return (
     <View style={ss.root}>
       <Shimmer style={{ width: SW, height: BANNER_H }} borderRadius={0} />
-      <View style={{ paddingHorizontal: PAD, marginTop: -48 }}>
-        <Shimmer style={{ width: SW * 0.6, height: 28, marginBottom: 12 }} />
-        <Shimmer style={{ width: SW * 0.4, height: 14, marginBottom: 20 }} />
-        <View style={{ flexDirection: "row", gap: 10, marginBottom: 24 }}>
-          <Shimmer style={{ width: 140, height: 48 }} borderRadius={100} />
-          <Shimmer style={{ width: 48, height: 48 }} borderRadius={100} />
+      <View style={{ paddingHorizontal: PAD, marginTop: -88, flexDirection: "row-reverse", alignItems: "flex-end" }}>
+        <Shimmer style={{ width: 112, height: 168 }} borderRadius={R.lg} />
+        <View style={{ flex: 1, marginRight: 14, alignItems: "flex-end" }}>
+          <Shimmer style={{ width: "80%" as any, height: 26, marginBottom: 10 }} />
+          <Shimmer style={{ width: "50%" as any, height: 14, marginBottom: 10 }} />
+          <Shimmer style={{ width: 88, height: 22 }} borderRadius={100} />
         </View>
-        {Array.from({ length: 6 }).map((_, i) => (
+      </View>
+      <View style={{ paddingHorizontal: PAD, marginTop: 24 }}>
+        {Array.from({ length: 5 }).map((_, i) => (
           <Shimmer key={i} style={{ width: "100%" as any, height: 68, marginBottom: 8 }} borderRadius={R.lg} />
         ))}
       </View>
@@ -1200,21 +1276,31 @@ const ss = StyleSheet.create({
   banner: { width: SW, height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
   meshBg: { ...StyleSheet.absoluteFillObject },
 
-  // Info
-  infoSection: { marginTop: -48, paddingHorizontal: PAD },
+  // Hero — poster overlaps the banner base, title/meta beside it (RTL).
+  hero: { marginTop: -88, paddingHorizontal: PAD },
+  heroRow: { flexDirection: "row-reverse", alignItems: "flex-end" },
+  heroPoster: {
+    width: 112, aspectRatio: 2 / 3, borderRadius: R.lg,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderLight,
+    ...ELEVATION_CARD,
+  },
+  heroPosterFallback: { alignItems: "center", justifyContent: "center" },
+  // marginRight (physical) spaces the text from the poster in the row-reverse
+  // layout without using `gap` (RN 0.81 gap + row-reverse Yoga bug).
+  heroText: { flex: 1, marginRight: 14, alignItems: "flex-end", paddingBottom: 4 },
   title: {
-    color: C.bone, fontSize: 28, fontWeight: "900", lineHeight: 33, letterSpacing: -0.7,
-    textAlign: "center", fontFamily: "Cairo_700Bold",
+    ...TAr.h1, fontSize: 28, lineHeight: 33,
+    color: C.bone, textAlign: "right", writingDirection: "rtl",
   },
   copiedPill: {
     flexDirection: "row", alignItems: "center", gap: 5,
-    alignSelf: "center", marginTop: 8,
+    alignSelf: "flex-end", marginTop: 8,
     paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
     backgroundColor: C.accent + "1F",
   },
   copiedText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   quickMeta: {
-    flexDirection: "row", flexWrap: "wrap", justifyContent: "center",
+    flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end",
     gap: 6, marginTop: 14,
   },
   ratingPill: {
@@ -1224,16 +1310,29 @@ const ss = StyleSheet.create({
   },
   ratingText: { color: C.gold, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
-  // Actions
-  actions: { flexDirection: "row", gap: 10, marginTop: 20 },
+  // Error-state primary button (also the "go back" action).
   btnPrimary: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 15,
     ...ELEVATION_GLOW,
   },
   btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-  btnGlass: {
-    width: 52, alignItems: "center", justifyContent: "center",
+
+  // Floating action bar — frosted, pinned to the bottom over the scroll.
+  actionBar: {
+    position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 40,
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: PAD, paddingTop: 12, overflow: "hidden",
+    borderTopWidth: 1, borderColor: C.glassBorder,
+    ...ELEVATION_NAV,
+  },
+  actionPlayWrap: { flex: 1, borderRadius: R.pill, ...ELEVATION_GLOW },
+  actionPlayGrad: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 14, borderRadius: R.pill, overflow: "hidden",
+  },
+  actionIcon: {
+    width: 52, height: 50, alignItems: "center", justifyContent: "center",
     borderRadius: R.pill, backgroundColor: C.surfaceGlass,
     borderWidth: 1, borderColor: C.glassBorder,
   },
@@ -1245,7 +1344,7 @@ const ss = StyleSheet.create({
   // Chips
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 16 },
   chip: {
-    paddingHorizontal: 11, paddingVertical: 5, borderRadius: R.sm,
+    paddingHorizontal: 11, paddingVertical: 5, borderRadius: R.sm, overflow: "hidden",
     borderWidth: 1, borderColor: C.borderLight,
   },
   chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
@@ -1277,8 +1376,8 @@ const ss = StyleSheet.create({
   tabCountText: { color: C.textMuted, fontSize: 10, fontWeight: "500" },
   tabCountTextActive: { color: C.ember },
 
-  // Tab content
-  tabContent: { paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 100 },
+  // Tab content — extra bottom pad clears the floating action bar.
+  tabContent: { paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 132 },
 
   // Episodes — toolbar
   epToolbar: {
@@ -1360,7 +1459,7 @@ const ss = StyleSheet.create({
     position: "absolute", bottom: 6, right: 8,
     flexDirection: "row", alignItems: "center", gap: 3,
     paddingHorizontal: 7, paddingVertical: 3, borderRadius: R.pill,
-    backgroundColor: C.violet,
+    backgroundColor: C.ember,
   },
   latestBadgeText: {
     color: "#fff", fontSize: 8, fontWeight: "800",
@@ -1371,19 +1470,12 @@ const ss = StyleSheet.create({
     marginTop: 6, fontFamily: "Cairo_600SemiBold",
   },
 
-  // Related
+  // Related — 2 columns, relaxed gap.
   relatedGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  relatedCard: { width: (SW - PAD * 2 - 24) / 3 },
-  relatedImageWrap: {
-    width: "100%", aspectRatio: 2 / 3, borderRadius: R.lg, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    position: "relative",
-  },
-  relatedImage: { width: "100%", height: "100%" },
   relationBadge: {
-    position: "absolute", bottom: 6, left: 6, right: 6,
-    paddingHorizontal: 6, paddingVertical: 3, borderRadius: R.sm,
-    backgroundColor: C.accent, alignItems: "center",
+    position: "absolute", bottom: 0, left: 0, right: 0,
+    paddingHorizontal: 6, paddingVertical: 3,
+    backgroundColor: C.ember, alignItems: "center",
   },
   relationBadgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "800",
@@ -1395,8 +1487,6 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center", gap: 6,
   },
   relatedOverlayText: { color: "#fff", fontSize: 10, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-  relatedTitle: { color: C.text, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "Cairo_600SemiBold" },
-  relatedType: { color: C.textMuted, fontSize: 10, marginTop: 2, fontFamily: "Cairo_500Medium" },
 
   // Info
   infoRow: { flexDirection: "row-reverse", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft },
@@ -1465,5 +1555,20 @@ const ss = StyleSheet.create({
   pickerCancelText: {
     color: C.textMuted, fontSize: 13, fontWeight: "600",
     fontFamily: "Cairo_500Medium",
+  },
+
+  // Slide-up bottom sheet (add-to-list) — matches the home episode sheet.
+  sheetBackdrop: { backgroundColor: "rgba(0,0,0,0.72)" },
+  sheetAnchor: { flex: 1, justifyContent: "flex-end" },
+  sheetPanel: {
+    backgroundColor: C.playerSheet,
+    borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
+    paddingHorizontal: 20, paddingTop: 12,
+    borderTopWidth: 1, borderColor: C.border, gap: 10,
+    ...ELEVATION_NAV,
+  },
+  sheetGrabber: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: C.controlDim,
+    alignSelf: "center", marginBottom: 8,
   },
 });

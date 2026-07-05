@@ -13,7 +13,10 @@ function _send(type, payload) {
 }
 function _upgradeImg(u) {
   if (!u) return null;
-  return String(u).replace(/-\\d+x\\d+(\\.\\w+)$/, '$1').replace(/\\?resize=\\d+,\\d+/, '').replace(/\\?w=\\d+/, '');
+  // Drop the WP thumbnail query hints (resize=w,h / w= / fit=) wholesale, then
+  // strip the -WxH rendition suffix. Splitting on '?' avoids the old bug where
+  // removing '?resize=..' left a dangling '&quality=..' (a malformed URL).
+  return String(u).split('?')[0].replace(/-\\d+x\\d+(\\.\\w+)$/, '$1');
 }
 function _bestImg(el) {
   var img = el.querySelector('img');
@@ -575,7 +578,7 @@ function provider(url) {
   url = (url || '').toLowerCase();
   if (/mp4upload/.test(url)) return 'mp4upload';
   if (/dailymotion|dai\\.ly/.test(url)) return 'dailymotion';
-  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|vibuxer|audinifer|masukestin|hanerix/.test(url)) return 'streamwish';
+  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|vibuxer|audinifer|masukestin|hanerix|playerwish/.test(url)) return 'streamwish';
   if (/voe\\./.test(url)) return 'voe';
   if (/share4max|megamax/.test(url)) return 'share4max';
   if (/rubyvidhub|streamruby|rubystm|ruby/.test(url)) return 'streamruby';
@@ -585,6 +588,8 @@ function provider(url) {
   if (/videa\\.|vidvaita|vidit/.test(url)) return 'videa';
   if (/vk\\.com/.test(url)) return 'vk';
   if (/mega\\.nz/.test(url)) return 'mega';
+  if (/luluvdo|lulustream|luluvid/.test(url)) return 'luluvdo';
+  if (/yonaplay/.test(url)) return 'yonaplay';
   return 'generic';
 }
 function badIframe(src) {

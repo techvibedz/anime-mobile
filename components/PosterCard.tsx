@@ -213,6 +213,9 @@ const s = StyleSheet.create({
     backgroundColor: C.surface,
     borderWidth: 1,
     borderColor: C.border,
+    // Holo rim-light: the top edge catches the ambient light, lifting the
+    // poster off the void (visionOS glass vocabulary). One token, every card.
+    borderTopColor: C.borderLight,
     ...ELEVATION_CARD,
   },
   fallback: {

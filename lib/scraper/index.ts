@@ -244,7 +244,10 @@ export async function extractVideoUrl(embedUrl: string, priority = false) {
     url: embedUrl,
     injectBefore: HOOK_VIDEO_BEFORE,
     injectAfter: COLLECT_VIDEO_AFTER,
-    timeoutMs: 30000,
+    // 40s: the collector's internal 28s loop starts at early injection (first
+    // bytes), so on a slow connection the page load no longer eats the whole
+    // budget — but the job still needs to outlast the loop plus load slack.
+    timeoutMs: 40000,
     priority,
     allFrames: true,
   }) as Promise<{ url: string }>;

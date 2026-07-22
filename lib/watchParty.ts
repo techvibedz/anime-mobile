@@ -27,6 +27,9 @@ export { computeSync, DRIFT_TOLERANCE_MS } from "./watchPartySync";
 
 export type PartyRole = "host" | "client";
 
+/** Realtime channel health for the active room. */
+export type PartyConnStatus = "idle" | "connecting" | "online" | "error";
+
 export interface PartyMember {
   userId: string;
   name: string;
@@ -38,6 +41,16 @@ export interface PartyMember {
 
 const HEARTBEAT_MS = 1500;
 const DETACH_LEAVE_MS = 2000; // grace so an episode-hop remount keeps the room
+// A failed subscribe (bad network on join, Realtime hiccup) used to be
+// invisible: the joiner sat in the lobby on a spinner forever. Retry a fresh
+// channel a bounded number of times, and surface the status to the UI.
+const SUBSCRIBE_RETRY_MS = 3000;
+const MAX_SUBSCRIBE_RETRIES = 5;
+// The host's Start gate waits for every viewer to report ready. A viewer whose
+// ready flag never lands (reconnect race, older build, desktop sibling) used
+// to disable Start FOREVER — a permanent deadlock. After this hold the host
+// may start anyway; late viewers catch up via the normal heartbeat seek.
+const START_ANYWAY_MS = 20000;
 
 // ── Channel state (one room at a time) ────────────────────────────
 let channel: RealtimeChannel | null = null;
@@ -47,6 +60,9 @@ let leaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 let lastMembers: PartyMember[] = [];
 let lastState: PartyState | null = null;
+let connStatus: PartyConnStatus = "idle";
+let subscribeRetries = 0;
+let subscribeRetryTimer: ReturnType<typeof setTimeout> | null = null;
 // This device's readiness for the current episode, mirrored into presence so the
 // host can hold playback until everyone (including slow-internet clients) is ready.
 let myReady = false;
@@ -56,6 +72,7 @@ let lastNavTarget: string | null = null;
 const memberListeners = new Set<(m: PartyMember[]) => void>();
 const stateListeners = new Set<(s: PartyState) => void>();
 const roomListeners = new Set<(r: { code: string; role: PartyRole } | null) => void>();
+const connListeners = new Set<(s: PartyConnStatus) => void>();
 
 function computeMembers(): PartyMember[] {
   if (!channel) return [];
@@ -96,6 +113,12 @@ function emitRoom() {
   for (const cb of roomListeners) cb(snap);
 }
 
+function setConn(s: PartyConnStatus) {
+  if (connStatus === s) return;
+  connStatus = s;
+  for (const cb of connListeners) cb(s);
+}
+
 /** Presence payload for this device — includes the live `myReady` flag. */
 function presencePayload() {
   if (!room) return null;
@@ -117,6 +140,7 @@ function presencePayload() {
 async function openChannel(): Promise<void> {
   if (!room || channel) return;
   const { user, code } = room;
+  setConn("connecting");
 
   channel = supabase.channel(`watch-party-${code}`, {
     config: { presence: { key: user.id }, broadcast: { self: false } },
@@ -131,9 +155,30 @@ async function openChannel(): Promise<void> {
       for (const cb of stateListeners) cb(lastState);
     })
     .subscribe(async (status) => {
-      if (status === "SUBSCRIBED" && channel) {
+      if (!channel) return;
+      if (status === "SUBSCRIBED") {
+        subscribeRetries = 0;
+        setConn("online");
         const payload = presencePayload();
         if (payload) await channel.track(payload);
+        return;
+      }
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        // Was a silent death: the joiner spun in the lobby forever. Tear the
+        // channel down and retry fresh a bounded number of times; the UI can
+        // also offer a manual retry via reconnect().
+        setConn("error");
+        if (!room || subscribeRetries >= MAX_SUBSCRIBE_RETRIES) return;
+        subscribeRetries += 1;
+        const stale = channel;
+        if (subscribeRetryTimer) clearTimeout(subscribeRetryTimer);
+        subscribeRetryTimer = setTimeout(() => {
+          if (!room || channel !== stale) return;
+          void (async () => {
+            await closeChannel();
+            await openChannel();
+          })();
+        }, SUBSCRIBE_RETRY_MS);
       }
     });
 }
@@ -192,8 +237,18 @@ export async function joinRoom(code: string, user: User): Promise<void> {
   emitRoom();
 }
 
+/** Drop and re-open the channel (manual recovery from the error state). */
+export async function reconnect(): Promise<void> {
+  if (!room) return;
+  subscribeRetries = 0;
+  await closeChannel();
+  await openChannel();
+}
+
 export async function leaveRoom(): Promise<void> {
   if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
+  if (subscribeRetryTimer) { clearTimeout(subscribeRetryTimer); subscribeRetryTimer = null; }
+  subscribeRetries = 0;
   await closeChannel();
   room = null;
   myReady = false;
@@ -201,6 +256,7 @@ export async function leaveRoom(): Promise<void> {
   lastState = null;
   lastNavTarget = null;
   if (appStateSub) { appStateSub.remove(); appStateSub = null; }
+  setConn("idle");
   emitMembers();
   emitRoom();
 }
@@ -229,15 +285,26 @@ export function subscribeRoom(cb: (r: { code: string; role: PartyRole } | null) 
   return () => { roomListeners.delete(cb); };
 }
 
+/** Channel health for the active room — fires immediately with the current value. */
+export function subscribeStatus(cb: (s: PartyConnStatus) => void): () => void {
+  connListeners.add(cb);
+  cb(connStatus);
+  return () => { connListeners.delete(cb); };
+}
+
 /** Cancel a pending debounced leave — the player (re)mounted. */
 function attach(): void {
   if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
 }
 
 /** Player unmounted: leave after a grace window so an episode-hop remount
- *  (router.replace tears down + rebuilds the watch screen) keeps the room. */
+ *  (router.replace tears down + rebuilds the watch screen) keeps the room.
+ *  HOSTS are the exception: the lobby flow sends the host OUT of the player
+ *  to browse for an episode, so a 2s unmount grace destroyed the room mid-
+ *  browse and stranded every joiner on a permanent "waiting" spinner. A host
+ *  only leaves by explicit leave or by backgrounding the app (AppState). */
 function detach(): void {
-  if (!room) return;
+  if (!room || room.role === "host") return;
   if (leaveTimer) clearTimeout(leaveTimer);
   leaveTimer = setTimeout(() => { void leaveRoom(); }, DETACH_LEAVE_MS);
 }
@@ -260,6 +327,13 @@ export function useWatchPartySync(opts: {
   // Host gate: true from each new episode until everyone is ready (then playback
   // is released and the host can pause/play freely for the rest of the episode).
   const [released, setReleased] = useState(false);
+  // Escape hatch: after START_ANYWAY_MS of holding, the host may start even if
+  // some viewer never reported ready (deadlock insurance — see START_ANYWAY_MS).
+  const [startAnywayAvailable, setStartAnywayAvailable] = useState(false);
+  // Client: true until the host's first PLAYING broadcast for this episode.
+  // Drives the "waiting for the host to start" overlay + suppresses the
+  // player's self-heal watchdog while the hold is INTENTIONAL.
+  const [waitingForHost, setWaitingForHost] = useState(false);
 
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -275,7 +349,18 @@ export function useWatchPartySync(opts: {
   useEffect(() => { void setReady(!!opts.selfReady); }, [opts.selfReady]);
 
   // New episode → re-arm the gate (everyone re-buffers, so wait again).
-  useEffect(() => { setReleased(false); }, [opts.episode]);
+  useEffect(() => {
+    setReleased(false);
+    setStartAnywayAvailable(false);
+    if (role === "client") setWaitingForHost(true);
+  }, [opts.episode, role]);
+
+  // Arm the start-anyway escape hatch once the gate has held long enough.
+  useEffect(() => {
+    if (role !== "host" || released || startAnywayAvailable) return;
+    const t = setTimeout(() => setStartAnywayAvailable(true), START_ANYWAY_MS);
+    return () => clearTimeout(t);
+  }, [role, released, startAnywayAvailable, opts.episode]);
 
   // Readiness, viewers-only. The host (leader) drives the room and is never gated
   // on its own (paused) player — gating on it left the leader permanently "not
@@ -323,13 +408,15 @@ export function useWatchPartySync(opts: {
 
   // HOST presses Start: release the gate once and begin playback for everyone.
   // Re-checks allReady so a stale tap can't start over a still-buffering viewer
-  // (the button is also disabled until then). Broadcasts play in the same tick.
+  // — unless the escape hatch armed (startAnywayAvailable), which exists
+  // precisely to break a viewer-never-ready deadlock. Broadcasts play in the
+  // same tick.
   const start = useCallback(() => {
-    if (role !== "host" || released || !allReady) return;
+    if (role !== "host" || released || (!allReady && !startAnywayAvailable)) return;
     setReleased(true);
     optsRef.current.applyPaused(false);
     pulse(true);
-  }, [role, released, allReady, pulse]);
+  }, [role, released, allReady, startAnywayAvailable, pulse]);
 
   // HOST → broadcast the live player state every heartbeat.
   useEffect(() => {
@@ -364,6 +451,7 @@ export function useWatchPartySync(opts: {
     return subscribeState((s) => {
       const o = optsRef.current;
       setHostPaused(!s.playing);
+      if (s.playing) setWaitingForHost(false);
       // Host moved to a different episode → reopen it locally (room persists).
       const target = norm(s.episode);
       if (target && target !== norm(o.episode)) {
@@ -385,5 +473,5 @@ export function useWatchPartySync(opts: {
     });
   }, [role]);
 
-  return { role, code, members, hostPaused, allReady, readyCount, waitingCount, viewerCount: viewers.length, holdPlayback, released, start, pulse, leaveParty: leaveRoom };
+  return { role, code, members, hostPaused, allReady, readyCount, waitingCount, viewerCount: viewers.length, holdPlayback, released, start, startAnywayAvailable, waitingForHost, pulse, leaveParty: leaveRoom };
 }

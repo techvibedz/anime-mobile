@@ -20,6 +20,7 @@ import { PosterCard, PosterPill, PosterCornerBtn } from "../../components/Poster
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
 import { useAuth } from "../../lib/auth";
+import { useSidebar } from "../../components/Sidebar";
 import { C, S, R, TAr } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -33,7 +34,8 @@ const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
 export default function MyListScreen() {
   const insets = useSafeAreaInsets();
-  const { user, signOut, isConfigured } = useAuth();
+  const { user } = useAuth();
+  const { openSidebar } = useSidebar();
   const [favorites, setFavorites] = useState<FavoriteAnime[]>([]);
   const [filter, setFilter] = useState<ListFilter>("all");
   const [refreshing, setRefreshing] = useState(false);
@@ -77,11 +79,9 @@ export default function MyListScreen() {
             <Text style={ss.heading}>{t.myListTitle}</Text>
             {user?.email && <Text style={ss.userEmail} numberOfLines={1}>{user.email}</Text>}
           </View>
-          {isConfigured && user && (
-            <Pressable onPress={signOut} hitSlop={8} style={ss.signOutBtn}>
-              <Ionicons name="log-out-outline" size={18} color={C.textMuted} />
-            </Pressable>
-          )}
+          <Pressable onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
+            <Ionicons name="menu" size={20} color={C.text} />
+          </Pressable>
         </Rise>
 
         {/* Filter pills — horizontally scrollable so long labels never clip */}
@@ -207,7 +207,7 @@ const ss = StyleSheet.create({
   },
   userEmail: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "Cairo_500Medium", maxWidth: 200 },
   // 44px touch target (PRODUCT.md ≥44px floor).
-  signOutBtn: {
+  menuBtn: {
     width: 44, height: 44, borderRadius: R.circle,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",

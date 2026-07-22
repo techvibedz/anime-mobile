@@ -1,0 +1,69 @@
+// Tests for the direct embed resolvers' shared machinery: the Dean-Edwards
+// packed-JS unpacker and the media-URL picker. Live CDN hosts bot-block plain
+// GETs from CI machines, so instead of fetching we PACK a known stream URL
+// with a real packer and assert extractFromPacked round-trips it — this is
+// the exact code path that resolves streamwish (and any packed mirror).
+// Run:  npx tsx lib/scraper/embedExtract.test.ts
+
+import assert from "node:assert";
+import { extractFromPacked, pickMediaUrl } from "./direct";
+
+let passed = 0, failed = 0;
+function test(name: string, fn: () => void) {
+  try { fn(); passed++; console.log(`  ok  ${name}`); }
+  catch (e: any) { failed++; console.error(`FAIL  ${name}\n      ${e?.message || e}`); }
+}
+
+/* ── minimal Dean-Edwards packer (mirror of the production unpacker) ── */
+const B62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+function baseN(n: number, r: number): string {
+  let s = "";
+  while (n > 0) { s = B62[n % r] + s; n = Math.floor(n / r); }
+  return s || "0";
+}
+function pack(script: string): string {
+  const words = script.match(/\w+/g) || [];
+  const dict: string[] = [];
+  for (const w of words) if (!dict.includes(w)) dict.push(w);
+  const a = dict.length <= 10 ? 10 : dict.length <= 36 ? 36 : 62;
+  let p = script;
+  for (let i = 0; i < dict.length; i++) {
+    p = p.replace(new RegExp("\\b" + dict[i] + "\\b", "g"), baseN(i, a));
+  }
+  const escaped = p.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  return `eval(function(p,a,c,k,e,d){return p}('${escaped}',${a},${dict.length},'${dict.join("|")}'.split('|')))`;
+}
+
+const M3U8 = "https://cdn.example.com/master.m3u8?token=abc123";
+const MP4 = "https://vid.example.net/field/film480.mp4?sign=zz99";
+
+test("packed JW setup round-trips to the m3u8", () => {
+  const html = `<html><script>${pack(`jwplayer("v").setup({file:"${M3U8}",width:"100%"});`)}</script></html>`;
+  assert.equal(extractFromPacked(html), M3U8);
+});
+
+test("packed sources-array round-trips to the mp4", () => {
+  const html = `<script>${pack(`player.setup({sources:[{file:"${MP4}",type:"mp4"}]});`)}</script>`;
+  assert.equal(extractFromPacked(html), MP4);
+});
+
+test("non-packed HTML yields null (no false positives)", () => {
+  assert.equal(extractFromPacked("<html><body>nothing here</body></html>"), null);
+});
+
+test("pickMediaUrl prefers file: m3u8 in plain HTML", () => {
+  assert.equal(pickMediaUrl(`<script>var x={file:"${M3U8}"};</script>`), M3U8);
+});
+
+test("pickMediaUrl rejects decoys and embed-page self references", () => {
+  assert.equal(pickMediaUrl(`file:"https://cdn.example.com/sample-video.mp4"`), null);
+  assert.equal(pickMediaUrl(`file:"https://streamwish.to/embed-abc12.m3u8"`), null);
+});
+
+test("pickMediaUrl skips trackers and takes the real stream", () => {
+  const html = `"https://google-analytics.com/collect.mp4" then {file:"${M3U8}"}`;
+  assert.equal(pickMediaUrl(html), M3U8);
+});
+
+console.log(`\n${passed} passed, ${failed} failed`);
+if (failed > 0) process.exit(1);

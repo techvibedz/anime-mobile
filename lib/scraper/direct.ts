@@ -27,16 +27,20 @@ const BROWSER_UA =
 
 // Both sites are intermittently flaky: a single GET routinely hits a timeout,
 // a 429 rate-limit (lookups fire several GETs in a burst), a 503, or a
-// transient Cloudflare hiccup. Retry each GET a few times with a short
-// per-attempt timeout and a small growing backoff so a transient miss
-// self-heals in well under a second instead of bubbling up. A hard 4xx
-// (404/410 — e.g. a slug probe miss) won't change on retry, so bail fast.
+// transient Cloudflare hiccup. Retry each GET a few times with a GROWING
+// per-attempt timeout and a small growing backoff. A fixed short timeout loses
+// on a consistently slow link: every attempt aborts mid-download at the same
+// byte and the retry re-downloads from scratch, so all attempts fail
+// identically. The first attempt stays short so a flaky link fails fast and
+// retries quickly; later attempts give a slow-but-steady link room to finish.
+// A hard 4xx (404/410 — e.g. a slug probe miss) won't change on retry, so bail
+// fast.
+const FETCH_ATTEMPT_TIMEOUTS = [8000, 16000, 24000];
 export async function fetchHtml(url: string, referer?: string): Promise<string | null> {
-  const ATTEMPTS = 3;
-  const PER_ATTEMPT_TIMEOUT_MS = 9000;
+  const ATTEMPTS = FETCH_ATTEMPT_TIMEOUTS.length;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), PER_ATTEMPT_TIMEOUT_MS);
+    const t = setTimeout(() => controller.abort(), FETCH_ATTEMPT_TIMEOUTS[attempt - 1]);
     try {
       const res = await fetch(url, {
         signal: controller.signal,
@@ -74,13 +78,16 @@ export async function fetchHtml(url: string, referer?: string): Promise<string |
 
 // Raw GET that surfaces the final HTTP status (so callers can tell a genuine
 // 404 "slug doesn't exist" apart from a 403/503 Cloudflare block — only the
-// latter is worth escalating to the WebView).
+// latter is worth escalating to the WebView). Second attempt gets a longer
+// budget so a slow-but-steady link can finish instead of aborting mid-download
+// (see fetchHtml above).
 async function rawGetA3rb(url: string): Promise<{ html: string | null; status: number }> {
-  const ATTEMPTS = 2;
+  const ATTEMPT_TIMEOUTS = [8000, 20000];
+  const ATTEMPTS = ATTEMPT_TIMEOUTS.length;
   let lastStatus = 0;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 9000);
+    const t = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUTS[attempt - 1]);
     try {
       const res = await fetch(url, {
         signal: controller.signal,
@@ -1023,10 +1030,47 @@ function a3rbSlugVariants(title: string): { slug: string; full: boolean }[] {
 // `relaxed` skips the title-score guard for an exact full-title slug (see
 // a3rbSlugVariants): the page exists, the slug is unique, so it IS the anime —
 // even when its og:title is in a different language than the query.
-async function probeA3rbTitlePage(slug: string, title: string, relaxed = false): Promise<string | null> {
+
+// What the caller knows about the wanted anime beyond its name (AniList).
+// Used to reject a same-name page from the WRONG franchise entry — an old
+// film vs a new TV remake share the base name ("koukaku-kidoutai" 1995 vs
+// "koukaku-kidoutai-tv" 2026), which title scoring alone can't tell apart.
+export type A3rbWant = { year: number | null; isMovie: boolean | null } | null;
+
+// anime3rb's SEO meta description ends with the airing season + year
+// ("…أنميات خريف 1995" film, "…أنميات صيف 2026" series) and its og:title
+// opens with the format word ("فيلم …" film, "أنمي …" series). Both are in
+// <head>, so the first chunk of HTML is enough. Missing markers yield nulls
+// (no rejection).
+export function a3rbPageYearType(html: string): { year: number | null; isMovie: boolean | null } {
+  const head = html.slice(0, 12000);
+  const ym = head.match(/(?:أنميات\s+\S+|عام|سنة)\s+((?:19|20)\d{2})/);
+  const tm =
+    head.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
+    head.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const og = tm ? tm[1].replace(/^\s+/, "") : "";
+  const isMovie = /^فيلم\s/.test(og) ? true : (/^(?:أنمي|انمي)\s/.test(og) ? false : null);
+  return { year: ym ? parseInt(ym[1], 10) : null, isMovie };
+}
+
+// Reject a page when the caller's known year/format contradicts it. A ±1-year
+// tolerance absorbs premiere-year boundary cases (a show listed 2025 on one
+// side and 2026 on the other); franchise entries are years apart, so the
+// tolerance never saves a wrong one. Only the series→film direction is checked
+// for format (the reported bug: a new TV series resolving to the old film).
+export function a3rbWantRejects(want: A3rbWant, html: string): boolean {
+  if (!want) return false;
+  const pt = a3rbPageYearType(html);
+  if (want.year != null && pt.year != null && Math.abs(pt.year - want.year) > 1) return true;
+  if (want.isMovie === false && pt.isMovie === true) return true;
+  return false;
+}
+
+async function probeA3rbTitlePage(slug: string, title: string, relaxed = false, want: A3rbWant = null): Promise<string | null> {
   const url = `${A3RB_BASE}/titles/${slug}`;
   const html = await fetchAnime3rbHtml(url, "og:title");
   if (!html) return null; // 404 / fetch failure
+  if (a3rbWantRejects(want, html)) return null; // same base name, wrong franchise entry
   if (relaxed) return url; // exact full slug on a live page — confident match
   const tm =
     html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
@@ -1040,10 +1084,10 @@ async function probeA3rbTitlePage(slug: string, title: string, relaxed = false):
 }
 
 // Probe /titles/<slug> for each candidate slug shape derived from the title.
-export async function searchAnime3rbDirect(title: string): Promise<string | null> {
+export async function searchAnime3rbDirect(title: string, want: A3rbWant = null): Promise<string | null> {
   if (!title) return null;
   for (const { slug, full } of a3rbSlugVariants(title)) {
-    const url = await probeA3rbTitlePage(slug, title, full);
+    const url = await probeA3rbTitlePage(slug, title, full, want);
     if (url) return url;
   }
   return null;
@@ -1156,14 +1200,46 @@ function a3rbCatalogMatch(title: string, slugs: string[]): string | null {
   return best.slug;
 }
 
-export async function searchAnime3rbCatalog(title: string): Promise<string | null> {
+export async function searchAnime3rbCatalog(title: string, want: A3rbWant = null): Promise<string | null> {
   if (!title) return null;
   const slugs = await fetchA3rbCatalog();
   if (!slugs.length) return null;
   const slug = a3rbCatalogMatch(title, slugs);
   if (!slug) return null;
   // Confirm against the real page's own title before trusting the match.
-  return probeA3rbTitlePage(slug, title);
+  return probeA3rbTitlePage(slug, title, false, want);
+}
+
+// Family disambiguation: franchises with BOTH an old film and a new TV remake
+// share one base slug ("koukaku-kidoutai" 1995 film vs "koukaku-kidoutai-tv"
+// 2026 series). Neither the slug guesses (they never emit the "-tv" form) nor
+// the strict catalog matcher (its token coverage rejects both) can find the
+// new entry, so the resolver used to lock onto the OLD film and play its
+// "episode 1". With a known year/format, scan the same-base slug family and
+// take the entry whose page year/format matches — the only reliable
+// discriminator. Runs only when a year/format is known AND the family has 2+
+// entries, so ordinary anime pay zero extra fetches.
+export async function searchAnime3rbFamily(title: string, want: A3rbWant): Promise<string | null> {
+  if (!title || !want || (want.year == null && want.isMovie == null)) return null;
+  const head = title.replace(/[\(\[][^\)\]]*[\)\]]/g, " ").split(/\s*[:：]\s*/)[0].trim();
+  const base = a3rbSlugify(head);
+  if (!base || base.length < 4) return null;
+  const slugs = await fetchA3rbCatalog();
+  const family = slugs.filter((s) => s === base || s.startsWith(base + "-")).slice(0, 15);
+  if (family.length < 2) return null;
+  let best: { url: string; score: number } | null = null;
+  for (const slug of family) {
+    const url = `${A3RB_BASE}/titles/${slug}`;
+    const html = await fetchAnime3rbHtml(url, "og:title");
+    if (!html || a3rbWantRejects(want, html)) continue;
+    const tm =
+      html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
+      html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const got = tm ? tm[1].replace(/\s*[|–-]\s*Anime3rb.*$/i, "").trim() : slug.replace(/-+/g, " ");
+    const sc = tm_score(title, got);
+    if (sc >= 34 && (!best || sc > best.score)) best = { url, score: sc };
+  }
+  return best?.url ?? null;
 }
 
 // Typo-tolerant catalog ranking for the SEARCH screen (not the watch path).
@@ -1421,6 +1497,163 @@ export async function extractMp4upload(iframeUrl: string): Promise<{ url: string
   return null;
 }
 
+/* ── Direct embed resolvers: streamwish / doodstream ───────────────────────
+ * These providers ship the real stream URL in the embed page's STATIC HTML
+ * (packed JS / a pass_md5 endpoint), exactly like mp4upload. Resolving them
+ * with one or two plain GETs takes ~1s where the WebView path burns up to 40s
+ * (page + player JS + ads on a slow link, then the 28s collector loop) and
+ * frequently times out — the "servers keep loading, then fail" complaint. The
+ * WebView extractor stays as the fallback when the static parse comes back
+ * empty (markup drift, new mirror, Cloudflare bot-block). */
+
+const DECOY_RE =
+  /test-videos\.co\.uk|bigbuckbunny|sample[-_.]|placeholder|tos\.mp4|googleapis\.com\/.*oggtheora|\/lol\/file\.mp4|doubleclick|adserv|\/vast|preroll|\/ads\//i;
+
+// Embed hosts answer fast or not at all — a Cloudflare 403 won't clear on an
+// immediate retry (the WebView fallback exists for exactly that case), so
+// unlike fetchHtml this makes ONE attempt with the given budget and never
+// retries statuses. Keeps the direct path cheap when a host is bot-blocking
+// plain GETs: bail to the WebView in seconds instead of burning ~48s in
+// escalating retries first.
+async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Promise<string | null> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": BROWSER_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ar,en;q=0.9",
+        ...(referer ? { Referer: referer } : {}),
+      },
+    });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    clearTimeout(t);
+    return null;
+  }
+}
+
+function mediaType(url: string): "hls" | "mp4" {
+  return /\.m3u8(\?|$)/i.test(url) ? "hls" : "mp4";
+}
+
+// Dean-Edwards unpacker — same algorithm as the WebView collector's.
+function unpackPacked(p: string, a: number, c: number, k: string[]): string {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const baseN = (n: number, r: number): string => {
+    let s = "";
+    while (n > 0) { s = chars[n % r] + s; n = Math.floor(n / r); }
+    return s || "0";
+  };
+  while (c--) {
+    if (k[c]) p = p.replace(new RegExp("\\b" + baseN(c, a) + "\\b", "g"), k[c]);
+  }
+  return p;
+}
+
+// Pull the first playable m3u8/mp4 out of arbitrary (possibly unpacked) text.
+// Exported for the round-trip test in embedExtract.test.ts.
+export function pickMediaUrl(text: string): string | null {
+  const res = [
+    /file\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i,
+    /file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i,
+    /sources\s*:\s*\[\s*\{\s*(?:type\s*:\s*["'][^"']*["']\s*,\s*)?file\s*:\s*["']([^"']+)["']/i,
+    /src\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i,
+    /src\s*:\s*["']([^"']+\.mp4[^"']*)["']/i,
+    /source\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i,
+    /source\s*:\s*["']([^"']+\.mp4[^"']*)["']/i,
+  ];
+  for (const re of res) {
+    const m = text.match(re);
+    if (m && /^https?:\/\//.test(m[1]) && !/\/embed|\/e\//i.test(m[1]) && !DECOY_RE.test(m[1])) return m[1];
+  }
+  const generic = text.match(/https?:\/\/[^"'\s<>\\]+\.(?:m3u8|mp4)[^"'\s<>\\]*/gi);
+  if (generic) {
+    for (const u of generic) {
+      if (!/\/embed|\/e\//i.test(u) && !/google|facebook|cloudflare|analytics|tracker/i.test(u) && !DECOY_RE.test(u)) return u;
+    }
+  }
+  return null;
+}
+
+// Exported for the round-trip test in embedExtract.test.ts.
+export function extractFromPacked(html: string): string | null {
+  const head = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)/.exec(html);
+  if (!head) return null;
+  const m = html
+    .slice(head.index)
+    .match(/\}\s*\(\s*'((?:[^'\\]|\\.)*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:[^'\\]|\\.)*)'\s*\.\s*split\s*\(\s*'\|'\s*\)/);
+  if (!m) return null;
+  try {
+    const unpacked = unpackPacked(m[1].replace(/\\(.)/g, "$1"), +m[2], +m[3], m[4].split("|"));
+    return pickMediaUrl(unpacked);
+  } catch {
+    return null;
+  }
+}
+
+// streamwish family (streamwish/hlswish/wishembed/wishfast/…): the master
+// m3u8 lives in packed JS in the embed page's initial HTML.
+export async function extractStreamwish(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const html = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
+    if (!html) continue;
+    const url = extractFromPacked(html) || pickMediaUrl(html);
+    if (url) return { url, type: mediaType(url) };
+    // Got a page but no URL — markup drift; retrying won't change it.
+    return null;
+  }
+  return null;
+}
+
+// NOTE: voe deliberately has NO direct resolver. Live testing (2026-07) shows
+// voe.sx now answers a JS-redirect page whose mirror gates the player behind
+// a session-sync interstitial (localStorage token + postMessage handshake) —
+// a plain GET can never reach the sources, and trying costs 8-20s before the
+// WebView fallback. voe resolves via the WebView extractor only.
+
+// doodstream family: read /pass_md5/<…> + token from the embed page, then GET
+// the endpoint (Referer = the embed page, like an in-page XHR) and decorate
+// the returned base URL with a random tail + the page token — same recipe as
+// the WebView collector's tryDood().
+export async function extractDoodstream(embedUrl: string): Promise<{ url: string; type: "mp4" } | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const html = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
+    if (!html) continue;
+    const m = html.match(/['"]([^'"]*\/pass_md5\/[^'"]+)['"]/);
+    if (!m) return null;
+    const passUrl = m[1].startsWith("http") ? m[1] : new URL(m[1], embedUrl).toString();
+    const tk = html.match(/token=([a-zA-Z0-9]+)/);
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 10000);
+    try {
+      const resp = await fetch(passUrl, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": BROWSER_UA,
+          Referer: embedUrl,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      });
+      const base = (await resp.text()).trim();
+      if (!base.startsWith("http")) continue;
+      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      let rand = "";
+      for (let i = 0; i < 10; i++) rand += chars.charAt(Math.floor(Math.random() * chars.length));
+      const url = `${base}${rand}?token=${tk ? tk[1] : ""}&expiry=${Date.now()}`;
+      return { url, type: "mp4" };
+    } catch {
+      continue;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  return null;
+}
 // Resolve vid3rb's `/video` redirect to the FINAL files-N CDN URL, validating
 // that the edge actually serves bytes.
 //

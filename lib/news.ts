@@ -1,32 +1,27 @@
-// Anime News feed — aggregated from Jikan (the unofficial MyAnimeList API).
+// Anime News feed — scraped straight from MyAnimeList's global news index
+// (https://myanimelist.net/news), which lists the LATEST articles across every
+// anime, newest-first, ~20 per page (?p=N). This replaces the old Jikan
+// per-season aggregation, which could only ever surface news about a handful
+// of airing titles and routinely showed weeks-old items as "latest".
 //
-// There is no global anime-news JSON endpoint, so we build the feed ourselves:
-//   1) pull the current season's airing titles (sfw=true at the QUERY level),
-//   2) drop anything adult by genre/rating before we ever touch its news,
-//   3) fetch every remaining title's MAL news posts, merge, and sort the WHOLE
-//      feed newest-first — pages are then just slices of that one sorted list,
-//      so item #1 is always the most recent article across all titles.
+// Brand safety: a keyword guard on the English headline (isSafeNews) drops any
+// adult-content article before it is translated or displayed.
 //
-// Brand safety is enforced twice, on purpose:
-//   • QUERY level   — `sfw=true` on the season request (Jikan strips adult media).
-//   • FRONTEND level — isSafeNews() re-checks every assembled item against the
-//     parent anime's genres/rating AND a keyword guard on the headline/excerpt,
-//     so no Hentai / Ecchi / 18+ article can reach the screen even if MAL
-//     mis-tags it. See app/news.tsx.
+// Everything user-facing is Arabic: headlines, tag chips and article bodies are
+// translated lazily (only the visible page / the opened article) via
+// translateToArabic, which caches results on disk.
 //
-// The article DETAIL (app/news/[id].tsx) wants the full body + inline images,
-// which Jikan doesn't expose — fetchNewsArticle() scrapes the MAL news page and
-// translates every text block to Arabic.
+// The article DETAIL (app/news/[id].tsx) wants the full body + inline images +
+// trailer embeds. MAL serves the article statically inside
+// `<div class="… news-content-body">` — fetchNewsArticle() scrapes it into
+// ordered text/image/video blocks and translates every text block, so the whole
+// post (trailers included) reads in-app, in Arabic.
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { translateToArabic } from "./translate";
 import { fetchHtml } from "./scraper/direct";
 
-const JIKAN = "https://api.jikan.moe/v4";
-const SEASON_CACHE_KEY = "@anime_news_season_v1";
-const SEASON_TTL = 6 * 60 * 60 * 1000; // 6h
-const SEASON_LIMIT = 20;               // airing titles to draw news from
-const PAGE_SIZE = 12;                  // items revealed per feed page (infinite scroll)
+const MAL = "https://myanimelist.net";
+const PAGE_SIZE = 20; // == MAL index page size, so one app page == one GET
 
 export interface NewsItem {
   /** MAL news post id — stable list key + de-dupe. */
@@ -37,193 +32,22 @@ export interface NewsItem {
   /** ISO timestamp of publication. */
   date: string;
   image: string | null;
-  /** Snippet, translated to Arabic. */
-  excerpt: string;
-  /** Parent anime title — shown as the card's source chip (kept as scraped). */
-  animeTitle: string;
+  /** MAL tag chips ("Preview · Fall 2026"), translated to Arabic. */
+  tags: string;
   comments: number;
 }
 
-interface AnimeRef {
-  id: number;
-  title: string;
-  /** All adult-relevant tag names flattened, for the second-pass guard. */
-  tags: string[];
+/* ── NSFW guard ─────────────────────────────────────────────────
+ * Keyword net over the English headline — MAL's editorial news feed rarely
+ * covers adult titles, but when it does (eroge/18+ announcements) the post
+ * never reaches the screen. Exported + self-tested (see bottom). */
+const NSFW_RE = /(\bhentai\b|\becchi\b|\bnsfw\b|18\s*\+|\br-?18\b|\beroge\b|\bporn\b|\bdoujinshi?\b|\badult (?:game|visual novel)\b)/i;
+
+export function isSafeNews(title: string): boolean {
+  return !NSFW_RE.test(title);
 }
 
-/* ── NSFW guard (frontend safeguard) ─────────────────────────────
- * Adult genres per MAL's taxonomy + a keyword net over the headline/excerpt.
- * Note: R / R+ ratings (violence, mild nudity) are NORMAL anime (Re:Zero is R) —
- * dropping them would gut the feed — so only the explicit Hentai (Rx) rating and
- * the Ecchi/Hentai/Erotica genres are rejected. */
-const ADULT_GENRES = new Set(["Hentai", "Ecchi", "Erotica"]);
-const NSFW_RE = /(\bhentai\b|\becchi\b|\bnsfw\b|18\s*\+|\br-?18\b|\beroge\b|\bporn\b|\bdoujinshi?\b)/i;
-
-function animeIsAdult(a: any): boolean {
-  if (typeof a?.rating === "string" && /Rx|Hentai/i.test(a.rating)) return true;
-  return collectTags(a).some((g) => ADULT_GENRES.has(g));
-}
-
-function collectTags(a: any): string[] {
-  return [
-    ...(a?.genres || []),
-    ...(a?.explicit_genres || []),
-    ...(a?.themes || []),
-    ...(a?.demographics || []),
-  ]
-    .map((g: any) => g?.name)
-    .filter((n: any): n is string => typeof n === "string");
-}
-
-/** Second-pass brand-safety check. Exported + self-tested (see bottom). */
-export function isSafeNews(item: NewsItem, animeTags: string[]): boolean {
-  if (animeTags.some((g) => ADULT_GENRES.has(g))) return false;
-  if (NSFW_RE.test(item.title) || NSFW_RE.test(item.excerpt)) return false;
-  return true;
-}
-
-/* ── Season anime set ────────────────────────────── */
-
-let seasonMem: AnimeRef[] | null = null;
-let seasonInflight: Promise<AnimeRef[]> | null = null;
-
-async function ensureSeason(): Promise<AnimeRef[]> {
-  if (seasonMem) return seasonMem;
-  if (seasonInflight) return seasonInflight;
-
-  seasonInflight = (async () => {
-    try {
-      const raw = await AsyncStorage.getItem(SEASON_CACHE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as { ts: number; data: AnimeRef[] };
-        if (Date.now() - parsed.ts < SEASON_TTL && parsed.data?.length) {
-          seasonMem = parsed.data;
-          return parsed.data;
-        }
-      }
-    } catch {}
-
-    const res = await fetch(`${JIKAN}/seasons/now?sfw=true&limit=${SEASON_LIMIT}&page=1`).catch(() => null);
-    const json = res && res.ok ? await res.json().catch(() => null) : null;
-    const list: AnimeRef[] = (json?.data || [])
-      .filter((a: any) => a?.mal_id && a?.title && !animeIsAdult(a)) // query says sfw; re-check anyway
-      .map((a: any) => ({ id: a.mal_id, title: a.title, tags: collectTags(a) }));
-
-    if (list.length) {
-      seasonMem = list;
-      try { await AsyncStorage.setItem(SEASON_CACHE_KEY, JSON.stringify({ ts: Date.now(), data: list })); } catch {}
-    }
-    return list;
-  })().finally(() => { seasonInflight = null; });
-
-  return seasonInflight;
-}
-
-/* ── News aggregation ─────────────────────────────
- * The whole feed is fetched once (English), merged across every airing title and
- * sorted newest-first into `sortedRaw`. Pages are slices of that list, so the
- * first card is always the most-recent article. Only a page's visible items are
- * translated to Arabic (lazy) so the first paint isn't gated on translating the
- * entire feed. */
-
-// Flat id→item registry so the detail screen can render an item the list already
-// fetched, without re-hitting Jikan or passing the whole object through params.
-const registry = new Map<number, NewsItem>();
-
-let sortedRaw: NewsItem[] | null = null;          // globally date-sorted (English)
-let rawInflight: Promise<NewsItem[]> | null = null;
-
-/** Concurrency-capped map — keeps fetch/translation bursts polite. */
-async function mapLimit<T>(arr: T[], limit: number, fn: (t: T) => Promise<void>): Promise<void> {
-  let i = 0;
-  const worker = async () => { while (i < arr.length) await fn(arr[i++]); };
-  await Promise.all(Array.from({ length: Math.min(limit, arr.length) }, worker));
-}
-
-export function getNewsItem(id: number): NewsItem | undefined {
-  return registry.get(id);
-}
-
-// One title's MAL news, built + NSFW-filtered on the ENGLISH text (the keyword
-// guard is English). Not translated here — that happens per visible page.
-async function loadAnimeNewsRaw(a: AnimeRef): Promise<NewsItem[]> {
-  const res = await fetch(`${JIKAN}/anime/${a.id}/news?page=1`).catch(() => null);
-  const json = res && res.ok ? await res.json().catch(() => null) : null;
-  return (json?.data || [])
-    .map((n: any): NewsItem => ({
-      id: n.mal_id,
-      title: (n.title || "").trim(),
-      url: n.url || "",
-      date: n.date || "",
-      image: n.images?.jpg?.image_url || null,
-      excerpt: (n.excerpt || "").replace(/\s+/g, " ").trim(),
-      animeTitle: a.title,
-      comments: typeof n.comments === "number" ? n.comments : 0,
-    }))
-    .filter((n: NewsItem) => n.id && n.title && n.url && isSafeNews(n, a.tags));
-}
-
-async function ensureAllNews(): Promise<NewsItem[]> {
-  if (sortedRaw) return sortedRaw;
-  if (rawInflight) return rawInflight;
-
-  rawInflight = (async () => {
-    const anime = await ensureSeason();
-    const all: NewsItem[] = [];
-    const seen = new Set<number>();
-    // Concurrency 3 ≈ Jikan's ~3 req/s budget without an explicit throttle.
-    await mapLimit(anime, 3, async (a) => {
-      try {
-        for (const n of await loadAnimeNewsRaw(a)) {
-          if (!seen.has(n.id)) { seen.add(n.id); all.push(n); }
-        }
-      } catch {}
-    });
-    all.sort((x, y) => new Date(y.date).getTime() - new Date(x.date).getTime());
-    sortedRaw = all;
-    return all;
-  })().finally(() => { rawInflight = null; });
-
-  return rawInflight;
-}
-
-// Translate a visible item to Arabic in place + register it for the detail page.
-// Idempotent: translateToArabic returns already-Arabic text untouched.
-async function translateItem(n: NewsItem): Promise<void> {
-  const [title, excerpt] = await Promise.all([
-    translateToArabic(n.title),
-    n.excerpt ? translateToArabic(n.excerpt) : Promise.resolve(""),
-  ]);
-  n.title = title;
-  n.excerpt = excerpt;
-  registry.set(n.id, n);
-}
-
-/**
- * One feed page = the next PAGE_SIZE items from the globally newest-first list,
- * translated to Arabic. The screen calls this on mount and on scroll-end.
- */
-export async function fetchNewsPage(page: number): Promise<{ items: NewsItem[]; hasMore: boolean }> {
-  const all = await ensureAllNews();
-  const slice = all.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
-  await mapLimit(slice, 6, translateItem);
-  return { items: slice, hasMore: (page + 1) * PAGE_SIZE < all.length };
-}
-
-/* ── Article detail (full body + images) ──────────
- * Jikan only gives a headline + snippet, so the detail screen scrapes the MAL
- * news page, which serves the article statically inside `<div class="content
- * clearfix">` (inline <img> + <br>-separated text). We split it into ordered
- * text/image blocks and translate every text block to Arabic. */
-
-export interface ArticleBlock {
-  type: "text" | "image";
-  /** Arabic paragraph (text) or absolute image URL (image). */
-  value: string;
-}
-
-const articleCache = new Map<number, ArticleBlock[]>();
-const MAX_BLOCKS = 80; // bound translation cost on pathological list-style posts
+/* ── HTML helpers ─────────────────────────────── */
 
 const ENTITIES: Record<string, string> = {
   "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#039;": "'",
@@ -238,19 +62,162 @@ function stripTags(s: string): string {
   return s.replace(/<[^>]+>/g, "");
 }
 
-// Inner HTML of `<div class="content clearfix">` via balanced-div matching (the
-// article can contain nested divs, so a naïve cut-to-next-marker would truncate).
-function extractContentDiv(html: string): string | null {
-  const marker = '<div class="content clearfix">';
-  const start = html.indexOf(marker);
-  if (start < 0) return null;
-  const from = start + marker.length;
+// MAL thumbnails are served resized (cdn…/r/130x130/….jpeg?s=sig) — strip the
+// resize prefix + signature so the card shows the full-resolution image.
+function malFullImg(u: string): string {
+  return u.replace(/\/r\/\d+x\d+/, "").replace(/\?s=.*$/, "");
+}
+
+// MAL index dates look like "Jul 15, 2:48 AM" (no year for the current year).
+// ponytail: parsed in DEVICE time while MAL shows US-Pacific — a few hours of
+// skew on "time ago" labels; sorting is unaffected since the skew is uniform.
+const MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+function parseMalDate(s: string): string {
+  const m = s.trim().match(/^([A-Za-z]{3})\.?\s+(\d{1,2}),?\s+(?:(\d{4}),?\s+)?(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!m) return "";
+  const year = m[3] ? Number(m[3]) : new Date().getFullYear();
+  const hour = (Number(m[4]) % 12) + (m[6].toUpperCase() === "PM" ? 12 : 0);
+  const d = new Date(year, MONTHS[m[1].slice(0, 3).toLowerCase()] ?? 0, Number(m[2]), hour, Number(m[5]));
+  // At the year boundary a December post parsed in January lands in the
+  // future — roll it back a year.
+  if (!m[3] && d.getTime() - Date.now() > 24 * 3600 * 1000) d.setFullYear(d.getFullYear() - 1);
+  return d.toISOString();
+}
+
+/* ── News index (the feed) ──────────────────────
+ * The whole feed is the MAL index itself: globally newest-first. Index pages
+ * are fetched on demand as the user scrolls; only the visible slice is
+ * translated so first paint isn't gated on translating everything. */
+
+// Flat id→item registry so the detail screen can render an item the list
+// already fetched, without re-scraping the index or passing objects via params.
+const registry = new Map<number, NewsItem>();
+
+/** Concurrency-capped map — keeps fetch/translation bursts polite. */
+async function mapLimit<T>(arr: T[], limit: number, fn: (t: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const worker = async () => { while (i < arr.length) await fn(arr[i++]); };
+  await Promise.all(Array.from({ length: Math.min(limit, arr.length) }, worker));
+}
+
+export function getNewsItem(id: number): NewsItem | undefined {
+  return registry.get(id);
+}
+
+// Parse one MAL news index page. Scoped to the main list (everything before
+// the pagination bar) — the "New Anime" rail below it is DB additions, not news.
+function parseNewsIndex(html: string): NewsItem[] {
+  const cut = html.indexOf('class="pagination');
+  const scope = cut > 0 ? html.slice(0, cut) : html;
+  const out: NewsItem[] = [];
+  const blocks = scope.split('<div class="box-unit3">');
+  for (let i = 1; i < blocks.length; i++) {
+    const b = blocks[i];
+    const hm = b.match(/href="https:\/\/myanimelist\.net\/news\/(\d+)"/);
+    const tm = b.match(/<li class="title">([\s\S]*?)<\/li>/);
+    if (!hm || !tm) continue;
+    const title = decodeEntities(stripTags(tm[1])).replace(/\s+/g, " ").trim();
+    if (!title || !isSafeNews(title)) continue;
+    const im = b.match(/<img[^>]*\bdata-src="([^"]+)"/);
+    const dm = b.match(/<span class="di-ib pr4">([^<]+)<\/span>/);
+    const cm = b.match(/<span class="di-b comment">(\d+)/);
+    const tags: string[] = [];
+    const gre = /<span class="tag tag-color\d+">([\s\S]*?)<\/span>/g;
+    let g: RegExpExecArray | null;
+    while ((g = gre.exec(b))) {
+      const tag = decodeEntities(stripTags(g[1])).trim();
+      if (tag) tags.push(tag);
+    }
+    out.push({
+      id: Number(hm[1]),
+      title,
+      url: `${MAL}/news/${hm[1]}`,
+      date: dm ? parseMalDate(dm[1]) : "",
+      image: im ? malFullImg(im[1]) : null,
+      tags: tags.join(" · "),
+      comments: cm ? Number(cm[1]) : 0,
+    });
+  }
+  return out;
+}
+
+let feed: NewsItem[] = [];        // accumulated, globally newest-first
+let malPage = 0;                  // index pages fetched so far
+let exhausted = false;            // an index page came back empty
+let feedInflight: Promise<void> | null = null;
+
+async function fetchNextIndexPage(): Promise<void> {
+  if (exhausted) return;
+  const p = malPage + 1;
+  const html = await fetchHtml(`${MAL}/news${p > 1 ? `?p=${p}` : ""}`, `${MAL}/`).catch(() => null);
+  if (!html) return; // transient failure — state untouched so a retry can succeed
+  const batch = parseNewsIndex(html);
+  if (!batch.length) { exhausted = true; return; }
+  malPage = p;
+  const seen = new Set(feed.map((n) => n.id));
+  for (const n of batch) if (!seen.has(n.id)) feed.push(n);
+}
+
+// Translate a visible item to Arabic in place + register it for the detail page.
+// Idempotent: translateToArabic returns already-Arabic text untouched.
+async function translateItem(n: NewsItem): Promise<void> {
+  const [title, tags] = await Promise.all([
+    translateToArabic(n.title),
+    n.tags ? translateToArabic(n.tags) : Promise.resolve(""),
+  ]);
+  n.title = title;
+  n.tags = tags;
+  registry.set(n.id, n);
+}
+
+/**
+ * One feed page = the next PAGE_SIZE items from the globally newest-first list,
+ * translated to Arabic. The screen calls this on mount and on scroll-end.
+ */
+export async function fetchNewsPage(page: number): Promise<{ items: NewsItem[]; hasMore: boolean }> {
+  const need = (page + 1) * PAGE_SIZE;
+  while (feed.length < need && !exhausted) {
+    const before = feed.length;
+    feedInflight ??= fetchNextIndexPage().finally(() => { feedInflight = null; });
+    await feedInflight;
+    if (feed.length === before) break; // fetch failed — don't spin
+  }
+  const slice = feed.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+  await mapLimit(slice, 6, translateItem);
+  return { items: slice, hasMore: !exhausted || feed.length > (page + 1) * PAGE_SIZE };
+}
+
+/* ── Article detail (full body + images + trailers) ──────────
+ * The MAL news page serves the whole article statically inside
+ * `<div class="… news-content-body">` (inline <img>, <br>-separated text and
+ * YouTube <iframe> embeds). We split it into ordered text/image/video blocks
+ * and translate every text block to Arabic. If the container markup drifts,
+ * fall back to the page's og:description so the screen never shows just a link. */
+
+export interface ArticleBlock {
+  type: "text" | "image" | "video";
+  /** Arabic paragraph (text), absolute image URL (image), embed URL (video). */
+  value: string;
+}
+
+const articleCache = new Map<number, ArticleBlock[]>();
+const MAX_BLOCKS = 120; // bound translation cost on pathological list-style posts
+
+// Inner HTML of the article container via balanced-div matching (the article
+// can contain nested divs, so a naïve cut-to-next-marker would truncate).
+function extractArticleDiv(html: string): string | null {
+  const m = /<div[^>]*class="[^"]*news-content-body[^"]*"[^>]*>/i.exec(html);
+  if (!m) return null;
+  const from = m.index + m[0].length;
   const re = /<\/?div\b[^>]*>/gi;
   re.lastIndex = from;
   let depth = 1;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
-    if (m[0].startsWith("</")) { if (--depth === 0) return html.slice(from, m.index); }
+  let mm: RegExpExecArray | null;
+  while ((mm = re.exec(html))) {
+    if (mm[0].startsWith("</")) { if (--depth === 0) return html.slice(from, mm.index); }
     else depth++;
   }
   return html.slice(from); // unbalanced fallback
@@ -272,42 +239,58 @@ function parseArticle(inner: string): ArticleBlock[] {
     }
   };
 
-  const imgRe = /<img[^>]*\bsrc="([^"]+)"[^>]*>/gi;
+  // Single pass over <img> and <iframe> tokens keeps blocks in article order.
+  const tokRe = /<img[^>]*?\bsrc="([^"]+)"[^>]*>|<iframe[^>]*?\bsrc="([^"]+)"[^>]*>[\s\S]*?<\/iframe>/gi;
   let last = 0;
   let m: RegExpExecArray | null;
-  while ((m = imgRe.exec(normalized))) {
+  while ((m = tokRe.exec(normalized))) {
     pushText(normalized.slice(last, m.index));
-    const src = m[1];
-    if (/^https?:\/\//.test(src) && !/sprite|icon|blank\.gif/i.test(src)) {
-      blocks.push({ type: "image", value: src });
+    if (m[1]) {
+      // MAL bodies occasionally carry cleartext http:// (or protocol-relative
+      // //) image URLs — Android blocks cleartext, so those images silently
+      // never render. Upgrade everything to https (the CDN serves it fine).
+      let src = m[1];
+      if (src.startsWith("//")) src = `https:${src}`;
+      else if (src.startsWith("http://")) src = `https://${src.slice(7)}`;
+      if (/^https:\/\//.test(src) && !/sprite|icon|blank\.gif/i.test(src)) {
+        blocks.push({ type: "image", value: src });
+      }
+    } else if (m[2]) {
+      // Trailers embed as youtube-nocookie iframes — normalize to a clean embed.
+      const vid = m[2].match(/(?:youtube(?:-nocookie)?\.com\/embed\/|youtu\.be\/)([\w-]{6,})/i);
+      if (vid) blocks.push({ type: "video", value: `https://www.youtube-nocookie.com/embed/${vid[1]}?rel=0` });
     }
-    last = imgRe.lastIndex;
+    last = tokRe.lastIndex;
   }
   pushText(normalized.slice(last));
   return blocks.slice(0, MAX_BLOCKS);
 }
 
 /**
- * Full article for the detail screen — ordered Arabic text + image blocks, or
- * null if the page couldn't be fetched/parsed (the screen falls back to the
- * translated excerpt). Cached per id for the session.
+ * Full article for the detail screen — ordered Arabic text + image + trailer
+ * blocks, or null if the page couldn't be fetched at all. Cached per id for
+ * the session.
  */
 export async function fetchNewsArticle(id: number): Promise<ArticleBlock[] | null> {
   const cached = articleCache.get(id);
   if (cached) return cached;
 
   const item = registry.get(id);
-  const url = item?.url || `https://myanimelist.net/news/${id}`;
-  const html = await fetchHtml(url, "https://myanimelist.net/").catch(() => null);
+  const url = item?.url || `${MAL}/news/${id}`;
+  const html = await fetchHtml(url, `${MAL}/`).catch(() => null);
   if (!html) return null;
 
-  const inner = extractContentDiv(html);
-  if (!inner) return null;
+  const inner = extractArticleDiv(html);
+  let blocks = inner ? parseArticle(inner) : [];
+  if (!blocks.length) {
+    // Markup drift fallback: og:description always ships with the page, so the
+    // screen still shows the story's gist in-app instead of just a link.
+    const og = html.match(/<meta property="og:description" content="([^"]+)"/i);
+    if (!og) return null;
+    blocks = [{ type: "text", value: decodeEntities(og[1]) }];
+  }
 
-  const blocks = parseArticle(inner);
-  if (!blocks.length) return null;
-
-  // Translate text blocks to Arabic (images pass through untouched).
+  // Translate text blocks to Arabic (images/videos pass through untouched).
   await mapLimit(blocks.filter((b) => b.type === "text"), 4, async (b) => {
     b.value = await translateToArabic(b.value);
   });
@@ -318,8 +301,9 @@ export async function fetchNewsArticle(id: number): Promise<ArticleBlock[] | nul
 
 /** Drop the session caches so a pull-to-refresh re-fetches everything. */
 export function resetNews(): void {
-  seasonMem = null;
-  sortedRaw = null;
+  feed = [];
+  malPage = 0;
+  exhausted = false;
   registry.clear();
   articleCache.clear();
 }
@@ -327,11 +311,11 @@ export function resetNews(): void {
 // ── self-check (security path) ────────────────────────────────────
 // The NSFW guard is the brand-safety contract; assert it can't silently break.
 if (__DEV__) {
-  const t = (title: string, tags: string[] = []) =>
-    isSafeNews({ id: 1, title, url: "x", date: "", image: null, excerpt: "", animeTitle: "", comments: 0 }, tags);
-  console.assert(t("New season announced") === true, "news: safe item rejected");
-  console.assert(t("Uncensored Hentai OVA listed") === false, "news: hentai not filtered");
-  console.assert(t("Spring Ecchi roundup") === false, "news: ecchi keyword not filtered");
-  console.assert(t("Casual slice of life", ["Ecchi"]) === false, "news: ecchi-tagged anime not filtered");
-  console.assert(t("Top 10 of 2026", ["Action"]) === true, "news: clean tag wrongly rejected");
+  console.assert(isSafeNews("New season announced") === true, "news: safe item rejected");
+  console.assert(isSafeNews("Uncensored Hentai OVA listed") === false, "news: hentai not filtered");
+  console.assert(isSafeNews("Spring Ecchi roundup") === false, "news: ecchi keyword not filtered");
+  console.assert(isSafeNews("Top 10 of 2026") === true, "news: clean item wrongly rejected");
+  // Date parser: a yearless date must land in the recent past, not the future.
+  const iso = parseMalDate("Jul 15, 2:48 AM");
+  console.assert(!!iso && new Date(iso).getTime() <= Date.now(), "news: yearless date in future");
 }

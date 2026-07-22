@@ -629,6 +629,10 @@ export default function WatchScreen() {
     // a slow-but-progressing load was another source of visible refreshes.
     const deadline = setInterval(() => {
       if (cancelled || healing || hasStarted || !focusedRef.current) return;
+      // A party client paused by the host's start gate is INTENTIONALLY not
+      // producing bytes — keep pushing the deadline out or the watchdog would
+      // "heal" a healthy held stream and churn through every server.
+      if (waitingForHostRef.current) { graceUntil = Date.now() + failMs; return; }
       if (Date.now() < graceUntil) return;
       try {
         if ((player.status as string) === "loading" && loadingExtensions < 3) {
@@ -1767,6 +1771,10 @@ export default function WatchScreen() {
   useEffect(() => { partyClientRef.current = isPartyClient; }, [isPartyClient]);
   useEffect(() => { holdPlaybackRef.current = party.holdPlayback; }, [party.holdPlayback]);
   useEffect(() => { partyPulseRef.current = party.pulse; }, [party.pulse]);
+  // Live mirror of the client's "host hasn't started yet" window so the
+  // self-heal deadline can tell an INTENTIONAL hold apart from a dead stream.
+  const waitingForHostRef = useRef(false);
+  useEffect(() => { waitingForHostRef.current = party.waitingForHost; }, [party.waitingForHost]);
   // While the host gate is holding (each new episode until Start), surface the
   // panel so the host always sees the live roster + Start button — including
   // when they opened the episode after creating the room from the lobby.
@@ -2369,6 +2377,16 @@ export default function WatchScreen() {
         </View>
       )}
 
+      {/* Party client held by the host's start gate: the video is paused on
+          purpose and local controls are suppressed — without this pill the
+          joiner just saw a dead player ("loading forever, won't play"). */}
+      {isPartyClient && party.waitingForHost && isPlaying && isPlayerPaused && (
+        <View style={ss.partyWaitPill} pointerEvents="none">
+          <ActivityIndicator size="small" color={C.accent} />
+          <Text style={ss.partyWaitText}>{t.wpWaitingToStart}</Text>
+        </View>
+      )}
+
       {/* Custom Controls Overlay */}
       {isPlaying && !pickerOpen && controlsVisible && !locked && (
         <View style={ss.controlsOverlay} pointerEvents="box-none">
@@ -2622,24 +2640,33 @@ export default function WatchScreen() {
             })}
           </View>
 
-          {/* Host start gate: enabled only once every viewer is ready, so the
-              press starts everyone together with nothing still buffering. */}
-          {party.role === "host" && party.holdPlayback && (
-            <Pressable
-              disabled={!party.allReady}
-              onPress={() => party.start()}
-              style={[ss.partyStartBtn, !party.allReady && ss.partyStartBtnDisabled]}
-            >
-              {party.allReady ? (
-                <Ionicons name="play" size={15} color={C.black} />
-              ) : (
-                <ActivityIndicator size="small" color={C.textMuted} />
-              )}
-              <Text style={[ss.partyStartTxt, !party.allReady && ss.partyStartTxtDisabled]}>
-                {party.allReady ? t.wpStartForEveryone : t.wpWaitingReady(party.waitingCount)}
-              </Text>
-            </Pressable>
-          )}
+          {/* Host start gate: enabled once every viewer is ready, so the press
+              starts everyone together with nothing still buffering. If a viewer
+              never reports ready the gate would deadlock — after a hold the
+              escape hatch (startAnywayAvailable) lets the host start anyway. */}
+          {party.role === "host" && party.holdPlayback && (() => {
+            const canStart = party.allReady || party.startAnywayAvailable;
+            return (
+              <Pressable
+                disabled={!canStart}
+                onPress={() => party.start()}
+                style={[ss.partyStartBtn, !canStart && ss.partyStartBtnDisabled]}
+              >
+                {canStart ? (
+                  <Ionicons name="play" size={15} color={C.black} />
+                ) : (
+                  <ActivityIndicator size="small" color={C.textMuted} />
+                )}
+                <Text style={[ss.partyStartTxt, !canStart && ss.partyStartTxtDisabled]}>
+                  {party.allReady
+                    ? t.wpStartForEveryone
+                    : party.startAnywayAvailable
+                      ? t.wpStartAnyway
+                      : t.wpWaitingReady(party.waitingCount)}
+                </Text>
+              </Pressable>
+            );
+          })()}
 
           <Pressable style={ss.partyLeave} onPress={() => { party.leaveParty(); setPartyPanelOpen(false); }}>
             <Ionicons name="exit-outline" size={14} color={C.error} />
@@ -2845,6 +2872,13 @@ const ss = StyleSheet.create({
   // Controls overlay
   controlsOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between", zIndex: 3 },
   bufferOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", zIndex: 2 },
+  partyWaitPill: {
+    position: "absolute", bottom: 96, alignSelf: "center", zIndex: 3,
+    flexDirection: "row-reverse", alignItems: "center", gap: 8,
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 100,
+    backgroundColor: "rgba(0,0,0,0.72)", borderWidth: 1, borderColor: C.border,
+  },
+  partyWaitText: { color: C.text, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
 
   // Screen-lock overlay
   lockLayer: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },

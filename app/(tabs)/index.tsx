@@ -247,7 +247,21 @@ export default function HomeScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [res, hist] = await Promise.all([fetchHome(), getContinueWatching()]);
+      // fetchHome's onUpdated fires when the background revalidation lands with
+      // visibly newer content (new episode aired etc.) — the feed updates live,
+      // no pull-to-refresh needed.
+      const [res, hist] = await Promise.all([
+        fetchHome((fresh) => {
+          if (!fresh?.success) return;
+          const feat = fresh.data.featured ?? [];
+          const secs = fresh.data.sections ?? [];
+          if (feat.length > 0 || secs.length > 0) {
+            setFeatured(feat);
+            setSections(secs);
+          }
+        }),
+        getContinueWatching(),
+      ]);
       setHistory(hist);
       const feat = res?.success ? (res.data.featured ?? []) : [];
       const secs = res?.success ? (res.data.sections ?? []) : [];
@@ -1027,10 +1041,13 @@ const ss = StyleSheet.create({
   epPlayOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center", justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.3)",
+    // Light veil only — the accent play button carries its own contrast now,
+    // so the artwork stays bright instead of living under a permanent dim.
+    backgroundColor: "rgba(0,0,0,0.15)",
   },
   epPlayBtn: {
-    width: 36, height: 36, borderRadius: R.circle,
+    width: 38, height: 38, borderRadius: R.circle,
+    backgroundColor: C.ember,
     alignItems: "center", justifyContent: "center",
     ...ELEVATION_GLOW,
   },

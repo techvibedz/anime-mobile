@@ -15,6 +15,15 @@ export interface PartyState {
 
 export const DRIFT_TOLERANCE_MS = 2000; // buffer window — only seek past this
 
+// Cap on the sender-clock compensation applied to a broadcast position. Two
+// devices with unsynced clocks (manual time, bad NTP) produce a `now - at` of
+// minutes; adding that to the expected position made the client seek past the
+// drift tolerance on EVERY heartbeat — a perpetual rebuffer storm where the
+// video never settles. Transit/processing delay is realistically <1s and the
+// drift tolerance already absorbs it, so clamp hard at 1s: legit late delivery
+// is still compensated, skewed clocks degrade to "no compensation" (in-sync).
+export const MAX_COMPENSATION_MS = 1000;
+
 // Unambiguous alphabet (no 0/O/1/I) for spoken/typed room codes.
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export function genCode(len = 5): string {
@@ -35,7 +44,7 @@ export function computeSync(
   localPosMs: number,
   now: number,
 ): { shouldSeekTo: number | null; play: boolean } {
-  const elapsed = state.playing ? Math.max(0, now - state.at) : 0;
+  const elapsed = state.playing ? Math.min(Math.max(0, now - state.at), MAX_COMPENSATION_MS) : 0;
   const expected = state.positionMs + elapsed;
   const shouldSeekTo = Math.abs(localPosMs - expected) > DRIFT_TOLERANCE_MS ? expected : null;
   return { shouldSeekTo, play: state.playing };

@@ -4,8 +4,9 @@
 // (fetchNewsArticle). No browser redirect — the article reads in-app, in Arabic.
 
 import { useEffect, useMemo, useState } from "react";
-import { View, Text, Pressable, ScrollView, StyleSheet, ActivityIndicator, Linking } from "react-native";
+import { View, Text, Pressable, ScrollView, StyleSheet, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
+import { WebView } from "react-native-webview";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -62,7 +63,6 @@ export default function NewsDetailScreen() {
   return (
     <View style={s.root}>
       <Aurora />
-      {BackBtn}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: insets.bottom + 36 }}
@@ -83,47 +83,95 @@ export default function NewsDetailScreen() {
         <View style={s.body}>
           <View style={s.meta}>
             <Text style={s.metaTime}>{t.newsTimeAgo(item.date)}</Text>
-            <View style={s.metaDot} />
-            <Text style={s.metaSource} numberOfLines={1}>{t.newsSource(item.animeTitle)}</Text>
+            {item.tags ? (
+              <>
+                <View style={s.metaDot} />
+                <Text style={s.metaSource} numberOfLines={1}>{item.tags}</Text>
+              </>
+            ) : null}
           </View>
 
           <Text style={s.headline}>{item.title}</Text>
 
           <View style={s.divider} />
 
-          {/* Full body once scraped+translated; otherwise the excerpt holds the
-              space (and a spinner shows while the article is still loading). */}
+          {/* Full body once scraped+translated — text, inline images and
+              trailers all render in-app. A spinner shows while loading. */}
           {hasBody ? (
             blocks!.map((b, i) =>
               b.type === "image" ? (
                 <BodyImage key={`img-${i}`} uri={b.value} />
+              ) : b.type === "video" ? (
+                <BodyVideo key={`vid-${i}`} uri={b.value} />
               ) : (
                 <Text key={`txt-${i}`} style={s.paragraph}>{b.value}</Text>
               ),
             )
+          ) : blocks === undefined ? (
+            <View style={s.loadingRow}>
+              <ActivityIndicator color={C.accent} />
+              <Text style={s.loadingText}>{t.loading}</Text>
+            </View>
           ) : (
-            <>
-              {item.excerpt ? <Text style={s.paragraph}>{item.excerpt}</Text> : null}
-              {blocks === undefined ? (
-                <View style={s.loadingRow}>
-                  <ActivityIndicator color={C.accent} />
-                  <Text style={s.loadingText}>{t.loading}</Text>
-                </View>
-              ) : null}
-            </>
+            <Text style={s.paragraph}>{t.newsNotFoundSub}</Text>
           )}
-
-          {item.url ? (
-            <Pressable
-              onPress={() => Linking.openURL(item.url).catch(() => {})}
-              style={({ pressed }) => [s.sourceBtn, pressed && { opacity: 0.88 }]}
-            >
-              <Ionicons name="open-outline" size={16} color={C.text} />
-              <Text style={s.sourceBtnText}>{t.newsOpenSource}</Text>
-            </Pressable>
-          ) : null}
         </View>
       </ScrollView>
+
+      {/* Floating back button — rendered AFTER the ScrollView with a high
+          zIndex/elevation so the hero image and the native WebView player can
+          never paint over it (Android draws later, more-elevated siblings on
+          top). The WebView itself is also zoom-locked + CSS-clipped so it
+          can't escape its bounds and cover this button. */}
+      {BackBtn}
+    </View>
+  );
+}
+
+/* In-app trailer player — the article's YouTube embed in a 16:9 WebView, so
+ * the video plays inside the app instead of pushing the user out.
+ *
+ * The embed is wrapped in a tiny HTML page loaded with an https base URL:
+ * loading the embed URL directly as the WebView's document sends NO Referer,
+ * and YouTube rejects referrer-less embeds with "Video player configuration
+ * error" (error 153). With a real https origin the iframe request carries a
+ * Referer again and playback works.
+ *
+ * Three extra constraints keep the player healthy on Android:
+ *  • referrerpolicy="strict-origin" — YouTube's current embed guidance; the
+ *    cross-origin variant can trigger error 152 ("video unavailable").
+ *  • A plain Chrome mobile userAgent — the stock WebView UA ("; wv)") is
+ *    treated as an untrusted client and also fails with 152-x.
+ *  • Zoom locked (viewport + setSupportZoom/scalesPageToFit off) — a zoomed
+ *    WebView inside the rounded, clipped container escapes its bounds on
+ *    Android and paints over sibling UI (it covered the floating back
+ *    button). Overflow is hidden in CSS for the same reason. */
+function BodyVideo({ uri }: { uri: string }) {
+  // uri is built by parseArticle from a validated video id — safe to inline.
+  const html = `<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<style>html,body{margin:0;padding:0;background:#000;width:100%;height:100%;overflow:hidden}
+iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:0}</style>
+</head><body>
+<iframe
+  src="${uri}"
+  allow="accelerometer; encrypted-media; gyroscope; picture-in-picture"
+  referrerpolicy="strict-origin"
+  allowfullscreen></iframe>
+</body></html>`;
+  return (
+    <View style={s.bodyVideo}>
+      <WebView
+        source={{ html, baseUrl: "https://www.youtube-nocookie.com" }}
+        style={s.bodyVideoInner}
+        userAgent="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        allowsFullscreenVideo
+        javaScriptEnabled
+        domStorageEnabled
+        scrollEnabled={false}
+        setSupportZoom={false}
+        scalesPageToFit={false}
+      />
     </View>
   );
 }
@@ -152,7 +200,7 @@ const s = StyleSheet.create({
   center: { alignItems: "center", justifyContent: "center", paddingHorizontal: 32, gap: 10 },
 
   backBtn: {
-    position: "absolute", left: S.paddingContent, zIndex: 20,
+    position: "absolute", left: S.paddingContent, zIndex: 40, elevation: 40,
     width: 42, height: 42, borderRadius: R.circle,
     backgroundColor: C.overlayMedium, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
@@ -173,16 +221,11 @@ const s = StyleSheet.create({
 
   paragraph: { color: C.textSoft, fontSize: 15, lineHeight: 29, fontFamily: AR.medium, textAlign: "right", marginBottom: 14 },
   bodyImage: { width: "100%", borderRadius: R.lg, backgroundColor: C.surfaceLight, marginVertical: 8 },
+  bodyVideo: { width: "100%", aspectRatio: 16 / 9, borderRadius: R.lg, overflow: "hidden", backgroundColor: "#000", marginVertical: 8 },
+  bodyVideoInner: { flex: 1, backgroundColor: "transparent" },
 
   loadingRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 18 },
   loadingText: { color: C.textSecondary, fontSize: 13, fontFamily: AR.medium },
-
-  sourceBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: 26, paddingVertical: 13, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-  },
-  sourceBtnText: { color: C.text, fontSize: 13.5, fontFamily: AR.semibold },
 
   missingIcon: {
     width: 84, height: 84, borderRadius: 42, backgroundColor: C.glass,

@@ -62,6 +62,14 @@ export function _hasPending(): boolean {
   return _queue.length > 0;
 }
 
+/** The job _claimNext would pull next, without pulling it. Lets the host
+ *  reserve capacity for priority jobs (see ScraperHost). */
+export function _peek(): ScrapeJob | null {
+  let idx = _queue.findIndex((p) => p.job.priority);
+  if (idx === -1) idx = 0;
+  return _queue[idx]?.job ?? null;
+}
+
 export function _resolve(id: string, value: any) {
   const p = _inFlight.get(id);
   if (!p) return;

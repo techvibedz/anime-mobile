@@ -269,20 +269,17 @@ export async function recordEpisodeWatched(opts: {
   if (opts.epNum < rec.lastEpNum) return; // not the latest available episode
   if (rec.caughtUp && rec.finished) return; // already fully marked
 
-  // Finale is out when AniList reports no upcoming episode. A network miss
-  // defaults to "finished" — an anime watched to its last available episode is
-  // overwhelmingly a completed series (mirrors the detail page's default).
-  let airing = false;
+  let finished = false;
   try {
-    const { fetchNextAiring } = await import("./airing");
-    airing = !!(await fetchNextAiring(opts.animeTitle || rec.titles[0] || ""));
+    const { fetchSeriesFinished } = await import("./airing");
+    finished = await fetchSeriesFinished(opts.animeTitle || rec.titles[0] || "", rec.lastEpNum || opts.epNum);
   } catch {}
 
   const next: AnimeCompletion = {
     ...rec,
     lastEpNum: Math.max(rec.lastEpNum, opts.epNum),
     caughtUp: true,
-    finished: !airing,
+    finished,
     updatedAt: Date.now(),
   };
   if (next.caughtUp === rec.caughtUp && next.finished === rec.finished && next.lastEpNum === rec.lastEpNum) return;

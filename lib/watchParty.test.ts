@@ -57,6 +57,23 @@ test("paused host: no elapsed compensation, follows pause", () => {
   assert.strictEqual(r.play, false);
 });
 
+// A client whose clock is far AHEAD of the host's must not seek-storm: the
+// compensation is clamped under the drift tolerance, so the seek stays off.
+test("clamped compensation: skewed client clock does not seek", () => {
+  const s = base(); // host at 10000, playing
+  const now = s.at + 60_000; // client clock 60s ahead
+  const r = computeSync(s, 10_500, now); // client actually in sync (~0.5s off)
+  assert.strictEqual(r.shouldSeekTo, null);
+});
+
+// Late-but-legit delivery (sub-second) is still compensated.
+test("compensates sub-second transit delay", () => {
+  const s = base();
+  const now = s.at + 900;
+  const r = computeSync(s, 10_000 + 900 + DRIFT_TOLERANCE_MS + 500, now);
+  assert.strictEqual(r.shouldSeekTo, 10_900);
+});
+
 // Room codes avoid ambiguous glyphs and are the right length.
 test("genCode: 5 unambiguous chars", () => {
   const c = genCode();

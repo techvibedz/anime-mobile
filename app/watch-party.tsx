@@ -18,9 +18,12 @@ import {
   createRoom,
   joinRoom,
   leaveRoom,
+  reconnect,
   subscribeRoom,
   subscribeMembers,
   subscribeState,
+  subscribeStatus,
+  type PartyConnStatus,
   type PartyMember,
   type PartyRole,
 } from "../lib/watchParty";
@@ -72,12 +75,28 @@ export default function WatchPartyScreen() {
 
   const [roomInfo, setRoomInfo] = useState<{ code: string; role: PartyRole } | null>(null);
   const [members, setMembers] = useState<PartyMember[]>([]);
+  const [conn, setConn] = useState<PartyConnStatus>("idle");
   const [codeInput, setCodeInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => subscribeRoom(setRoomInfo), []);
   useEffect(() => subscribeMembers(setMembers), []);
+  useEffect(() => subscribeStatus(setConn), []);
+
+  // A client whose room has no host (wrong code, host left / app killed) used
+  // to sit on the "host is picking" spinner FOREVER. Once the channel is
+  // online, give presence a short grace to sync, then say so out loud.
+  const hasHost = members.some((m) => m.isHost);
+  const [noHost, setNoHost] = useState(false);
+  useEffect(() => {
+    if (roomInfo?.role !== "client" || conn !== "online" || hasHost) {
+      setNoHost(false);
+      return;
+    }
+    const grace = setTimeout(() => setNoHost(true), 8000);
+    return () => clearTimeout(grace);
+  }, [roomInfo?.role, conn, hasHost]);
 
   // Client: the instant the host broadcasts an episode, follow into the player.
   useEffect(() => {
@@ -147,17 +166,28 @@ export default function WatchPartyScreen() {
 
             <Avatars members={members} meId={user?.id} />
 
+            {conn === "error" ? (
+              <View style={s.followBanner}>
+                <Ionicons name="cloud-offline-outline" size={16} color={C.error} />
+                <Text style={s.followText}>{t.wpConnError}</Text>
+                <Pressable onPress={() => { void reconnect(); }} hitSlop={8}>
+                  <Text style={s.retryText}>{t.retry}</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {noHost ? <Text style={s.err}>{t.wpNoHost}</Text> : null}
+
             {roomInfo.role === "host" ? (
               <Pressable style={s.primaryBtn} onPress={() => router.replace("/(tabs)")}>
                 <Ionicons name="play" size={18} color={C.black} />
                 <Text style={s.primaryBtnText}>{t.wpStartWatching}</Text>
               </Pressable>
-            ) : (
+            ) : conn !== "error" && !noHost ? (
               <View style={s.followBanner}>
                 <ActivityIndicator size="small" color={C.accent} />
-                <Text style={s.followText}>{t.wpHostPicking}</Text>
+                <Text style={s.followText}>{conn === "online" ? t.wpHostPicking : t.wpConnecting}</Text>
               </View>
-            )}
+            ) : null}
             {roomInfo.role === "host" ? (
               <Text style={s.startHint}>{t.wpStartWatchingHint}</Text>
             ) : null}
@@ -265,6 +295,7 @@ const s = StyleSheet.create({
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
   },
   followText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  retryText: { color: C.accent, fontSize: 13, fontFamily: "Cairo_700Bold" },
 
   leaveBtn: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 18, padding: 10 },
   leaveText: { color: C.error, fontSize: 14, fontFamily: "Cairo_600SemiBold" },

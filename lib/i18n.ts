@@ -337,8 +337,6 @@ export const ar = {
   newsEmpty: "لا أخبار حاليًا",
   newsEmptySub: "تعذّر تحميل الأخبار. تحقّق من اتصالك وحاول مجددًا.",
   newsRead: "اقرأ المقال",
-  newsSource: (name: string) => `عن: ${name}`,
-  newsOpenSource: "عرض الخبر في المصدر",
   newsNotFound: "تعذّر عرض الخبر",
   newsNotFoundSub: "لم نعثر على هذا الخبر. عُد إلى قائمة الأخبار وحاول مجددًا.",
   newsBackToList: "العودة إلى الأخبار",
@@ -467,6 +465,26 @@ export const ar = {
   wpStartForEveryone: "ابدأ للجميع",
   wpWaitingToStart: "بانتظار أن يبدأ المضيف…",
   wpReadyOf: (r: number, n: number) => `${r}/${n} جاهز`,
+  wpConnecting: "جارٍ الاتصال بالغرفة…",
+  wpConnError: "تعذر الاتصال بالغرفة. تحقق من اتصالك.",
+  wpNoHost: "تعذر العثور على الغرفة — تأكد من الرمز أو أن المضيف ما زال داخلها.",
+  wpStartAnyway: "ابدأ على أي حال",
+
+  // Admin — OTA info section (admin-only, shown in Settings)
+  adminOtaSection: "معلومات التحديثات (مشرف)",
+  adminAppVersion: "إصدار التطبيق",
+  adminRuntime: "إصدار التشغيل",
+  adminChannel: "قناة OTA",
+  adminUpdateId: "معرّف التحديث",
+  adminCreated: "تاريخ إنشاء الحزمة",
+  adminPending: "تحديث معلّق",
+  adminYes: "نعم",
+  adminNo: "لا",
+  adminEmbedded: "(مضمّن — بدون OTA)",
+  adminCheckOta: "التحقّق من OTA وتطبيقه",
+  adminCheckOtaDesc: "يحمّل آخر تحديث JS ويعيد تشغيل التطبيق",
+  adminOtaApplied: "تم تحميل تحديث OTA — ستتم إعادة التشغيل الآن",
+  adminOtaNone: "لا توجد تحديثات OTA جديدة",
 };
 
 export const t = ar;

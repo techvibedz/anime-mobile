@@ -28,15 +28,18 @@ import {
   searchAnime3rbDirect,
   searchAnime3rbCatalog,
   searchAnime3rbCatalogFuzzy,
+  searchAnime3rbFamily,
   scrapeAnime3rbEpisodeServers,
   scrapeAnime3rbTitlePage,
   anime3rbExactSlugs,
   tm_seasonNum,
   extractVid3rb,
   extractMp4upload,
+  extractStreamwish,
+  extractDoodstream,
   fetchWitHomeDirect,
 } from "./scraper/direct";
-import { getAltTitles } from "./animeInfo";
+import { getAltTitles, getAnimeYearType } from "./animeInfo";
 import { fuzzyScore } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 
@@ -364,14 +367,32 @@ async function fetchHomeFresh(): Promise<HomePayload> {
   return result;
 }
 
-export async function fetchHome(): Promise<HomePayload> {
+// Cheap change detector for the SWR push: a new episode / new trending entry
+// always alters a section's item count or its first item, so comparing section
+// counts + lead hrefs catches every visible change without a full deep-equal.
+function homeSignature(p: HomePayload): string {
+  return (
+    p.data.sections.map((s) => `${s.id}:${s.items.length}:${s.items[0]?.href || ""}`).join("|") +
+    "#" + (p.data.featured[0]?.href || "")
+  );
+}
+
+export async function fetchHome(onUpdated?: (p: HomePayload) => void): Promise<HomePayload> {
   // Stale-while-revalidate: return cached payload immediately if present,
-  // then kick off a background refresh so the next launch is fresher.
+  // then kick off a background refresh. When the fresh scrape lands with
+  // visibly different content, push it to the open screen via onUpdated so the
+  // user sees new episodes WITHOUT a manual pull-to-refresh.
   const cached = await readCache<HomePayload>(HOME_CACHE_KEY, HOME_CACHE_TTL);
   if (homeHasContent(cached)) {
     if (!bgRefreshInFlight) {
       bgRefreshInFlight = true;
-      void fetchHomeFresh().finally(() => { bgRefreshInFlight = false; });
+      void fetchHomeFresh()
+        .then((fresh) => {
+          if (onUpdated && homeHasContent(fresh) && homeSignature(fresh) !== homeSignature(cached))
+            onUpdated(fresh);
+        })
+        .catch(() => {})
+        .finally(() => { bgRefreshInFlight = false; });
     }
     return cached;
   }
@@ -580,7 +601,15 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
   return payload;
 }
 
-export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> {
+// Cheap change detector for the detail-page SWR push: a newly-aired episode
+// changes the episode count (and a lead href), so this catches every visible
+// update without deep-comparing the whole payload.
+function detailSignature(p: EpisodesPayload): string {
+  const eps = p.data.episodes;
+  return `${p.data.totalEpisodes}:${eps.length}:${eps[0]?.href || ""}:${eps[eps.length - 1]?.href || ""}`;
+}
+
+export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPayload) => void): Promise<EpisodesPayload> {
   // Re-clean the title AND synopsis on every return path so entries
   // cached/uploaded by an older build display cleanly too. Crucial for the
   // synopsis: older builds (and anime3rb's og:description fallback) cached SEO
@@ -597,10 +626,17 @@ export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> 
     return p;
   };
   // Read-through cache, fastest tier first:
-  // 1) On-device cache — instant, offline-capable. Revalidate in the background.
+  // 1) On-device cache — instant, offline-capable. Revalidate in the background
+  //    and PUSH the fresh payload to the open screen when it visibly changed,
+  //    so a newly-aired episode shows without a manual refresh.
   const cached = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
   if (cached) {
-    void fetchEpisodesFresh(animeUrl).catch(() => {});
+    void fetchEpisodesFresh(animeUrl)
+      .then((fresh) => {
+        if (onUpdated && fresh?.data && detailSignature(fresh) !== detailSignature(cached))
+          onUpdated(clean(fresh));
+      })
+      .catch(() => {});
     return clean(cached);
   }
   // 2) Crowdsourced cloud cache — another device already scouted this anime, so
@@ -610,7 +646,13 @@ export async function fetchEpisodes(animeUrl: string): Promise<EpisodesPayload> 
   const cloud = await readCloudMetadata<EpisodesPayload>(animeUrl).catch(() => null);
   if (cloud?.payload?.data) {
     void writeCache(DETAIL_CACHE_PREFIX + animeUrl, cloud.payload);
-    if (cloud.stale) void fetchEpisodesFresh(animeUrl).catch(() => {});
+    if (cloud.stale)
+      void fetchEpisodesFresh(animeUrl)
+        .then((fresh) => {
+          if (onUpdated && fresh?.data && detailSignature(fresh) !== detailSignature(cloud.payload))
+            onUpdated(clean(fresh));
+        })
+        .catch(() => {});
     return clean(cloud.payload);
   }
   // 3) Cold path — live scrape on the residential IP, then scout-upload.
@@ -715,7 +757,11 @@ const a3rbTitleCache = new Map<string, { url: string; ts: number }>();
 // re-wrote that wrong slug on every hit so it never aged out. A fresh key forces
 // re-resolution with the season-aware logic (which correctly returns nothing
 // when a later season isn't on anime3rb).
-const A3RB_TITLE_PREFIX = "@a3rb_title_v2:";
+// v3: bumped to discard slug mappings that predate the year/format
+// disambiguation — franchises with an old film + a new TV remake ("Koukaku
+// Kidoutai" 1995 vs "Koukaku Kidoutai (TV)" 2026) could be locked onto the OLD
+// entry, and the wrong slug was re-written on every hit so it never aged out.
+const A3RB_TITLE_PREFIX = "@a3rb_title_v3:";
 // Titles whose Jikan alt-name bridge has already been attempted this session.
 // The bridge hits Jikan + probes anime3rb with each alt name; a fundamental
 // name mismatch won't change between the watch screen's retries, so run it at
@@ -747,14 +793,26 @@ async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | nul
   const key = animeTitle.toLowerCase().trim();
   const cached = await peekAnime3rbTitleUrl(animeTitle);
   if (cached) return cached;
+  // What AniList knows about this anime (release year, film vs series). Franchises
+  // with an old film AND a new TV remake share the base name, so title matching
+  // alone can lock onto the wrong entry ("Koukaku Kidoutai" 1995 instead of the
+  // 2026 TV remake). Null-safe: when AniList can't resolve the title, matching
+  // falls back to title-only behaviour.
+  const want = await getAnimeYearType(animeTitle).catch(() => null);
   // Slug guessing first: anime3rb's slugs derive cleanly from romaji titles,
   // so this lands in one or two cheap GETs for the vast majority of anime.
-  let url = await searchAnime3rbDirect(animeTitle).catch(() => null);
+  let url = await searchAnime3rbDirect(animeTitle, want).catch(() => null);
   if (!url) {
     // Catalog matching second: anime3rb's daily titles sitemap (one plain
     // GET, cached in-memory) covers anime whose slug can't be guessed —
     // different romanization, alt-name-only indexing, shortened titles.
-    url = await searchAnime3rbCatalog(animeTitle).catch(() => null);
+    url = await searchAnime3rbCatalog(animeTitle, want).catch(() => null);
+  }
+  if (!url && want) {
+    // Same-base family scan: the new TV remake of an old franchise lives at a
+    // "-tv"/suffixed slug no guess produces, so only a year/format-filtered
+    // scan of the whole family finds it. No extra fetches for ordinary anime.
+    url = await searchAnime3rbFamily(animeTitle, want).catch(() => null);
   }
   // NOTE: no /search fallback. anime3rb's /search sits behind a Cloudflare
   // managed challenge, so failing fast here lets the watch screen's retry
@@ -788,8 +846,8 @@ async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | nul
       const altQ = seasonNum >= 2 ? `${alt} season ${seasonNum}` : alt;
       if (altQ.toLowerCase().trim() === key) continue; // already tried as the primary
       url =
-        (await searchAnime3rbDirect(altQ).catch(() => null)) ||
-        (await searchAnime3rbCatalog(altQ).catch(() => null));
+        (await searchAnime3rbDirect(altQ, want).catch(() => null)) ||
+        (await searchAnime3rbCatalog(altQ, want).catch(() => null));
       if (url) break;
     }
   }
@@ -925,7 +983,7 @@ export async function diagnoseAnime3rb(title: string, epNum: number): Promise<st
 // union — so episodes missing from witanime/anime4up still appear (and stay
 // playable, since each href is a real anime3rb episode URL). Cached 6h; a miss
 // isn't cached so a flaky resolve can retry on the next visit.
-const A3RB_EPS_PREFIX = "@a3rb_eps_v2:"; // v2: discard episode lists keyed by pre-fix (wrong-season) title URLs
+const A3RB_EPS_PREFIX = "@a3rb_eps_v3:"; // v3: discard episode lists keyed by pre-disambiguation (wrong-version) title URLs
 const A3RB_EPS_TTL = 6 * 60 * 60 * 1000;
 export async function fetchAnime3rbEpisodes(animeTitle: string): Promise<Episode[]> {
   if (!animeTitle || !animeTitle.trim()) return [];
@@ -1126,12 +1184,13 @@ type SearchPayload = {
   data: { query: string; totalResults: number; results: SearchResult[] };
 };
 
-// Cold-path search. witanime (a plain-GET, near-instant) is emitted FIRST via
-// `onPartial` so the grid paints in well under a second; anime4up (WebView) and
-// anime3rb then enrich the SAME list CONCURRENTLY in the background, each
-// emitting as it lands. Previously these ran sequentially AFTER a 2.5s race, so
-// the user waited 4–6s for a list whose first (and best) rows were ready almost
-// immediately.
+// Cold-path search. ALL sources start at t=0 and stream into the same list as
+// each lands (mergeIn de-dupes by title, rank() floats the closest match), so
+// the grid paints with the FIRST source to answer — usually witanime's or
+// anime4up's direct GET in well under a second. Previously anime4up/anime3rb
+// were serialized BEHIND witanime, whose direct GET can burn ~30s in retries
+// (and its WebView fallback another ~15s cold) before failing over — a flaky
+// witanime held the entire first paint hostage.
 async function searchAnimeFresh(
   query: string,
   onPartial?: (results: SearchResult[]) => void,
@@ -1168,10 +1227,13 @@ async function searchAnimeFresh(
 
   // Primary: witanime's static-HTML search via a plain GET — near-instant, no
   // WebView render. Fall back to the WebView scrape only if the direct fetch
-  // fails (network / CF hiccup). Emit as soon as it lands.
-  let wit = await searchWitanimeDirectList(query).catch(() => null);
-  if (!wit) wit = await scrapeSearch(query).catch(() => null);
-  if (wit?.results?.length && mergeIn(wit.results)) emit();
+  // fails (network / CF hiccup). Runs CONCURRENTLY with the other sources (not
+  // ahead of them) so its worst case can't delay anyone else's first paint.
+  const witP = (async () => {
+    let wit = await searchWitanimeDirectList(query).catch(() => null);
+    if (!wit) wit = await scrapeSearch(query).catch(() => null);
+    if (wit?.results?.length && mergeIn(wit.results)) emit();
+  })();
 
   // Secondary: anime4up + anime3rb (third source) run in parallel and append to
   // the visible list. anime4up is tried via a direct static-HTML GET FIRST
@@ -1205,12 +1267,12 @@ async function searchAnimeFresh(
     } catch {}
   })();
 
-  // Wait for the secondaries — but cap the wait so the spinner clears promptly
-  // even if anime4up's WebView is slow behind a cold queue. Late arrivals still
+  // Wait for all sources — but cap the wait so the spinner clears promptly
+  // even if a WebView fallback is slow behind a cold queue. Late arrivals still
   // emit via onPartial (the screen's seq guard keeps stale ones out); they just
   // won't be in the cached payload, which the next search refreshes anyway.
   await Promise.race([
-    Promise.all([up4P, a3rbP]),
+    Promise.all([witP, up4P, a3rbP]),
     new Promise<void>((r) => setTimeout(r, results.length ? 6000 : 15000)),
   ]);
 
@@ -1483,6 +1545,21 @@ export async function resolveVideo(iframeUrl: string, provider: string, priority
   // mirror that still serves the packed player.
   if (provider === "mp4upload") {
     const r = await extractMp4upload(iframeUrl).catch(() => null);
+    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+  }
+  // streamwish / doodstream carry the real stream in the embed page's STATIC
+  // HTML (packed JS / pass_md5 endpoint), so one or two plain GETs resolve
+  // them in ~1s — where the WebView path below burns up to 40s on a slow link
+  // and routinely times out (the "servers keep loading" complaint). WebView
+  // scrape stays as the fallback on parse miss. (voe is NOT here on purpose:
+  // its mirrors now gate the player behind a session-sync interstitial that a
+  // plain GET can't pass — see the note in direct.ts.)
+  if (provider === "streamwish") {
+    const r = await extractStreamwish(iframeUrl).catch(() => null);
+    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+  }
+  if (provider === "doodstream") {
+    const r = await extractDoodstream(iframeUrl).catch(() => null);
     if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
   }
   try {

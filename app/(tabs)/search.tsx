@@ -24,6 +24,7 @@ import { GlassFill } from "../../components/GlassFill";
 import { PosterCard, PosterPill } from "../../components/PosterCard";
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
+import { useSidebar } from "../../components/Sidebar";
 import { C, S, R, TAr, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
@@ -113,6 +114,7 @@ const ResultCard = memo(function ResultCard({ item }: { item: SearchResult }) {
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
+  const { openSidebar } = useSidebar();
   const { genre: genreParam, q: qParam } = useLocalSearchParams<{ genre?: string; q?: string }>();
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<SearchResult[]>([]);
@@ -322,12 +324,18 @@ export default function SearchScreen() {
       {/* ── Search console — one cohesive surface lifted over the grid ── */}
       <View style={ss.header}>
         <Rise style={ss.headerTop}>
-          <Text style={ss.heading}>{t.discover}</Text>
-          {!loading && items.length > 0 && (
-            <View style={ss.countPill}>
-              <Text style={ss.countPillText}>{items.length}</Text>
-            </View>
-          )}
+          <View style={ss.headerTitleRow}>
+            <Text style={ss.heading}>{t.discover}</Text>
+            {!loading && items.length > 0 && (
+              <View style={ss.countPill}>
+                <Text style={ss.countPillText}>{items.length}</Text>
+              </View>
+            )}
+          </View>
+          <Pressable onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
+            <GlassFill intensity={16} />
+            <Ionicons name="menu" size={20} color={C.text} />
+          </Pressable>
         </Rise>
 
         {/* Glass search field — the hero control */}
@@ -455,8 +463,14 @@ const ss = StyleSheet.create({
     shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
   },
   headerTop: {
-    flexDirection: "row", alignItems: "center", gap: 10,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 12,
+  },
+  headerTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  menuBtn: {
+    width: 44, height: 44, borderRadius: R.circle, overflow: "hidden",
+    alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: C.glassBorder,
   },
   heading: {
     ...TAr.h1, color: C.bone,

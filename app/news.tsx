@@ -1,7 +1,7 @@
-// Anime News — an infinitely-scrolling, 100% SFW feed of MAL news for the
-// season's airing titles. Brand safety is enforced in lib/news.ts (query-level
-// sfw=true + a second genre/keyword guard); this screen only renders what
-// survives both. Tapping a card opens the full article in the browser.
+// Anime News — an infinitely-scrolling, 100% SFW feed of the LATEST MAL news
+// (global index, newest-first). Brand safety is enforced in lib/news.ts
+// (headline keyword guard); this screen only renders what survives it. Tapping
+// a card opens the full article in-app (app/news/[id].tsx).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, FlatList, RefreshControl, ActivityIndicator, StyleSheet } from "react-native";
@@ -129,22 +129,23 @@ function NewsCard({ item, onPress }: { item: NewsItem; onPress: (n: NewsItem) =>
             locations={[0, 0.6, 1]}
             style={StyleSheet.absoluteFill}
           />
-          <View style={s.thumbTag}>
-            <Ionicons name="newspaper" size={11} color={C.ember} />
-            <Text style={s.thumbTagText} numberOfLines={1}>{item.animeTitle}</Text>
-          </View>
+          {item.tags ? (
+            <View style={s.thumbTag}>
+              <Ionicons name="newspaper" size={11} color={C.ember} />
+              <Text style={s.thumbTagText} numberOfLines={1}>{item.tags}</Text>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
       <View style={s.body}>
         <View style={s.meta}>
           <Text style={s.metaTime}>{t.newsTimeAgo(item.date)}</Text>
-          {!item.image ? (
-            <Text style={s.metaSource} numberOfLines={1}>{t.newsSource(item.animeTitle)}</Text>
+          {!item.image && item.tags ? (
+            <Text style={s.metaSource} numberOfLines={1}>{item.tags}</Text>
           ) : null}
         </View>
         <Text style={s.headline} numberOfLines={3}>{item.title}</Text>
-        {item.excerpt ? <Text style={s.excerpt} numberOfLines={2}>{item.excerpt}</Text> : null}
         <View style={s.readRow}>
           <Text style={s.readText}>{t.newsRead}</Text>
           <Ionicons name="arrow-back" size={14} color={C.ember} />
@@ -186,7 +187,6 @@ const s = StyleSheet.create({
   metaSource: { color: C.textMuted, fontSize: 11, fontFamily: AR.medium, flexShrink: 1 },
 
   headline: { color: C.bone, fontSize: 16, lineHeight: 24, fontFamily: AR.bold, textAlign: "right" },
-  excerpt: { color: C.textSecondary, fontSize: 12.5, lineHeight: 20, fontFamily: AR.medium, textAlign: "right", marginTop: 7 },
 
   readRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, marginTop: 12 },
   readText: { color: C.ember, fontSize: 12.5, fontFamily: AR.bold },

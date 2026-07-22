@@ -26,9 +26,9 @@ import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites
 import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
-import { fetchNextAiring } from "../../lib/airing";
+import { fetchSeriesFinished } from "../../lib/airing";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
-import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations } from "../../lib/animeInfo";
+import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, getAltTitles } from "../../lib/animeInfo";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
 import { normLatin, seasonNum, formatCat } from "../../lib/relations";
 import { MalBadge, MalCardBadge } from "../../components/MalRating";
@@ -42,6 +42,7 @@ import { posterUrl } from "../../lib/img";
 import { t } from "../../lib/i18n";
 import { Rise } from "../../components/Rise";
 import { useReducedMotion } from "../../lib/motion";
+import { useSidebar } from "../../components/Sidebar";
 
 // Core React Native bundles a Clipboard native module (no extra dependency), so
 // copying works over OTA on the existing build. Deep-import since the top-level
@@ -58,6 +59,7 @@ type TabKey = "episodes" | "related" | "info";
 export default function AnimeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
+  const { openSidebar } = useSidebar();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<AnimeDetail | null>(null);
   const [episodes4up, setEpisodes4up] = useState<Episode[]>([]);
@@ -80,6 +82,7 @@ export default function AnimeDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const bookmarked = bookmarkList !== null;
   const animeHref = id ? decodeURIComponent(id) : "";
+  const isMainSource = /witanime/i.test(animeHref);
 
   useEffect(() => {
     if (!id) return;
@@ -89,8 +92,15 @@ export default function AnimeDetailScreen() {
     (async () => {
       try {
         // Primary scrape — return as soon as witanime data is ready so the
-        // UI renders episodes within a few seconds.
-        const res = await fetchEpisodes(url);
+        // UI renders episodes within a few seconds. onUpdated fires when the
+        // background revalidation finds visibly newer data (a newly-aired
+        // episode), so the list refreshes itself without a manual reload.
+        const res = await fetchEpisodes(url, (fresh) => {
+          if (cancelled || !fresh?.success) return;
+          setData(fresh.data);
+          setEpisodes4up(fresh.data.episodes4up || []);
+          setMerged(fresh.data.merged || null);
+        });
         if (cancelled) return;
         if (res.success) {
           setData(res.data);
@@ -196,11 +206,7 @@ export default function AnimeDetailScreen() {
     if (!data || !animeHref || maxNum === 0) return;
     let cancelled = false;
     (async () => {
-      // The series' finale is out when AniList reports no upcoming episode. A
-      // network miss defaults to "finished" — anime watched to the last
-      // available episode are overwhelmingly completed series.
-      let airing = false;
-      try { airing = !!(await fetchNextAiring(data.title)); } catch {}
+      const finished = caughtUp ? await fetchSeriesFinished(data.title, maxNum) : false;
       if (cancelled) return;
       // Record EVERY known source href + title so a card from any source rail
       // (e.g. the anime4up-sourced "this season" rail) resolves the badge — not
@@ -210,7 +216,7 @@ export default function AnimeDetailScreen() {
         titles: [data.title],
         lastEpNum: maxNum,
         caughtUp,
-        finished: caughtUp && !airing,
+        finished,
       }).catch(() => {});
     })();
     return () => { cancelled = true; };
@@ -456,13 +462,14 @@ export default function AnimeDetailScreen() {
             />
           )}
           {activeTab === "related" && <RelatedTab items={relations} />}
-          {activeTab === "info" && <InfoTab data={data} />}
+          {activeTab === "info" && <InfoTab data={data} isMainSource={isMainSource} />}
         </View>
       </ScrollView>
 
-      {/* ── Floating back button ─────────────── */}
+      {/* ── Floating top bar — back + menu ──── */}
       <View style={[ss.topBar, { top: insets.top + 8 }]}>
         <GlassCircleBtn icon="chevron-back" onPress={() => router.back()} />
+        <GlassCircleBtn icon="menu" onPress={openSidebar} />
       </View>
 
       {/* ── Floating action bar — playback is always one tap away ── */}
@@ -1032,19 +1039,65 @@ function scoreRelatedMatch(want: string, got: string): number {
     s = wt.length ? Math.round((shared / wt.length) * 64) : 0;
   }
   const ws = seasonNum(want);
-  const gs = seasonNum(got);
+  const gs = relatedSeasonNum(got, ws);
   if (ws > 0 && gs > 0) s += ws === gs ? 10 : -25;
   else if (ws > 0 && gs === 0) s -= 14;
   return s;
 }
 
+function stripRelatedSeasonNoise(latin: string): string {
+  return latin
+    .replace(/\b([0-9]+)(?:st|nd|rd|th)\s+season\b/g, " ")
+    .replace(/\b(season|part|cour)\s*[0-9]*\b/g, " ")
+    .replace(/\bs[0-9]+\b/g, " ")
+    .replace(/\b(first|second|third|fourth|fifth|sixth)\s+season\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function relatedSeasonNum(title: string, expectedSeason = 0): number {
+  const explicit = seasonNum(title);
+  if (explicit > 0) return explicit;
+  if (expectedSeason <= 0) return 0;
+  const trailing = normLatin(title).match(/\b([2-9][0-9]?)$/);
+  return trailing ? parseInt(trailing[1], 10) : 0;
+}
+
+function relatedNumberedSeasonVariants(title: string): string[] {
+  const season = seasonNum(title);
+  if (season <= 0) return [];
+  const base = stripRelatedSeasonNoise(normLatin(title));
+  return base ? [`${base} ${season}`, `${base} Season ${season}`] : [];
+}
+
 // Best title-match score for a result against EVERY name the related entry is
 // known by (AniList romaji + English). The source sites index an anime under
 // only one language, so a romaji-only score misses results listed in English.
-function bestRelatedMatch(entry: RelatedAnimeEntry, gotTitle: string): number {
-  let s = scoreRelatedMatch(entry.title, gotTitle);
-  if (entry.titleEnglish) s = Math.max(s, scoreRelatedMatch(entry.titleEnglish, gotTitle));
-  return s;
+type RelatedLookupEntry = RelatedAnimeEntry & { lookupTitles?: string[] };
+
+function relatedLookupTitles(entry: RelatedLookupEntry): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (title: string | null | undefined) => {
+    const v = (title || "").trim();
+    const k = v.toLowerCase();
+    if (v && !seen.has(k)) { seen.add(k); out.push(v); }
+  };
+  add(entry.title);
+  add(entry.titleEnglish);
+  for (const title of entry.lookupTitles || []) add(title);
+  for (const title of out.slice()) {
+    for (const variant of relatedNumberedSeasonVariants(title)) add(variant);
+  }
+  return out;
+}
+
+function bestRelatedLookupMatch(entry: RelatedLookupEntry, gotTitle: string): number {
+  let best = 0;
+  for (const title of relatedLookupTitles(entry)) {
+    best = Math.max(best, scoreRelatedMatch(title, gotTitle));
+  }
+  return best;
 }
 
 // Minimum title-match confidence before a tapped related card is allowed to
@@ -1073,9 +1126,15 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
     // title (≥82) with a compatible format. Anything weaker waits for the full
     // pool so a better candidate can still win.
     const wantFmt = formatCat(entry.format);
-    const scoreOf = (r: SearchResult): { sc: number; strong: boolean } | null => {
-      const titleScore = bestRelatedMatch(entry, r.title);
+    const scoreOf = (r: SearchResult, lookupEntry: RelatedLookupEntry = entry): { sc: number; strong: boolean } | null => {
+      const titleScore = bestRelatedLookupMatch(lookupEntry, r.title);
       if (titleScore < MIN_RELATED_TITLE_SCORE) return null; // too weak — skip
+      const wantedSeason = Math.max(...relatedLookupTitles(lookupEntry).map((title) => seasonNum(title)), 0);
+      if (wantedSeason > 1) {
+        const gotSeason = relatedSeasonNum(r.title, wantedSeason);
+        // Never open the unnumbered/base page for an explicit later-season card.
+        if (gotSeason !== wantedSeason) return null;
+      }
       let sc = titleScore;
       let fmtOk = true;
       if (wantFmt) {
@@ -1100,22 +1159,29 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
       navigated = true;
       router.push(`/anime/${encodeURIComponent(href)}`);
     };
-    const consider = (results: SearchResult[]) => {
+    const consider = (results: SearchResult[], lookupEntry: RelatedLookupEntry = entry) => {
       if (navigated) return;
       for (const r of results) {
         if (r?.href && !seen.has(r.href)) { seen.add(r.href); pooled.push(r); }
       }
       for (const r of pooled) {
-        if (scoreOf(r)?.strong) { go(r.href); return; }
+        if (scoreOf(r, lookupEntry)?.strong) { go(r.href); return; }
       }
     };
 
     try {
-      const queries = [entry.title, entry.titleEnglish]
+      const altTitleSets = await Promise.all(
+        [entry.title, entry.titleEnglish]
+          .filter((q): q is string => !!q && q.trim().length > 0)
+          .map((q) => getAltTitles(q).catch(() => [])),
+      );
+      const altTitles = altTitleSets.flat();
+      const lookupEntry: RelatedLookupEntry = { ...entry, lookupTitles: altTitles };
+      const queries = relatedLookupTitles(lookupEntry)
         .filter((q): q is string => !!q && q.trim().length > 0)
         .filter((q, i, a) => a.findIndex((x) => x.toLowerCase() === q.toLowerCase()) === i);
       await Promise.all(queries.map((q) =>
-        searchAnime(q, consider).then((res) => consider(res.data.results)).catch(() => {}),
+        searchAnime(q, (results) => consider(results, lookupEntry)).then((res) => consider(res.data.results, lookupEntry)).catch(() => {}),
       ));
       if (navigated) return;
 
@@ -1123,7 +1189,7 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
       let hit: SearchResult | undefined;
       let best = -Infinity;
       for (const r of pooled) {
-        const s = scoreOf(r);
+        const s = scoreOf(r, lookupEntry);
         if (s && s.sc > best) { best = s.sc; hit = r; }
       }
       if (hit?.href) {
@@ -1196,7 +1262,7 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
 
 /* ── Tab: Info ───────────────────────────────── */
 
-function InfoTab({ data }: { data: AnimeDetail }) {
+function InfoTab({ data, isMainSource }: { data: AnimeDetail; isMainSource: boolean }) {
   const [fields, setFields] = useState<AnimeInfoField[] | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -1210,7 +1276,7 @@ function InfoTab({ data }: { data: AnimeDetail }) {
   }, [data.title]);
 
   // Prefer the API-enriched facts; fall back to whatever the scrape provided.
-  const scraped = Object.entries(data.metadata).map(([label, value]) => ({ label, value }));
+  const scraped = isMainSource ? Object.entries(data.metadata).map(([label, value]) => ({ label, value })) : [];
   const rows: AnimeInfoField[] = fields && fields.length > 0 ? fields : scraped;
 
   if (loading && rows.length === 0) {

@@ -33,8 +33,11 @@ import {
   updateNotificationsEnabledRemote,
   sendTestNotificationAsync,
 } from "../lib/push";
+import * as Updates from "expo-updates";
 import { supabase } from "../lib/supabase";
 import { checkForApkUpdate, checkForOtaUpdate, openApkDownload, applyOtaUpdate } from "../lib/updater";
+import { useAuth } from "../lib/auth";
+import { isAdmin } from "../lib/presence";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, SectionLabel } from "../components/ScreenChrome";
@@ -47,12 +50,17 @@ const HISTORY_KEY = "watch_history";
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const admin = isAdmin(user?.email);
   const [notifs, setNotifs] = useState(true);
   const [autoplay, setAutoplay] = useState(true);
   const [scope, setScope] = useState<NotificationScope>("all");
   const [permGranted, setPermGranted] = useState(false);
   const [checking, setChecking] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [adminChecking, setAdminChecking] = useState(false);
+  // Hook must run unconditionally; admin gating happens in render.
+  const { isUpdatePending } = Updates.useUpdates();
 
   useFocusEffect(
     useCallback(() => {
@@ -162,7 +170,36 @@ export default function SettingsScreen() {
     }
   }, [checking]);
 
+  // Admin-only: explicitly check for an OTA update and apply it (reload).
+  const onAdminCheckOta = useCallback(async () => {
+    if (adminChecking) return;
+    setAdminChecking(true);
+    try {
+      if (isUpdatePending) {
+        applyOtaUpdate();
+        return;
+      }
+      const ota = await checkForOtaUpdate();
+      if (ota) {
+        Alert.alert(t.adminOtaSection, t.adminOtaApplied);
+        applyOtaUpdate();
+        return;
+      }
+      Alert.alert(t.adminOtaSection, t.adminOtaNone);
+    } finally {
+      setAdminChecking(false);
+    }
+  }, [adminChecking, isUpdatePending]);
+
   const version = Constants.expoConfig?.version ?? "1.4.0";
+
+  // Static OTA bundle identity (available on the Updates module directly).
+  const otaRuntime = (Updates.runtimeVersion as string) ?? "?";
+  const otaChannel = (Updates.channel as string) ?? t.adminEmbedded;
+  const otaUpdateId = (Updates.updateId as string) ?? t.adminEmbedded;
+  const otaCreated = Updates.createdAt
+    ? new Date(Updates.createdAt).toLocaleString()
+    : t.adminEmbedded;
 
   // Hidden entry to the scraper diagnostics screen: tap the version 7×.
   // (The old welcome-screen link was removed; this gives support a way to ask a
@@ -245,6 +282,35 @@ export default function SettingsScreen() {
             right={checking ? <ActivityIndicator size="small" color={C.accent} /> : undefined}
           />
         </View>
+
+        {/* Admin-only: OTA bundle info + explicit check/apply */}
+        {admin && (
+          <>
+            <View style={s.sectionGap} />
+            <SectionLabel>{t.adminOtaSection}</SectionLabel>
+            <View style={s.group}>
+              <View style={s.otaInfo}>
+                <Text style={s.otaText}>
+                  {`${t.adminAppVersion}: ${version}\n`}
+                  {`${t.adminRuntime}: ${otaRuntime}\n`}
+                  {`${t.adminChannel}: ${otaChannel}\n`}
+                  {`${t.adminUpdateId}: ${otaUpdateId}\n`}
+                  {`${t.adminCreated}: ${otaCreated}\n`}
+                  {`${t.adminPending}: ${isUpdatePending ? t.adminYes : t.adminNo}`}
+                </Text>
+              </View>
+              <Divider />
+              <ActionRow
+                icon="sync-circle-outline"
+                tint={C.accent}
+                title={t.adminCheckOta}
+                desc={t.adminCheckOtaDesc}
+                onPress={onAdminCheckOta}
+                right={adminChecking ? <ActivityIndicator size="small" color={C.accent} /> : undefined}
+              />
+            </View>
+          </>
+        )}
 
         {/* Brand footer */}
         <View style={s.brandFooter}>
@@ -437,6 +503,12 @@ const s = StyleSheet.create({
   segmentTextActive: { color: C.textOnAccent },
 
   brandFooter: { alignItems: "center", marginTop: 44, gap: 4 },
+  // Admin OTA info block — monospace-ish multi-line readout inside the group.
+  otaInfo: { paddingVertical: 14, paddingHorizontal: 14 },
+  otaText: {
+    color: C.textSecondary, fontSize: 12, lineHeight: 19,
+    fontFamily: "Cairo_500Medium", textAlign: "right",
+  },
   logoWrap: {
     borderRadius: 19, padding: 3, marginBottom: 10,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,

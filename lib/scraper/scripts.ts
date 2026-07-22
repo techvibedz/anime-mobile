@@ -40,7 +40,15 @@ function _waitFor(checkFn, doneFn, timeoutMs, intervalMs) {
     var cfActive = !!document.querySelector('#challenge-running, .cf-browser-verification, #challenge-stage, #cf-challenge-running, #cf-please-wait');
     var t = (document.title || '').toLowerCase();
     if (t.indexOf('moment') >= 0 || t.indexOf('لحظة') >= 0) cfActive = true;
-    if (!cfActive) {
+    // Never evaluate the check while the HTML is still streaming in. The
+    // scraper now gets injected at the document's first bytes, so a partial
+    // DOM can satisfy a selector check (an ad iframe, the page header) long
+    // before the real content is parsed — and the scraper would harvest an
+    // empty/half-parsed page (this is what emptied the anime4up server list).
+    // 'interactive' fires at DOMContentLoaded: the whole HTML document is
+    // parsed, but WITHOUT waiting for images/ads/trackers — which is the part
+    // that makes page-finish so slow on bad connections.
+    if (!cfActive && document.readyState !== 'loading') {
       try {
         if (checkFn()) {
           clearInterval(iv);
@@ -654,7 +662,10 @@ async function runClicks() {
   var observer = null;
   try {
     observer = new MutationObserver(function () { collectIframes(seen, out); });
-    observer.observe(document.documentElement, {
+    // Observe the document node, not documentElement — with early injection
+    // the root element may not exist yet, and observe(null) would throw the
+    // observer away entirely.
+    observer.observe(document, {
       childList: true, subtree: true, attributes: true, attributeFilter: ['data-watch', 'src'],
     });
   } catch (e) {}
@@ -668,21 +679,36 @@ async function runClicks() {
   // 2nd pass: click through every server tab so witanime's lazy-injected
   // iframes get created. The observer above collects whatever each click
   // produces, even if it renders after the per-click wait.
-  var tabs = document.querySelectorAll('#episode-servers .server-link, .server-btn, [data-server], .servers-list a, ul.servers li a, .episode-servers a, .server-tabs li, .servers-tabs a');
-  for (var i = 0; i < tabs.length && i < 20; i++) {
-    var t = tabs[i];
-    var name = (t.textContent || '').trim() || ('Server ' + (i + 1));
-    var before = out.length;
-    try { t.click(); } catch (e) {}
-    await new Promise(function (r) { setTimeout(r, 120); });
-    collectIframes(seen, out);
-    // Rename just-added entries with the tab name
-    for (var j = before; j < out.length; j++) out[j].name = name;
+  var TAB_SEL = '#episode-servers .server-link, .server-btn, [data-server], .servers-list a, ul.servers li a, .episode-servers a, .server-tabs li, .servers-tabs a';
+  async function clickSweep() {
+    var tabs = document.querySelectorAll(TAB_SEL);
+    for (var i = 0; i < tabs.length && i < 20; i++) {
+      var t = tabs[i];
+      var name = (t.textContent || '').trim() || ('Server ' + (i + 1));
+      var before = out.length;
+      try { t.click(); } catch (e) {}
+      await new Promise(function (r) { setTimeout(r, 120); });
+      collectIframes(seen, out);
+      // Rename just-added entries with the tab name
+      for (var j = before; j < out.length; j++) out[j].name = name;
+    }
   }
+  await clickSweep();
 
   // Final settle: catch any iframe that injected after its tab's window.
   await new Promise(function (r) { setTimeout(r, 350); });
   collectIframes(seen, out);
+
+  // Nothing collected: the clicks fired before the site's own decode script
+  // attached its tab handlers — the extractor now runs at DOMContentLoaded,
+  // where async/deferred site scripts (the _zX/_zK registry decoder) may
+  // still be in flight. Give them a moment and re-sweep before giving up.
+  for (var round = 0; round < 5 && out.length === 0; round++) {
+    await new Promise(function (r) { setTimeout(r, 800); });
+    collectIframes(seen, out);
+    if (out.length > 0) break;
+    await clickSweep();
+  }
   if (observer) { try { observer.disconnect(); } catch (e) {} }
 
   // Harvest a direct anime4up link if witanime embeds one on this page — an
@@ -928,7 +954,8 @@ export const COLLECT_VIDEO_AFTER = `
   // tail + the page token. The result is a direct progressive stream.
   async function tryDood() {
     try {
-      var html = document.documentElement.outerHTML || '';
+      // Early injection can run before the root element exists.
+      var html = (document.documentElement && document.documentElement.outerHTML) || '';
       var m = html.match(/['"]([^'"]*\\/pass_md5\\/[^'"]+)['"]/);
       if (!m) return null;
       var passUrl = m[1].indexOf('http') === 0 ? m[1] : location.origin + m[1];
@@ -1054,7 +1081,9 @@ export const COLLECT_VIDEO_AFTER = `
     if (isTop && isIntermediaryHost) {
       for (var w = 0; w < 24; w++) {
         var inner0 = findPlayerIframe();
-        if (inner0) { sent = true; location.replace(inner0); return; }
+        // __sjAllowNav: the hidden WebView's anti-hijack guard blocks
+        // cross-origin location changes — flag this intentional hop first.
+        if (inner0) { sent = true; window.__sjAllowNav = true; location.replace(inner0); return; }
         // Some shells only create the iframe after a first interaction.
         if (w === 6) triggerPlay(true);
         await new Promise(function (r) { setTimeout(r, 250); });
@@ -1102,7 +1131,9 @@ export const COLLECT_VIDEO_AFTER = `
       }
 
       if (!htmlUrl && !isIntermediaryHost) {
-        var found = extractFromHtml(document.documentElement.outerHTML || '');
+        // documentElement can be null when the script was early-injected into
+        // a document whose first bytes haven't produced a root element yet.
+        var found = extractFromHtml((document.documentElement && document.documentElement.outerHTML) || '');
         if (found && !isDecoy(found)) {
           if (!isTokenizedHost) return done(found);
           htmlUrl = found;
@@ -1116,7 +1147,7 @@ export const COLLECT_VIDEO_AFTER = `
       // new page and extraction restarts there with the time that's left.
       if (isTop && !htmlUrl && Date.now() - start > 2500) {
         var inner = findPlayerIframe();
-        if (inner) { sent = true; location.replace(inner); return; }
+        if (inner) { sent = true; window.__sjAllowNav = true; location.replace(inner); return; }
       }
 
       if (Date.now() - lastTrigger > 1600) { triggerPlay(isIntermediaryHost); lastTrigger = Date.now(); }

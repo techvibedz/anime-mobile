@@ -11,16 +11,17 @@ import {
   View, Text, Pressable, FlatList, ScrollView, RefreshControl,
   ActivityIndicator, Dimensions, StyleSheet,
 } from "react-native";
-import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { fetchSeasonAnime, seasonOptions, type CatalogAnime } from "../lib/seasons";
 import { filterAvailableItems } from "../lib/schedule";
 import { CatalogCard, type CatalogCardData } from "../components/CatalogCard";
+import { useOpenSource } from "../components/useOpenSource";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
+import { Shimmer } from "../components/Shimmer";
 import { useOnlineStatus } from "../lib/net";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -30,7 +31,7 @@ const NUM_COLS = 3;
 const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
 function toCard(item: CatalogAnime): CatalogCardData {
-  return { id: item.id, title: item.title, image: item.image, score: item.score, badge: item.format };
+  return { id: item.id, title: item.title, image: item.image, score: item.score, badge: item.format, href: item.sourceHref };
 }
 
 export default function SeasonsScreen() {
@@ -98,11 +99,14 @@ export default function SeasonsScreen() {
     return cleanup;
   }, [key, verify]);
 
-  const openItem = useCallback((c: CatalogCardData) => {
-    // Defer one frame so the card's press feedback paints before the search-tab
-    // navigation + its cross-source scrape take over the JS thread.
-    requestAnimationFrame(() => router.push(`/(tabs)/search?q=${encodeURIComponent(c.title)}`));
-  }, []);
+  // Verified cards carry a resolved sourceHref → open /anime/<href> directly.
+  // Unverified ones resolve on tap (cached, brief spinner); search is only the
+  // last-resort fallback — never the default path.
+  const { open, resolvingId } = useOpenSource();
+  const openItem = useCallback(
+    (c: CatalogCardData) => { open({ id: c.id, title: c.title, sourceHref: c.href }); },
+    [open],
+  );
 
   const verifying = verifyingKey === key && !availByKey[key];
   // Show the AniList catalogue the INSTANT it lands (≈1s) instead of holding a
@@ -110,6 +114,9 @@ export default function SeasonsScreen() {
   // still runs in the background and swaps in the availability-filtered subset
   // when it completes (`availByKey`); the raw list is the fast first paint.
   const items = availByKey[key] ?? rawByKey[key] ?? (verifying ? partial : undefined);
+  // Cold paint: no rows at all yet (catalogue in flight + nothing verified) →
+  // hold a skeleton grid instead of a blank screen with a far-away spinner.
+  const showSkeleton = items === undefined || (verifying && items.length === 0);
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
@@ -157,7 +164,7 @@ export default function SeasonsScreen() {
           </View>
         }
         ListFooterComponent={
-          verifying ? (
+          verifying && !showSkeleton ? (
             <View style={s.footerCheck}>
               <ActivityIndicator size="small" color={C.accent} />
               <Text style={s.footerCheckText}>{t.scheduleChecking}</Text>
@@ -165,7 +172,13 @@ export default function SeasonsScreen() {
           ) : null
         }
         ListEmptyComponent={
-          verifying ? null : error ? (
+          showSkeleton ? (
+            <View style={s.skeletonGrid}>
+              {Array.from({ length: 12 }).map((_, i) => (
+                <Shimmer key={i} style={{ width: CARD_W, height: CARD_W * 1.5, marginBottom: GAP }} borderRadius={R.lg} />
+              ))}
+            </View>
+          ) : error ? (
             <OfflineNotice offline={online === false} onRetry={onRefresh} />
           ) : (
             <View style={s.empty}>
@@ -175,7 +188,7 @@ export default function SeasonsScreen() {
             </View>
           )
         }
-        renderItem={({ item }) => <CatalogCard item={toCard(item)} width={CARD_W} onPress={openItem} />}
+        renderItem={({ item }) => <CatalogCard item={toCard(item)} width={CARD_W} onPress={openItem} loading={resolvingId === item.id} />}
       />
     </View>
   );
@@ -208,6 +221,8 @@ const s = StyleSheet.create({
 
   footerCheck: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 18 },
   footerCheckText: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium" },
+
+  skeletonGrid: { flexDirection: "row", flexWrap: "wrap", gap: GAP },
 
   empty: { alignItems: "center", justifyContent: "center", paddingTop: 70, gap: 10 },
   emptyIcon: {

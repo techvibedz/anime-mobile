@@ -14,10 +14,48 @@ import type { RawServer } from "./index";
 import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
 import { fuzzyScore } from "../fuzzy";
+import { remoteLog } from "../remoteLog";
 
 const UP4_BASE = "https://w1.anime4up.rest";
 const A3RB_BASE = "https://anime3rb.com";
-const WIT_BASE = "https://witanime.you";
+
+// witanime rotates TLDs (”.you“ was current at build; ”.life“ is an earlier
+// mirror). A non-standard TLD like “”.you“” may NOT resolve on every DNS
+// resolver/ISP/VPN — the single-user “stuck on loading” cause where changing
+// network/VPN changes nothing because the new DNS also doesn't know the TLD.
+// Probe each known domain once per session, cache whichever answers, and
+// route every witanime fetch through it. Add new mirrors here as they appear.
+export const WIT_DOMAINS = [
+  "https://witanime.you",
+  "https://witanime.life",
+  "https://witanime.club",
+];
+let _resolvedWitBase: string | null = null;
+
+/** Return a witanime base URL that actually answers (3s probe). Cached for the
+ *  session. Falls back to the primary if none respond (so the normal fetch
+ *  retry/timeout logic still applies instead of hard-failing). */
+export async function getWitBase(): Promise<string> {
+  if (_resolvedWitBase) return _resolvedWitBase;
+  const tried: string[] = [];
+  for (const base of WIT_DOMAINS) {
+    tried.push(base);
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 3000);
+      await fetch(base + "/", { signal: ctrl.signal, headers: { "User-Agent": BROWSER_UA } });
+      clearTimeout(t);
+      _resolvedWitBase = base;
+      return base;
+    } catch {
+      // DNS fail / timeout / unreachable → try next
+    }
+  }
+  // None answered — keep the primary so callers proceed with normal retry logic
+  _resolvedWitBase = WIT_DOMAINS[0];
+  remoteLog("warn", "scraper", "all witanime TLDs unreachable", { tried });
+  return _resolvedWitBase;
+}
 
 // Must match the scraper WebView / native player UA (see ScraperHost.tsx and
 // the watch screen's videoSource headers) — some CDNs bind tokens to the UA
@@ -231,7 +269,7 @@ function parseWitCards(html: string): WitCard[] {
 // Fetch + parse a witanime listing page (genre or all-anime). Returns null on a
 // fetch failure so the caller can fall back to the WebView scrape.
 export async function fetchWitListingDirect(url: string): Promise<WitCard[] | null> {
-  const html = await fetchHtml(url, WIT_BASE + "/");
+  const html = await fetchHtml(url, await getWitBase() + "/");
   if (!html) return null;
   return parseWitCards(html);
 }
@@ -327,7 +365,8 @@ function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
 // fetch failure OR when the page yielded no cards (a CF challenge / cold body),
 // so the caller falls back to the WebView home scrape.
 export async function fetchWitHomeDirect(): Promise<WitHome | null> {
-  const html = await fetchHtml(WIT_BASE + "/", WIT_BASE + "/");
+  const base = await getWitBase();
+  const html = await fetchHtml(base + "/", base + "/");
   if (!html) return null;
   const animes = parseWitHomeAnimes(html);
   const episodes = parseWitHomeEpisodes(html);
@@ -338,8 +377,9 @@ export async function fetchWitHomeDirect(): Promise<WitHome | null> {
 // Search witanime via its static-HTML results page.
 export async function searchWitanimeDirect(query: string): Promise<WitCard[] | null> {
   if (!query) return null;
-  const url = `${WIT_BASE}/?search_param=animes&s=${encodeURIComponent(query)}`;
-  const html = await fetchHtml(url, WIT_BASE + "/");
+  const base = await getWitBase();
+  const url = `${base}/?search_param=animes&s=${encodeURIComponent(query)}`;
+  const html = await fetchHtml(url, base + "/");
   if (!html) return null;
   return parseWitCards(html);
 }
@@ -601,7 +641,23 @@ function parseAnime4upCards(
 // witanime's full movie listing — every movie in ONE static GET (no server
 // pagination), parsed by the shared card parser.
 export async function fetchWitMoviesListing(): Promise<WitCard[] | null> {
-  return fetchWitListingDirect(`${WIT_BASE}/anime-type/movie/`);
+  return fetchWitListingDirect(`${await getWitBase()}/anime-type/movie/`);
+}
+
+// anime4up home page via plain fetch (NO WebView). fetchHtml follows the home
+// redirect (…/ → /home8/) and parseAnime4upCards reads the same
+// .anime-card-container cards the WebView extractor waits for — but from the
+// initial HTML, no rendering. This is the fallback for devices/users whose
+// hidden WebView can't reach or solve witanime (or anime4up's WebView path):
+// the direct fetch only needs the network, not a working WebView, so a brand-
+// new user whose WebView is broken/outdated still gets a populated home.
+export async function fetchAnime4upHomeDirect(): Promise<
+  { title: string; href: string; image: string | null; type: string | null }[] | null
+> {
+  const html = await fetchHtml(UP4_BASE + "/", UP4_BASE + "/");
+  if (!html) return null;
+  const cards = parseAnime4upCards(html);
+  return cards.length ? cards : null;
 }
 
 // The anime4up current-season catalogue, scraped directly. anime4up's main menu
@@ -622,6 +678,100 @@ export async function fetchAnime4upSeasonListing(): Promise<
   if (!html) return null;
   const cards = parseAnime4upCards(html);
   return cards.length ? cards : null;
+}
+
+/* ── anime3rb: direct static-HTML HOME (JSON-LD) ──
+ *
+ * Third, fully independent home source. anime3rb's Laravel home page embeds
+ * schema.org JSON-LD ItemLists (latest episodes / latest added animes) with
+ * clean titles, URLs and poster images — no fragile class scraping. Used only
+ * when BOTH witanime and anime4up yield nothing (e.g. an ISP-level block on
+ * those domains): anime3rb lives on a different domain, so a block list that
+ * covers the two WordPress sources often misses it. Cards point at anime3rb
+ * /titles/ and /episode/ URLs, which the detail and watch screens already
+ * handle as first-class sources. */
+
+// Recursively collect every schema.org ItemList node in a parsed JSON-LD doc.
+function collectItemLists(node: any, out: any[]): void {
+  if (!node || typeof node !== "object") return;
+  if (node["@type"] === "ItemList" && Array.isArray(node.itemListElement)) out.push(node);
+  for (const k of Object.keys(node)) collectItemLists(node[k], out);
+}
+
+// Strip the " - Anime3rb أنمي عرب" site suffix the JSON-LD names carry.
+function a3rbCleanName(s: string): string {
+  return (s || "").replace(/\s*[-–—]\s*Anime3rb[\s\S]*$/i, "").replace(/\s+/g, " ").trim();
+}
+
+// Fetch + parse anime3rb's home page. Laravel renders the whole payload into
+// the first response, so one plain GET (with the usual WebView escalation on a
+// CF challenge) is enough. Returns null on a fetch failure or when no usable
+// list was found, so the caller can fall through to the next fallback.
+export async function fetchAnime3rbHomeDirect(): Promise<WitHome | null> {
+  const html = await fetchAnime3rbHtml(A3RB_BASE + "/", "itemListElement");
+  if (!html) return null;
+  const lists: any[] = [];
+  const re = /<script[^>]*ld\+json[^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    try { collectItemLists(JSON.parse(m[1]), lists); } catch {}
+  }
+  if (!lists.length) return null;
+
+  // "أحدث الحلقات" carries flat episode ListItems ({position, url, name, image}).
+  const epList = lists.find((l) => typeof l?.name === "string" && l.name.indexOf("الحلقات") >= 0);
+  // "Latest Added Animes" wraps each entry in an `item` Movie/TVSeries object.
+  const animeList = lists.find((l) => typeof l?.name === "string" && /latest added/i.test(l.name));
+
+  const episodes: WitHomeEpisode[] = [];
+  const seenEp = new Set<string>();
+  for (const e of epList?.itemListElement ?? []) {
+    const href = typeof e?.url === "string" ? e.url : "";
+    if (!href || seenEp.has(href)) continue;
+    const full = a3rbCleanName(typeof e?.name === "string" ? e.name : "");
+    const numM = full.match(/الحلقة\s*(\d+)/);
+    // /episode/<slug>/<n> → the anime's /titles/<slug> page.
+    const slugM = href.match(/\/episode\/([^/]+)\/\d+/);
+    if (!numM || !slugM) continue;
+    seenEp.add(href);
+    episodes.push({
+      title: "الحلقة " + numM[1],
+      href,
+      image: typeof e?.image === "string" ? e.image : null,
+      animeTitle: full.replace(/\s*الحلقة\s*\d+[\s\S]*$/, "").trim(),
+      animeHref: `${A3RB_BASE}/titles/${slugM[1]}`,
+      isNew: true,
+    });
+  }
+
+  const animes: WitHomeAnime[] = [];
+  const seenAn = new Set<string>();
+  for (const e of animeList?.itemListElement ?? []) {
+    const it = e?.item ?? e;
+    const href = typeof it?.url === "string" ? it.url : "";
+    const title = a3rbCleanName(typeof it?.name === "string" ? it.name : "");
+    if (!href || !title || seenAn.has(href)) continue;
+    seenAn.add(href);
+    animes.push({
+      title,
+      href,
+      image: typeof it?.image === "string" ? it.image : null,
+      // The home rails filter on these exact markers ("TV"/"Movie").
+      type: typeof it?.["@type"] === "string" && /movie/i.test(it["@type"]) ? "Movie" : "TV Series",
+      status: null,
+      description: typeof it?.description === "string" ? it.description : null,
+      isNew: true,
+      rating: null,
+    });
+  }
+
+  if (!episodes.length && !animes.length) return null;
+  // Hero: latest-added titles carry a real synopsis, so they fill the featured
+  // slider better than the pinned-works episode list.
+  const featured: WitHomeFeatured[] = animes.slice(0, 5).map((a) => ({
+    title: a.title, href: a.href, image: a.image, description: a.description, genres: [],
+  }));
+  return { featured, animes, episodes };
 }
 
 // Episode number for an anime4up link. The URL slug is NOT reliable: anime4up
@@ -912,7 +1062,7 @@ function parseWitServers(html: string): RawServer[] {
 export async function scrapeWitanimeEpisodePageDirect(
   episodeUrl: string,
 ): Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string } | null> {
-  const html = await fetchHtml(episodeUrl, WIT_BASE + "/");
+  const html = await fetchHtml(episodeUrl, await getWitBase() + "/");
   if (!html) return null;
   const servers = parseWitServers(html);
   if (servers.length === 0) return null;

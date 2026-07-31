@@ -256,6 +256,29 @@ export function addNotificationTapListener(
   }
 }
 
+/**
+ * Subscribe to notification taps for chat notifications only. The handler
+ * fires with `{ chatId, chatKind }` when the tapped notification had
+ * `chatKind === "admin"`. Episode notifications are ignored here so the two
+ * listeners can coexist without overlap. The actual closed-app push delivery
+ * is handled server-side by the pg_net trigger in supabase/admin-chat.sql.
+ */
+export function addChatNotificationTapListener(
+  handler: (data: { chatId?: string; chatKind?: "admin" }) => void,
+): { remove: () => void } {
+  if (!Notifications) return { remove: () => {} };
+  try {
+    const sub = Notifications.addNotificationResponseReceivedListener((response: any) => {
+      const data = response?.notification?.request?.content?.data ?? {};
+      if (data?.chatKind !== "admin") return;
+      handler({ chatId: data.chatId, chatKind: "admin" });
+    });
+    return sub;
+  } catch {
+    return { remove: () => {} };
+  }
+}
+
 // Silence "unused" while keeping Constants import meaningful for future
 // projectId-based remote push (kept intentionally local for now).
 void Constants;

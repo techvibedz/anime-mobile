@@ -48,9 +48,9 @@ import { ScraperHost } from "../lib/scraper";
 import { initAds } from "../lib/ads";
 import { SidebarProvider } from "../components/Sidebar";
 import { CompletionProvider } from "../lib/completion";
-import { setupNotifications, requestNotificationPermission, addNotificationTapListener } from "../lib/push";
+import { setupNotifications, requestNotificationPermission, addNotificationTapListener, addChatNotificationTapListener } from "../lib/push";
 import { reportRecentEpisodes } from "../lib/notifications";
-import { startPresence, stopPresence } from "../lib/presence";
+import { startPresence, stopPresence, isAdmin } from "../lib/presence";
 import { startUsageSession, endUsageSession } from "../lib/usage";
 import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
@@ -155,7 +155,21 @@ function AuthGate() {
       if (animeUrl) params.anime = animeUrl;
       router.push({ pathname: `/watch/${encodeURIComponent(data.episodeHref)}`, params });
     });
-    return () => { task.cancel(); sub.remove(); };
+
+    // Admin-chat push tap routing. The closed-app push fires from a DB trigger
+    // (supabase/admin-chat.sql) and carries { chatId, chatKind: 'admin' } in
+    // its data payload. An admin tapping their thread opens the admin
+    // conversation; any other user opens the public /chat thread (their only
+    // thread). Routes only when the user is already signed-in — otherwise the
+    // AuthGate redirect will handle it.
+    const chatSub = addChatNotificationTapListener(({ chatId }) => {
+      if (isAdmin(user?.email) && chatId) {
+        router.push({ pathname: "/admin/chat/[id]", params: { id: chatId } });
+      } else {
+        router.push("/chat");
+      }
+    });
+    return () => { task.cancel(); sub.remove(); chatSub.remove(); };
   }, [ready]);
 
   // Update checks (APK first, then OTA)
@@ -281,6 +295,9 @@ function AuthGate() {
         <Stack.Screen name="watch-party" />
         <Stack.Screen name="users" />
         <Stack.Screen name="user/[id]" />
+        <Stack.Screen name="admin/chats" />
+        <Stack.Screen name="admin/chat/[id]" />
+        <Stack.Screen name="chat" />
         <Stack.Screen name="scraper-debug" />
         <Stack.Screen name="auth-callback" options={{ animation: "none" }} />
       </Stack>

@@ -177,6 +177,17 @@ function Sidebar() {
     { icon: "share-social-outline", label: t.shareApp, onPress: onShare },
   ];
 
+  // Regular users see "رسائل المشرف" — the thread the admin opens with them.
+  // Admins see the inbox instead via the admin block below.
+  if (!isAdmin(user?.email)) {
+    NAV.splice(NAV.length - 1, 0, {
+      icon: "chatbubble-ellipses-outline",
+      label: t.chatMenuUser,
+      onPress: () => go("/chat"),
+      match: "/chat",
+    });
+  }
+
   // Admin-only: live view of who's using the app right now. Visible only to the
   // owner account (see ADMIN_EMAILS in lib/presence.ts).
   if (isAdmin(user?.email)) {
@@ -193,6 +204,20 @@ function Sidebar() {
       onPress: () => go("/users"),
       match: "/users",
       accent: C.accent,
+    });
+    NAV.splice(NAV.length - 1, 0, {
+      icon: "chatbubbles-outline",
+      label: t.chatMenuAdmin,
+      onPress: () => go("/admin/chats"),
+      match: "/admin/chats",
+      accent: C.mint,
+    });
+    NAV.splice(NAV.length - 1, 0, {
+      icon: "terminal-outline",
+      label: t.logsTitle,
+      onPress: () => go("/admin/logs"),
+      match: "/admin/logs",
+      accent: "#FBBF24",
     });
   }
 

@@ -6,6 +6,7 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
+  Pressable,
 } from "react-native";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
@@ -15,7 +16,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
 import { isAdmin } from "../../lib/presence";
 import { fetchUserDaily, type DailyRow } from "../../lib/usage";
-import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { adminOpenChat } from "../../lib/adminChat";
+import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora, ScreenHeader } from "../../components/ScreenChrome";
 
@@ -80,6 +82,7 @@ export default function UserDetailScreen() {
   const [days, setDays] = useState<DailyRow[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [chatOpening, setChatOpening] = useState(false);
 
   const admin = isAdmin(user?.email);
 
@@ -103,6 +106,26 @@ export default function UserDetailScreen() {
     await load();
     setRefreshing(false);
   }, [load]);
+
+  // Open (or reopen) the thread with this user, then drop into the conversation.
+  // Idempotent server-side — calling it on every visit costs one RPC and is
+  // safe even if a thread already exists.
+  const onOpenChat = useCallback(async () => {
+    if (chatOpening || !userId) return;
+    setChatOpening(true);
+    const chat = await adminOpenChat(userId);
+    setChatOpening(false);
+    if (!chat) return;
+    router.push({
+      pathname: "/admin/chat/[id]",
+      params: {
+        id: chat.id,
+        name,
+        email,
+        avatar,
+      },
+    });
+  }, [chatOpening, userId, name, email, avatar]);
 
   if (!admin) return null;
 
@@ -158,6 +181,22 @@ export default function UserDetailScreen() {
           <Summary icon="calendar-outline" label={t.userActiveDays} value={String(activeDays)} />
           <Summary icon="speedometer-outline" label={t.userAvgPerDay} value={fmtDuration(avgSeconds)} />
         </View>
+
+        {/* Open / jump into the chat thread with this user */}
+        <Pressable
+          style={({ pressed }) => [s.chatBtn, pressed && s.chatBtnPressed, chatOpening && s.chatBtnBusy]}
+          onPress={onOpenChat}
+          disabled={chatOpening}
+        >
+          {chatOpening ? (
+            <ActivityIndicator size="small" color={C.textOnAccent} />
+          ) : (
+            <Ionicons name="chatbubbles-outline" size={18} color={C.textOnAccent} />
+          )}
+          <Text style={s.chatBtnText}>
+            {chatOpening ? t.chatSending : t.chatOpenBtn}
+          </Text>
+        </Pressable>
 
         {/* Daily list */}
         {!loaded ? (
@@ -261,6 +300,15 @@ const s = StyleSheet.create({
   summaryLabel: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", marginRight: 5 },
   summaryValue: { color: C.text, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold", marginTop: 5, textAlign: "right", alignSelf: "stretch" },
   summaryValueStrong: { color: C.accent },
+
+  chatBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9,
+    marginTop: 12, height: 52, borderRadius: R.pill,
+    backgroundColor: C.accent, ...ELEVATION_GLOW,
+  },
+  chatBtnPressed: { transform: [{ scale: 0.98 }] },
+  chatBtnBusy: { opacity: 0.7 },
+  chatBtnText: { color: C.textOnAccent, fontSize: 14.5, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   list: { marginTop: 8, gap: 8 },
   dayRow: {

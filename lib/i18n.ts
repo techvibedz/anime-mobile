@@ -485,6 +485,43 @@ export const ar = {
   adminCheckOtaDesc: "يحمّل آخر تحديث JS ويعيد تشغيل التطبيق",
   adminOtaApplied: "تم تحميل تحديث OTA — ستتم إعادة التشغيل الآن",
   adminOtaNone: "لا توجد تحديثات OTA جديدة",
+
+  // Admin↔user chat (المحادثات)
+  chatMenuUser: "رسائل المشرف",        // sidebar entry shown to regular users
+  chatMenuAdmin: "المحادثات",          // sidebar entry shown to the admin
+  logsTitle: "سجل الأخطاء",             // sidebar entry — admin remote logs viewer
+  chatAdminInboxTitle: "المحادثات",
+  chatAdminInboxSub: "محادثات مفتوحة مع المستخدمين للتواصل والمتابعة.",
+  chatAdminOpenWithUser: "محادثة مع المستخدم",
+  chatInboxEmpty: "لا توجد محادثات بعد",
+  chatInboxEmptySub: "افتح محادثة مع أي مستخدم من شاشة «كل المستخدمين».",
+  chatUserThreadTitle: "المشرف",
+  chatStatusOpen: "مفتوحة",
+  chatStatusClosed: "مغلقة",
+  chatCloseBtn: "إغلاق المحادثة",
+  chatReopenBtn: "إعادة فتح",
+  chatCloseConfirmTitle: "إغلاق المحادثة؟",
+  chatCloseConfirmSub: "لن يتمكن المستخدم من الرد بعد الإغلاق.",
+  chatCloseConfirmOk: "إغلاق",
+  chatClosedToast: "تم إغلاق المحادثة",
+  chatReopenedToast: "تمت إعادة فتح المحادثة",
+  chatReplyDisabled: "لا يمكن الرد — المحادثة مغلقة",
+  chatClosedByAdmin: "أغلق المشرف هذه المحادثة",
+  chatPlaceholder: "اكتب رسالة…",
+  chatSend: "إرسال",
+  chatSending: "جارٍ الإرسال…",
+  chatNoMessages: "لا توجد رسائل بعد",
+  chatNoMessagesSub: "اكتب أول رسالة لبدء المحادثة.",
+  chatNoThreadTitle: "لا توجد محادثة بعد",
+  chatNoThreadSub: "إذا أراد المشرف التواصل معك ستفتح المحادثة هنا ويصلك إشعار.",
+  chatLoadError: "تعذّر تحميل المحادثة",
+  chatLoadErrorSub: "تحقق من اتصالك وحاول مجدداً.",
+  chatFailedToSend: "تعذّر إرسال الرسالة. حاول مجدداً.",
+  chatJustNow: "الآن",
+  chatOpenBtn: "محادثة",
+  chatAttachPhoto: "إرسال صورة",
+  chatPhotoFailed: "تعذّر إرسال الصورة. حاول مجدداً.",
+  chatSendingPhoto: "جارٍ إرسال الصورة…",
 };
 
 export const t = ar;

@@ -65,7 +65,6 @@ function _waitFor(checkFn, doneFn, timeoutMs, intervalMs) {
 }
 `;
 
-const WIT_BASE = "https://witanime.you";
 const UP4_BASE = "https://w1.anime4up.rest";
 
 // ──────────────────────────────────────────────────────────────
@@ -77,7 +76,7 @@ function scrape() {
   document.querySelectorAll('.lucodeia-slider-slide-item').forEach(function (el) {
     var href = el.getAttribute('href') || (el.querySelector('a') && el.querySelector('a').getAttribute('href')) || '';
     if (!href) return;
-    href = _absUrl(href, '${WIT_BASE}');
+    href = _absUrl(href, location.origin);
     var bgMatch = (el.getAttribute('style') || '').match(/url\\(['"]?([^'"()]+)['"]?\\)/);
     var genres = [];
     el.querySelectorAll('.slider-genres a').forEach(function (g) { genres.push(g.textContent.trim()); });

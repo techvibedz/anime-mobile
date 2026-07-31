@@ -38,10 +38,14 @@ import {
   extractStreamwish,
   extractDoodstream,
   fetchWitHomeDirect,
+  fetchAnime4upHomeDirect,
+  fetchAnime3rbHomeDirect,
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
 import { fuzzyScore } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
+import { readCloudHome, writeCloudHome } from "./homeCloudCache";
+import { remoteLog } from "./remoteLog";
 
 // v2 cache keys: bumped to discard payloads written by the earlier build that
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
@@ -106,7 +110,6 @@ async function swr<T>(
   return data;
 }
 
-const WIT_BASE = "https://witanime.you";
 const UP4_BASE = "https://w1.anime4up.rest";
 
 /* ── Home types ─────────────────────────────── */
@@ -301,6 +304,10 @@ function homeHasContent(p: HomePayload | null | undefined): p is HomePayload {
 function buildHomePayload(
   wit: { featured: FeaturedItem[]; animes: any[]; episodes: any[] },
   up4Animes: { title: string; href: string; image: string | null; type: string | null }[],
+  // Label the cards with the source they actually came from. Normally
+  // "witanime"; the anime3rb last-resort path passes "anime3rb" so the detail
+  // screen treats the href as an anime3rb page (not a witanime one).
+  primarySource: "witanime" | "anime3rb" = "witanime",
 ): HomePayload {
   const used4up = new Set<string>();
   const merged: MergedAnimeItem[] = wit.animes.map((w: any) => {
@@ -308,8 +315,8 @@ function buildHomePayload(
     const item: MergedAnimeItem = {
       ...w,
       image: imgOrEmpty(w.image),
-      sources: ["witanime"],
-      sourceHrefs: { witanime: w.href },
+      sources: [primarySource],
+      sourceHrefs: { [primarySource]: w.href },
     };
     if (m) {
       used4up.add(m.href);
@@ -355,15 +362,78 @@ async function fetchHomeFresh(): Promise<HomePayload> {
   // body) so the home is never blank.
   let wit = await fetchWitHomeDirect().catch(() => null);
   if (!wit) wit = await scrapeWitanimeHome().catch(() => null);
-  if (!wit) wit = { featured: [], animes: [], episodes: [] };
-  // Skip anime4up on home — it doubles load time and the merge is only
-  // really needed for cross-source matching on detail pages. Home shows
-  // wit-only content; up4 fills in on demand later.
-  const result = buildHomePayload(wit, []);
+  // FALLBACK to anime4up's home when witanime yields NOTHING. A region/ISP
+  // block on witanime.you (a single-user "stuck on loading" cause) used to
+  // leave the home screen permanently empty; anime4up lives on a different
+  // host that may be reachable. Only paid when wit is empty, so working users
+  // see zero extra cost. Without this, a blocked user never sees home content.
+  let up4Animes: { title: string; href: string; image: string | null; type: string | null }[] = [];
+  const witEmpty = !wit || (wit.animes.length === 0 && wit.episodes.length === 0 && wit.featured.length === 0);
+  if (witEmpty) {
+    // Direct (no-WebView) first: only needs the network, not a working WebView.
+    // A brand-new user whose hidden WebView is broken/outdated still gets a
+    // populated home — the single-user "stuck on loading" cause where VPN
+    // changes nothing because the WebView, not the network, is the broken part.
+    let up4 = await fetchAnime4upHomeDirect().catch(() => null);
+    if (up4 && up4.length > 0) {
+      up4Animes = up4;
+    } else {
+      // WebView fallback for when the static HTML doesn't carry the cards.
+      const viaWv = await scrapeAnime4upHome().catch(() => null);
+      up4Animes = viaWv?.animes ?? [];
+    }
+  }
+  // THIRD independent source: anime3rb's home (direct GET, JSON-LD parse). Paid
+  // only when BOTH WordPress sources are empty — the classic signature of an
+  // ISP-level block on their domains, which anime3rb's domain often escapes.
+  let a3rb: { featured: FeaturedItem[]; animes: any[]; episodes: any[] } | null = null;
+  if (witEmpty && up4Animes.length === 0) {
+    a3rb = await fetchAnime3rbHomeDirect().catch(() => null);
+  }
+  const a3rbEmpty = !a3rb || (a3rb.animes.length === 0 && a3rb.episodes.length === 0 && a3rb.featured.length === 0);
+  // LAST RESORT: the crowdsourced cloud home cache. A device blocked from EVERY
+  // source domain (IP/SNI-level ISP filtering — DNS-over-HTTPS can't help) can
+  // still reach Supabase, so it downloads the latest feed a working scout
+  // uploaded instead of showing an empty home.
+  if (witEmpty && up4Animes.length === 0 && a3rbEmpty) {
+    const cloud = await readCloudHome<HomePayload>().catch(() => null);
+    if (homeHasContent(cloud)) {
+      // Persist locally too: the next launch's SWR path serves it instantly,
+      // and a live scrape (if the block lifts) overwrites it as usual. Never
+      // re-upload a cloud payload — a stale feed would echo between devices.
+      void writeCache(HOME_CACHE_KEY, cloud);
+      void remoteLog("info", "home", "home served from cloud cache", {
+        sections: cloud.data.sections.length,
+      });
+      return cloud;
+    }
+    // EVERY source yielded nothing — the exact "stuck on loading" state for the
+    // affected user. The per-stage flags tell the admin how far the cascade
+    // got: wit/up4/a3rb empty points at a network-level block; cloud: "miss"
+    // means no scout payload was available either.
+    void remoteLog("warn", "home", "fetchHomeFresh empty — both sources", {
+      witNull: witEmpty,
+      up4Count: up4Animes.length,
+      a3rbNull: a3rbEmpty,
+      cloud: "miss",
+    });
+    return { success: true, data: { featured: [], sections: [] } };
+  }
+  const result = witEmpty
+    ? a3rbEmpty
+      // anime4up-only feed (wit + a3rb empty, up4 has cards).
+      ? buildHomePayload({ featured: [], animes: [], episodes: [] }, up4Animes)
+      : buildHomePayload(a3rb!, [], "anime3rb")
+    : buildHomePayload(wit!, up4Animes);
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
   // serving it on every launch.
-  if (homeHasContent(result)) void writeCache(HOME_CACHE_KEY, result);
+  if (homeHasContent(result)) {
+    void writeCache(HOME_CACHE_KEY, result);
+    // Scout upload: share this live-scraped feed so source-blocked devices can
+    // serve it from the cloud cache (throttled + validated server-side).
+    void writeCloudHome(result);
+  }
   return result;
 }
 
@@ -1569,6 +1639,9 @@ export async function resolveVideo(iframeUrl: string, provider: string, priority
       data: { videoUrl: r.url, type: /\.m3u8/i.test(r.url) ? "hls" : "mp4" },
     };
   } catch (e: any) {
+    void remoteLog("error", "video", "resolveVideo failed", {
+      provider, iframeUrl: iframeUrl.slice(0, 200), error: e?.message ?? "unknown",
+    });
     return { success: false, error: e?.message ?? "Could not extract video URL" };
   }
 }

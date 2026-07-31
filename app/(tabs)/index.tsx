@@ -37,6 +37,7 @@ import { StateView } from "../../components/StateView";
 import { C, S, R, T, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { checkOnline } from "../../lib/net";
+import { remoteLog, errText } from "../../lib/remoteLog";
 import { useReducedMotion } from "../../lib/motion";
 import { posterUrl } from "../../lib/img";
 import { Rise } from "../../components/Rise";
@@ -235,10 +236,19 @@ export default function HomeScreen() {
   // Cold-start resilience: the first scrape can come back empty while the
   // WebView is still warming up / clearing Cloudflare. Instead of dropping the
   // user on a blank home, keep the skeleton up and retry a few times.
+  //
+  // BOUND THE SKELETON BY TIME, NOT COUNT. MAX_EMPTY_RETRIES used to multiply
+  // each retry by the full ~60s per-scrape timeout, so a region-blocked source
+  // kept the loader up for ~5 minutes before the empty state appeared — and
+  // nobody waits 5 minutes ("stuck forever"). The cold-WebView rescue that the
+  // retries were designed for lands in 5-15s; a 25s deadline covers it while
+  // bounding every other path to a Retry button the user can actually see.
   const emptyRetry = useRef(0);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasContent = useRef(false);
+  const coldStartDeadline = useRef(0);
   const MAX_EMPTY_RETRIES = 5;
+  const COLD_START_DEADLINE_MS = 25000;
 
   // Popup shown when tapping an episode card — choose Watch vs Anime page
   const [episodePopup, setEpisodePopup] = useState<EpisodeItem | null>(null);
@@ -246,6 +256,10 @@ export default function HomeScreen() {
   const closeEpisodePopup = useCallback(() => setEpisodePopup(null), []);
 
   const load = useCallback(async () => {
+    // Start (or reuse) an absolute cold-start deadline so the skeleton can't
+    // exceed ~25s TOTAL across retries regardless of per-scrape latency.
+    if (coldStartDeadline.current === 0) coldStartDeadline.current = Date.now() + COLD_START_DEADLINE_MS;
+    const withinDeadline = () => Date.now() < coldStartDeadline.current;
     try {
       // fetchHome's onUpdated fires when the background revalidation lands with
       // visibly newer content (new episode aired etc.) — the feed updates live,
@@ -283,7 +297,7 @@ export default function HomeScreen() {
           setRefreshing(false);
           return;
         }
-        if (emptyRetry.current < MAX_EMPTY_RETRIES) {
+        if (emptyRetry.current < MAX_EMPTY_RETRIES && withinDeadline()) {
           emptyRetry.current += 1;
           retryTimer.current = setTimeout(() => { void load(); }, 3000);
           return; // don't drop out of the loading state
@@ -291,6 +305,7 @@ export default function HomeScreen() {
       }
     } catch (e) {
       console.error("Home load failed:", e);
+      void remoteLog("error", "home", "home load threw", { error: errText(e), retry: emptyRetry.current });
       if (!hasContent.current) {
         if (!(await checkOnline())) {
           setOffline(true);
@@ -298,12 +313,20 @@ export default function HomeScreen() {
           setRefreshing(false);
           return;
         }
-        if (emptyRetry.current < MAX_EMPTY_RETRIES) {
+        if (emptyRetry.current < MAX_EMPTY_RETRIES && withinDeadline()) {
           emptyRetry.current += 1;
           retryTimer.current = setTimeout(() => { void load(); }, 3000);
           return;
         }
       }
+    }
+    // Reached here with no content → the user sees the empty/offline state.
+    // Log only once per cold start so a stuck retry loop doesn't flood.
+    if (!hasContent.current) {
+      void remoteLog("warn", "home", "home empty after retries", {
+        retries: emptyRetry.current,
+        online: await checkOnline().catch(() => null),
+      });
     }
     setLoading(false);
     setRefreshing(false);
@@ -313,6 +336,7 @@ export default function HomeScreen() {
   // reload gets a fresh batch of attempts.
   const reload = useCallback(() => {
     emptyRetry.current = 0;
+    coldStartDeadline.current = 0; // fresh deadline for a user-initiated retry
     if (retryTimer.current) clearTimeout(retryTimer.current);
     void load();
   }, [load]);

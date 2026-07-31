@@ -2,6 +2,7 @@ import { enqueue } from "./bus";
 import {
   fetchWitListingDirect,
   searchWitanimeDirect,
+  getWitBase,
   type WitCard,
 } from "./direct";
 import {
@@ -20,7 +21,6 @@ import {
 
 export { ScraperHost } from "./ScraperHost";
 
-const WIT_BASE = "https://witanime.you";
 const UP4_BASE = "https://w1.anime4up.rest";
 const ALL_ANIME_PATH = encodeURIComponent("قائمة-الانمي");
 
@@ -41,8 +41,9 @@ export type RawEpisodeCard = {
 };
 
 export async function scrapeWitanimeHome() {
+  const base = await getWitBase();
   return enqueue({
-    url: `${WIT_BASE}/`,
+    url: `${base}/`,
     injectAfter: EXTRACT_HOME_WIT,
     timeoutMs: 35000,
   }) as Promise<{ featured: RawFeatured[]; animes: RawAnime[]; episodes: RawEpisodeCard[] }>;
@@ -78,7 +79,8 @@ export async function scrapeEpisodesPage(animeUrl: string) {
 export type RawSearchResult = { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: string | null };
 
 export async function scrapeSearch(query: string) {
-  const url = `${WIT_BASE}/?s=${encodeURIComponent(query)}&search_param=animes`;
+  const base = await getWitBase();
+  const url = `${base}/?s=${encodeURIComponent(query)}&search_param=animes`;
   return enqueue({
     url,
     injectAfter: EXTRACT_SEARCH,
@@ -100,7 +102,8 @@ export async function scrapeSearchUp4(query: string) {
 /* ── RECENT (episode archive paginated) ────────── */
 
 export async function scrapeRecent(page = 1) {
-  const url = `${WIT_BASE}/episode/page/${page}/`;
+  const base = await getWitBase();
+  const url = `${base}/episode/page/${page}/`;
   return enqueue({
     url,
     injectAfter: EXTRACT_RECENT,
@@ -134,10 +137,11 @@ const GENRE_SLUG_MAP: Record<string, string> = {
 };
 
 export async function scrapeGenre(genre: string, page = 1) {
+  const base = await getWitBase();
   const slug = encodeURIComponent(GENRE_SLUG_MAP[genre] || genre);
   const url = page === 1
-    ? `${WIT_BASE}/anime-genre/${slug}/`
-    : `${WIT_BASE}/anime-genre/${slug}/page/${page}/`;
+    ? `${base}/anime-genre/${slug}/`
+    : `${base}/anime-genre/${slug}/page/${page}/`;
   return enqueue({
     url,
     injectAfter: EXTRACT_LISTING,
@@ -146,9 +150,10 @@ export async function scrapeGenre(genre: string, page = 1) {
 }
 
 export async function scrapeAllAnime(page = 1) {
+  const base = await getWitBase();
   const url = page === 1
-    ? `${WIT_BASE}/${ALL_ANIME_PATH}/`
-    : `${WIT_BASE}/${ALL_ANIME_PATH}/page/${page}/`;
+    ? `${base}/${ALL_ANIME_PATH}/`
+    : `${base}/${ALL_ANIME_PATH}/page/${page}/`;
   return enqueue({
     url,
     injectAfter: EXTRACT_LISTING,
@@ -171,7 +176,7 @@ const GENRE_FULL_TTL = 30 * 60 * 1000;
 
 export async function scrapeGenreDirect(genre: string, page = 1) {
   const slug = encodeURIComponent(GENRE_SLUG_MAP[genre] || genre);
-  const url = `${WIT_BASE}/anime-genre/${slug}/`;
+  const url = `${await getWitBase()}/anime-genre/${slug}/`;
   let full = _genreFullCache.get(genre);
   if (!full || Date.now() - full.ts > GENRE_FULL_TTL) {
     const items = await fetchWitListingDirect(url);
@@ -185,9 +190,10 @@ export async function scrapeGenreDirect(genre: string, page = 1) {
 }
 
 export async function scrapeAllAnimeDirect(page = 1) {
+  const base = await getWitBase();
   const url = page === 1
-    ? `${WIT_BASE}/${ALL_ANIME_PATH}/`
-    : `${WIT_BASE}/${ALL_ANIME_PATH}/page/${page}/`;
+    ? `${base}/${ALL_ANIME_PATH}/`
+    : `${base}/${ALL_ANIME_PATH}/page/${page}/`;
   const items = await fetchWitListingDirect(url);
   if (!items) return null;
   return { items, hasNext: items.length > 0 };
@@ -210,7 +216,7 @@ export async function findCrossSourceUrl(
 ): Promise<string | null> {
   if (!title) return null;
   const wantTarget = primarySource === "witanime" ? "anime4up" : "witanime";
-  const base = wantTarget === "anime4up" ? UP4_BASE : WIT_BASE;
+  const base = wantTarget === "anime4up" ? UP4_BASE : await getWitBase();
   // anime4up search is at root path, not /home8/
   const searchUrl = `${base}/?search_param=animes&s=${encodeURIComponent(title)}`;
   try {

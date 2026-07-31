@@ -5,6 +5,7 @@ import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
 import { supabase, isSupabaseConfigured } from "./supabase";
 import { registerPushTokenAsync, unregisterPushTokenAsync } from "./push";
+import { remoteLog, errText, setLogUser } from "./remoteLog";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -33,14 +34,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setReady(true);
       return;
     }
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
+    // `ready` flipping to true ONLY here strand a user whose persisted session
+    // is corrupted (or whose refresh-token call hangs) on the root spinner
+    // forever — a single-user "stuck on loading" with everyone else fine.
+    // ponytail: 12s ceiling + local-clear on any failure clears the poisoned
+    // token and routes the AuthGate to the welcome screen instead of hanging.
+    const fail = () => {
+      void supabase.auth.signOut({ scope: "local" }).catch(() => {});
+      void remoteLog("error", "auth", "getSession timed out (12s) — cleared local session");
       setReady(true);
-    });
+    };
+    Promise.race([
+      supabase.auth.getSession(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("auth-getSession-timeout")), 12000),
+      ),
+    ])
+      .then(({ data }) => {
+        setSession(data.session);
+        setUser(data.session?.user ?? null);
+        setLogUser(data.session?.user ?? null);
+        setReady(true);
+      })
+      .catch(fail);
     const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
       setSession(sess);
       setUser(sess?.user ?? null);
+      setLogUser(sess?.user ?? null);
     });
 
     // Global deep-link handler. On Android the OS often hijacks the OAuth
@@ -63,6 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch (e) {
         console.warn("[auth] deep-link session set failed", e);
+        void remoteLog("warn", "auth", "deep-link session set failed", { error: errText(e) });
       }
     }
     // Cold start: app launched FROM the deep link.
@@ -120,6 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     if (user?.id) await unregisterPushTokenAsync(user.id);
     await supabase.auth.signOut();
+    setLogUser(null);
   }, [user?.id]);
 
   const sendPasswordReset = useCallback(async (email: string) => {

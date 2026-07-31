@@ -15,10 +15,19 @@
 //   1. drop a Kotlin file (PantoufaDoh.kt) with the DoH okhttp3.Dns + a
 //      React Native OkHttpClientFactory into the app package, and
 //   2. register that factory in MainApplication.onCreate so every fetch uses it.
+//
+// Plus a second pair for the WEBVIEW (added later):
+//   3. drop PantoufaDohProxy.kt — a tiny localhost forward proxy that resolves
+//      CONNECT targets via the same DoH resolver and tunnels the TLS bytes, and
+//   4. point every WebView at it via ProxyController.setProxyOverride. Chromium
+//      resolves with the SYSTEM resolver, so without this the hidden scraper
+//      WebView (and video-embed extraction) still fail on DNS-poisoning ISPs
+//      even though plain fetch works.
 
 const {
   withMainApplication,
   withDangerousMod,
+  withAppBuildGradle,
 } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
@@ -127,6 +136,184 @@ class PantoufaDohOkHttpClientFactory : OkHttpClientFactory {
 }
 `;
 
+// NOTE: written without Kotlin string templates ($) so the JS template literal
+// below needs no escaping — keep it that way.
+const PROXY_KOTLIN_SOURCE = (pkg) => `package ${pkg}
+
+import android.util.Log
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.URI
+import java.util.concurrent.Executors
+
+/**
+ * Tiny localhost forward proxy that routes WebView traffic through DoH-based
+ * DNS. Android's WebView (Chromium) resolves hostnames with the SYSTEM
+ * resolver — RN's OkHttp DoH factory (PantoufaDohDns) can't touch it — so on
+ * ISPs that poison the anime source domains the hidden scraper WebView (and
+ * video-embed extraction) fail even though plain fetch works.
+ *
+ * Fix: point every WebView at this proxy (ProxyController.setProxyOverride,
+ * registered in MainApplication). Chromium then asks us to CONNECT host:443;
+ * WE resolve the host — via PantoufaDohDns, so DoH-first for the known-blocked
+ * sources and system-first-with-DoH-fallback for the rest — and tunnel the raw
+ * TLS bytes to the real IP. TLS stays end-to-end (SNI + cert validation use
+ * the original hostname) and cookies behave exactly as before, because the
+ * proxy never terminates TLS.
+ *
+ * Bound to 127.0.0.1 only — no other app can reach it. If it fails to start,
+ * the proxy override is simply never installed and the WebView keeps system
+ * DNS (the pre-fix behavior), so this can never regress working users.
+ */
+object PantoufaDohProxy {
+    private const val TAG = "PantoufaDohProxy"
+    private val dns = PantoufaDohDns()
+    private val pool = Executors.newCachedThreadPool()
+    @Volatile var port: Int = 0
+        private set
+    @Volatile private var started = false
+
+    @Synchronized
+    fun start(): Int {
+        if (started) return port
+        started = true
+        try {
+            val server = ServerSocket(0, 64, InetAddress.getByName("127.0.0.1"))
+            port = server.localPort
+            pool.execute {
+                while (!server.isClosed) {
+                    try {
+                        val client = server.accept()
+                        pool.execute { runCatching { handle(client) } }
+                    } catch (_: Exception) {
+                        // Keep accepting — a single bad connection must not
+                        // kill the proxy loop.
+                    }
+                }
+            }
+            Log.i(TAG, "DoH proxy listening on 127.0.0.1:" + port)
+        } catch (e: Exception) {
+            Log.w(TAG, "proxy failed to start — WebView keeps system DNS", e)
+            port = 0
+        }
+        return port
+    }
+
+    private fun handle(client: Socket) {
+        client.soTimeout = 30000
+        val input = client.getInputStream()
+        // Read the request line + headers (bounded — CONNECT headers are tiny).
+        val headerBytes = readHeaders(input)
+        if (headerBytes == null) { closeQuietly(client); return }
+        val header = String(headerBytes, Charsets.ISO_8859_1)
+        val requestLine = header.substringBefore("\\r\\n")
+        val parts = requestLine.split(" ")
+        if (parts.size < 2) { closeQuietly(client); return }
+
+        val hostPort: String
+        var prefix = ByteArray(0)
+        if (parts[0].equals("CONNECT", ignoreCase = true)) {
+            hostPort = parts[1]
+        } else {
+            // Plain HTTP (absolute-URI form). All scrape targets are https, but
+            // forward these too so nothing inside a page ever breaks.
+            val uri = try { URI(parts[1]) } catch (_: Exception) { closeQuietly(client); return }
+            val h = uri.host
+            if (h.isNullOrEmpty()) { closeQuietly(client); return }
+            hostPort = if (uri.port > 0) h + ":" + uri.port else h + ":80"
+            // Re-send the request in origin form (path + query), not absolute.
+            var originForm = uri.rawPath ?: "/"
+            if (uri.rawQuery != null) originForm += "?" + uri.rawQuery
+            val newLine = parts[0] + " " + originForm + " HTTP/1.1"
+            prefix = (newLine + header.substring(requestLine.length)).toByteArray(Charsets.ISO_8859_1)
+        }
+
+        val host = hostPort.substringBeforeLast(":")
+        val portNum = hostPort.substringAfterLast(":").toIntOrNull() ?: 443
+
+        val addr = resolve(host)
+        if (addr == null) { closeQuietly(client); return }
+        val upstream = Socket()
+        try {
+            upstream.connect(InetSocketAddress(addr, portNum), 10000)
+            // Long-lived tunnel: no read timeout — Chromium closes idle
+            // connections itself, which EOFs our pipes and frees the threads.
+            upstream.soTimeout = 0
+            upstream.tcpNoDelay = true
+        } catch (e: Exception) {
+            closeQuietly(client)
+            closeQuietly(upstream)
+            return
+        }
+
+        if (prefix.isEmpty()) {
+            // CONNECT: acknowledge, then become a pure byte tunnel.
+            val out = client.getOutputStream()
+            out.write("HTTP/1.1 200 Connection Established\\r\\n\\r\\n".toByteArray(Charsets.ISO_8859_1))
+            out.flush()
+        } else {
+            val out = upstream.getOutputStream()
+            out.write(prefix)
+            out.flush()
+        }
+        client.soTimeout = 0
+
+        pool.execute { pipe(client, upstream) }  // client → upstream
+        pool.execute { pipe(upstream, client) }  // upstream → client
+    }
+
+    private fun resolve(host: String): InetAddress? =
+        runCatching { dns.lookup(host).firstOrNull() }.getOrNull()
+
+    // Read until CRLFCRLF, capped at 16 KiB — CONNECT headers never get close.
+    private fun readHeaders(input: InputStream): ByteArray? {
+        val buf = ByteArrayOutputStream()
+        var matched = 0
+        val end = byteArrayOf(13, 10, 13, 10)
+        while (buf.size() < 16384) {
+            val b = input.read()
+            if (b < 0) return null
+            buf.write(b)
+            matched = if (b.toByte() == end[matched]) matched + 1
+                      else if (b.toByte() == end[0]) 1
+                      else 0
+            if (matched == 4) return buf.toByteArray()
+        }
+        return null
+    }
+
+    // Pump bytes src → dst until EOF, then close BOTH sockets: the peer pipe
+    // sees EOF and exits, freeing its thread. HTTPS over CONNECT never relies
+    // on half-closes, so a full close on first EOF is safe.
+    private fun pipe(src: Socket, dst: Socket) {
+        try {
+            val buf = ByteArray(64 * 1024)
+            val input = src.getInputStream()
+            val output = dst.getOutputStream()
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                output.write(buf, 0, n)
+                output.flush()
+            }
+        } catch (_: Exception) {
+        } finally {
+            closeQuietly(src)
+            closeQuietly(dst)
+        }
+    }
+
+    private fun closeQuietly(s: Socket) {
+        try { s.close() } catch (_: Exception) {}
+    }
+}
+`;
+
 function withDohKotlinSource(config) {
   return withDangerousMod(config, [
     "android",
@@ -142,6 +329,7 @@ function withDohKotlinSource(config) {
       );
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "PantoufaDoh.kt"), KOTLIN_SOURCE(pkg));
+      fs.writeFileSync(path.join(dir, "PantoufaDohProxy.kt"), PROXY_KOTLIN_SOURCE(pkg));
       return cfg;
     },
   ]);
@@ -172,6 +360,30 @@ function withDohRegistration(config) {
       }
     }
 
+    // WebView half of the fix: start the localhost DoH proxy and point every
+    // WebView at it. Guarded by the androidx.webkit feature check — on a
+    // WebView too old for PROXY_OVERRIDE nothing changes (system DNS, the
+    // pre-fix behavior). If the proxy fails to bind, port is 0 and the
+    // override is skipped for the same reason.
+    if (!src.includes("PantoufaDohProxy.start()")) {
+      const proxyCall =
+        "    val pantoufaDohProxyPort = PantoufaDohProxy.start()\n" +
+        "    if (pantoufaDohProxyPort > 0 && androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.PROXY_OVERRIDE)) {\n" +
+        "      androidx.webkit.ProxyController.getInstance().setProxyOverride(\n" +
+        "        androidx.webkit.ProxyConfig.Builder().addProxyRule(\"127.0.0.1:\" + pantoufaDohProxyPort).build(),\n" +
+        "        java.util.concurrent.Executors.newSingleThreadExecutor()\n" +
+        "      ) { }\n" +
+        "    }\n";
+      if (/super\.onCreate\(\)\s*\n/.test(src)) {
+        src = src.replace(/(super\.onCreate\(\)\s*\n)/, `$1${proxyCall}`);
+      } else {
+        src = src.replace(
+          /(override fun onCreate\(\)\s*\{\s*\n)/,
+          `$1${proxyCall}`
+        );
+      }
+    }
+
     cfg.modResults.contents = src;
     return cfg;
   });
@@ -180,5 +392,21 @@ function withDohRegistration(config) {
 module.exports = function withAndroidDoH(config) {
   config = withDohKotlinSource(config);
   config = withDohRegistration(config);
+  config = withWebkitDependency(config);
   return config;
 };
+
+// react-native-webview pulls androidx.webkit as `implementation`, which keeps
+// it OFF the app module's compile classpath — MainApplication's ProxyController
+// references would fail with "unresolved reference: webkit". Declare it here.
+function withWebkitDependency(config) {
+  return withAppBuildGradle(config, (cfg) => {
+    if (cfg.modResults.language === "groovy" && !cfg.modResults.contents.includes("androidx.webkit:webkit")) {
+      cfg.modResults.contents = cfg.modResults.contents.replace(
+        /dependencies\s*\{/,
+        (m) => `${m}\n    // WebView proxy override (DoH) — see PantoufaDohProxy.kt\n    implementation("androidx.webkit:webkit:1.14.0")`
+      );
+    }
+    return cfg;
+  });
+}

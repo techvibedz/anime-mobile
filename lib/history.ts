@@ -92,7 +92,17 @@ export async function pullHistoryFromCloud() {
 
 export async function getHistory(): Promise<WatchEntry[]> {
   const raw = await AsyncStorage.getItem(KEY);
-  return raw ? JSON.parse(raw) : [];
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as WatchEntry[];
+  } catch {
+    // ponytail: a partial write (crash mid-setItem / an older incompatible
+    // build) leaves garbage here for ONE user and throws on every read —
+    // poisoning getContinueWatching/saveProgress too. Reset to empty; the
+    // cloud pull on sign-in rehydrates it.
+    void AsyncStorage.removeItem(KEY).catch(() => {});
+    return [];
+  }
 }
 
 export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {

@@ -14,7 +14,9 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
+import PantoufaDownloads from "pantoufa-downloads";
 import { resolveDownloadUrl } from "./api";
+import { mapNativeDownload } from "./downloadStatus";
 
 export type DownloadStatus = "resolving" | "downloading" | "completed" | "failed";
 
@@ -29,6 +31,9 @@ export interface DownloadItem {
   episodeHref: string;
   url4up?: string;
   url3rb?: string;
+  server?: DownloadMeta["server"];
+  /** Android DownloadManager job id. Missing on legacy FileSystem downloads. */
+  downloadId?: number;
   /** Local file:// path once the file exists. */
   fileUri: string;
   status: DownloadStatus;
@@ -51,12 +56,15 @@ export interface DownloadMeta {
 }
 
 const INDEX_KEY = "@downloads_index_v1";
-const DIR = `${FileSystem.documentDirectory}downloads/`;
 
 let items: DownloadItem[] | null = null;
-const active = new Map<string, ReturnType<typeof FileSystem.createDownloadResumable>>();
+const pending = new Set<string>();
+const operationVersions = new Map<string, number>();
 const listeners = new Set<() => void>();
 let lastEmit = 0;
+let monitor: ReturnType<typeof setInterval> | null = null;
+let loadPromise: Promise<DownloadItem[]> | null = null;
+let syncPromise: Promise<void> | null = null;
 
 function emit(force = false) {
   const now = Date.now();
@@ -78,40 +86,34 @@ function idFor(episodeHref: string): string {
   return "dl_" + (h >>> 0).toString(36);
 }
 
-async function ensureDir() {
-  try {
-    const info = await FileSystem.getInfoAsync(DIR);
-    if (!info.exists) await FileSystem.makeDirectoryAsync(DIR, { intermediates: true });
-  } catch {}
-}
-
-async function persist() {
+async function persist(): Promise<boolean> {
   try {
     await AsyncStorage.setItem(INDEX_KEY, JSON.stringify(items ?? []));
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function load(): Promise<DownloadItem[]> {
   if (items) return items;
-  try {
-    const raw = await AsyncStorage.getItem(INDEX_KEY);
-    const parsed: DownloadItem[] = raw ? JSON.parse(raw) : [];
-    // An in-flight download can't survive an app kill → mark it failed so the
-    // user can retry instead of seeing a stuck spinner forever.
-    items = parsed.map((it) =>
-      it.status === "downloading" || it.status === "resolving"
-        ? { ...it, status: "failed" as DownloadStatus }
-        : it,
-    );
-  } catch {
-    items = [];
-  }
-  return items;
+  if (loadPromise) return loadPromise;
+  loadPromise = (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(INDEX_KEY);
+      items = raw ? JSON.parse(raw) : [];
+    } catch {
+      items = [];
+    }
+    return items!;
+  })().finally(() => { loadPromise = null; });
+  return loadPromise;
 }
 
 export async function getDownloads(): Promise<DownloadItem[]> {
-  const list = await load();
-  return [...list].sort((a, b) => b.createdAt - a.createdAt);
+  await load();
+  await syncDownloads();
+  return [...items!].sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export async function getDownloadByEpisode(episodeHref: string): Promise<DownloadItem | undefined> {
@@ -132,6 +134,87 @@ function patch(id: string, p: Partial<DownloadItem>) {
   if (i !== -1) items[i] = { ...items[i], ...p };
 }
 
+function updateMonitor() {
+  const hasActive = !!items?.some((it) => it.status === "downloading" && it.downloadId != null);
+  if (hasActive && !monitor) {
+    monitor = setInterval(() => { void syncDownloads(); }, 1000);
+  } else if (!hasActive && monitor) {
+    clearInterval(monitor);
+    monitor = null;
+  }
+}
+
+/** Reconcile persisted records with Android's system-owned download jobs. */
+export async function syncDownloads(): Promise<void> {
+  if (syncPromise) return syncPromise;
+  syncPromise = reconcileDownloads().finally(() => { syncPromise = null; });
+  return syncPromise;
+}
+
+async function reconcileDownloads(): Promise<void> {
+  await load();
+  if (!PantoufaDownloads) return;
+  let changed = false;
+  for (const item of [...items!]) {
+    try {
+      const job = item.downloadId != null
+        ? await PantoufaDownloads.query(item.downloadId)
+        : (item.status === "resolving" || item.status === "downloading")
+          ? await PantoufaDownloads.find(`${item.id}.mp4`)
+          : null;
+      if (!job) {
+        if (item.status === "completed" && item.fileUri.startsWith("file://")) {
+          const info = await FileSystem.getInfoAsync(item.fileUri);
+          if (!info.exists || !("size" in info) || !info.size) {
+            patch(item.id, { status: "failed" });
+            changed = true;
+          }
+        } else if ((item.status === "resolving" || item.status === "downloading") && !pending.has(item.id)) {
+          patch(item.id, { status: "failed" });
+          changed = true;
+        }
+        continue;
+      }
+      const mapped = mapNativeDownload(job);
+      let status: DownloadStatus = mapped.status;
+      const fileUri = job.localUri || item.fileUri;
+      if (status === "completed") {
+        if (!fileUri || job.bytes <= 0) {
+          status = "failed";
+        } else if (fileUri.startsWith("file://")) {
+          const info = await FileSystem.getInfoAsync(fileUri);
+          if (!info.exists || !("size" in info) || !info.size) status = "failed";
+        }
+      }
+      if (status === "failed" && job.status === 8) {
+        await PantoufaDownloads.remove(job.id).catch(() => 0);
+      }
+      if (
+        item.status !== status || item.progress !== mapped.progress ||
+        item.bytes !== job.bytes || item.totalBytes !== Math.max(0, job.totalBytes) ||
+        item.fileUri !== fileUri || item.downloadId !== job.id
+      ) {
+        patch(item.id, {
+          status,
+          progress: status === "completed" ? 1 : mapped.progress,
+          bytes: job.bytes,
+          totalBytes: Math.max(0, job.totalBytes),
+          fileUri,
+          downloadId: job.id,
+        });
+        changed = true;
+      }
+    } catch {
+      // Keep the last known state; a transient query failure is not a failed download.
+    }
+  }
+  if (changed) {
+    await persist();
+    emit(true);
+  }
+  updateMonitor();
+}
+
 /**
  * Start (or restart) a download. Returns the item id. Resolves a direct .mp4
  * URL, then streams it to disk with live progress. Idempotent: an already-
@@ -139,14 +222,17 @@ function patch(id: string, p: Partial<DownloadItem>) {
  */
 export async function startDownload(meta: DownloadMeta): Promise<string> {
   await load();
-  await ensureDir();
+  await syncDownloads();
   const id = idFor(meta.episodeHref);
 
   const existing = items!.find((x) => x.id === id);
   if (existing && existing.status === "completed") return id;
-  if (active.has(id)) return id; // already downloading
+  if (pending.has(id) || existing?.status === "downloading") return id;
+  const operation = (operationVersions.get(id) ?? 0) + 1;
+  operationVersions.set(id, operation);
+  const isCurrent = () => operationVersions.get(id) === operation;
+  pending.add(id);
 
-  const fileUri = `${DIR}${id}.mp4`;
   const item: DownloadItem = {
     id,
     animeTitle: meta.animeTitle,
@@ -157,6 +243,7 @@ export async function startDownload(meta: DownloadMeta): Promise<string> {
     episodeHref: meta.episodeHref,
     url4up: meta.url4up,
     url3rb: meta.url3rb,
+    server: meta.server,
     fileUri: "",
     status: "resolving",
     progress: 0,
@@ -165,7 +252,12 @@ export async function startDownload(meta: DownloadMeta): Promise<string> {
     createdAt: existing?.createdAt ?? Date.now(),
   };
   upsert(item);
-  await persist();
+  if (!(await persist())) {
+    patch(id, { status: "failed" });
+    pending.delete(id);
+    emit(true);
+    return id;
+  }
   emit(true);
 
   try {
@@ -183,43 +275,36 @@ export async function startDownload(meta: DownloadMeta): Promise<string> {
       emit(true);
       return id;
     }
-
-    patch(id, { status: "downloading", fileUri });
-    emit(true);
-
-    // Clear any stale partial file so a fresh download can't append to garbage.
-    try { await FileSystem.deleteAsync(fileUri, { idempotent: true }); } catch {}
-
-    const resumable = FileSystem.createDownloadResumable(
-      resolved.url,
-      fileUri,
-      { headers: resolved.headers },
-      (p) => {
-        const total = p.totalBytesExpectedToWrite;
-        patch(id, {
-          bytes: p.totalBytesWritten,
-          totalBytes: total > 0 ? total : 0,
-          progress: total > 0 ? p.totalBytesWritten / total : 0,
-        });
-        emit();
-      },
-    );
-    active.set(id, resumable);
-
-    const result = await resumable.downloadAsync();
-    active.delete(id);
-    if (!result?.uri) {
-      patch(id, { status: "failed" });
-    } else {
-      patch(id, { status: "completed", fileUri: result.uri, progress: 1 });
+    if (!isCurrent()) return id;
+    if (!PantoufaDownloads) throw new Error("Background downloads require the Android 3.3.0 build");
+    if (existing?.downloadId != null) {
+      await PantoufaDownloads.remove(existing.downloadId).catch(() => 0);
     }
-    await persist();
+    const downloadId = await PantoufaDownloads.enqueue(
+      resolved.url,
+      resolved.headers,
+      `${id}.mp4`,
+      meta.episodeTitle,
+    );
+    if (!isCurrent()) {
+      await PantoufaDownloads.remove(downloadId).catch(() => 0);
+      return id;
+    }
+    patch(id, { status: "downloading", downloadId, server: meta.server });
+    if (!(await persist())) {
+      await PantoufaDownloads.remove(downloadId).catch(() => 0);
+      if (isCurrent()) patch(id, { status: "failed", downloadId: undefined });
+    }
     emit(true);
+    updateMonitor();
   } catch {
-    active.delete(id);
-    patch(id, { status: "failed" });
-    await persist();
-    emit(true);
+    if (isCurrent()) {
+      patch(id, { status: "failed" });
+      await persist();
+      emit(true);
+    }
+  } finally {
+    if (isCurrent()) pending.delete(id);
   }
   return id;
 }
@@ -237,19 +322,23 @@ export async function retryDownload(id: string): Promise<void> {
     episodeHref: it.episodeHref,
     url4up: it.url4up,
     url3rb: it.url3rb,
+    server: it.server,
   });
 }
 
 export async function deleteDownload(id: string): Promise<void> {
   await load();
   const it = items!.find((x) => x.id === id);
-  // Cancel an in-flight download so its callback can't resurrect the entry.
-  const res = active.get(id);
-  if (res) { try { await res.cancelAsync(); } catch {} active.delete(id); }
+  operationVersions.set(id, (operationVersions.get(id) ?? 0) + 1);
+  pending.delete(id);
+  if (it?.downloadId != null && PantoufaDownloads) {
+    await PantoufaDownloads.remove(it.downloadId).catch(() => 0);
+  }
   if (it?.fileUri) { try { await FileSystem.deleteAsync(it.fileUri, { idempotent: true }); } catch {} }
   items = items!.filter((x) => x.id !== id);
   await persist();
   emit(true);
+  updateMonitor();
 }
 
 /** Human-readable total size of completed downloads (for the screen header). */

@@ -1616,6 +1616,9 @@ export async function resolveVideo(iframeUrl: string, provider: string, priority
   if (provider === "mp4upload") {
     const r = await extractMp4upload(iframeUrl).catch(() => null);
     if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+    void remoteLog("warn", "video", "mp4upload direct extraction missed; using WebView", {
+      iframeUrl: iframeUrl.slice(0, 200),
+    });
   }
   // streamwish / doodstream carry the real stream in the embed page's STATIC
   // HTML (packed JS / pass_md5 endpoint), so one or two plain GETs resolve

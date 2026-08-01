@@ -54,6 +54,7 @@ import { startPresence, stopPresence, isAdmin } from "../lib/presence";
 import { startUsageSession, endUsageSession } from "../lib/usage";
 import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
+import { syncDownloads } from "../lib/downloads";
 import "../global.css";
 
 function AuthGate() {
@@ -170,6 +171,15 @@ function AuthGate() {
       }
     });
     return () => { task.cancel(); sub.remove(); chatSub.remove(); };
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    syncDownloads().catch(() => {});
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") syncDownloads().catch(() => {});
+    });
+    return () => sub.remove();
   }, [ready]);
 
   // Update checks (APK first, then OTA)

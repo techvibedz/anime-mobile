@@ -6,7 +6,7 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
-import { extractFromPacked, pickMediaUrl } from "./direct";
+import { extractFromPacked, extractMp4uploadUrl, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -36,6 +36,7 @@ function pack(script: string): string {
 
 const M3U8 = "https://cdn.example.com/master.m3u8?token=abc123";
 const MP4 = "https://vid.example.net/field/film480.mp4?sign=zz99";
+const MP4UPLOAD = "https://s14.mp4upload.com:282/d/video.mp4?token=abc";
 
 test("packed JW setup round-trips to the m3u8", () => {
   const html = `<html><script>${pack(`jwplayer("v").setup({file:"${M3U8}",width:"100%"});`)}</script></html>`;
@@ -63,6 +64,25 @@ test("pickMediaUrl rejects decoys and embed-page self references", () => {
 test("pickMediaUrl skips trackers and takes the real stream", () => {
   const html = `"https://google-analytics.com/collect.mp4" then {file:"${M3U8}"}`;
   assert.equal(pickMediaUrl(html), M3U8);
+});
+
+test("mp4upload inline player.src object yields the direct mp4", () => {
+  const html = `<script>player.src({type:"video/mp4",src:"${MP4UPLOAD}"});</script>`;
+  assert.equal(extractMp4uploadUrl(html), MP4UPLOAD);
+});
+
+test("mp4upload packed player.src yields the direct mp4", () => {
+  const html = `<script>${pack(`player.src({type:"video/mp4",src:"${MP4UPLOAD}"});`)}</script>`;
+  assert.equal(extractMp4uploadUrl(html), MP4UPLOAD);
+});
+
+test("mp4upload parser rejects sample files", () => {
+  assert.equal(extractMp4uploadUrl('player.src({src:"https://x.mp4upload.com/sample-video.mp4"})'), null);
+});
+
+test("mp4upload parser skips an unrelated mp4 before the real stream", () => {
+  const html = `src:"https://cdn.example.com/trailer.mp4";src:"${MP4UPLOAD}"`;
+  assert.equal(extractMp4uploadUrl(html), MP4UPLOAD);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -215,7 +215,7 @@ function scrape() {
   var decoded = decodeEpisodeData(raw);
   var episodes = decoded.map(function (ep) {
     var url = ep.url || '';
-    if (url && url.indexOf('http') !== 0) url = 'https://witanime.you/' + url.replace(/^\\//, '');
+    if (url && url.indexOf('http') !== 0) url = location.origin + '/' + url.replace(/^\\//, '');
     var num = typeof ep.number === 'string' ? parseInt(ep.number, 10) : (ep.number || 0);
     return {
       title: ((ep.type || '') + ' ' + (ep.number != null ? ep.number : '')).trim() || ('Episode ' + num),

@@ -27,6 +27,10 @@ test("width snaps UP to the nearest bucket, caps at max", () => {
   assert.match(buildPhotonUrl("https://witanime.you/a.jpg", 9999), /\?w=800&/);
 });
 
+test("hero-size requests can reach 1200px", () => {
+  assert.match(buildPhotonUrl("https://witanime.you/a.jpg", 1000, 1200), /\?w=1200&/);
+});
+
 test("anime4up passes through untouched (403s on Photon)", () => {
   const raw = "https://w1.anime4up.rest/wp-content/uploads/2026/04/Kill-Ao.jpg";
   assert.equal(buildPhotonUrl(raw, 240), raw);

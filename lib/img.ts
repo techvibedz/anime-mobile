@@ -20,18 +20,18 @@ const PHOTON_OK = /(^|\.)witanime\./i;
 
 // Snap to a small set of widths so slightly different card widths across screens
 // don't fragment the disk cache with near-duplicate downloads.
-const BUCKETS = [180, 240, 320, 420, 560, 800];
-function bucketPx(px: number): number {
-  for (const b of BUCKETS) if (b >= px) return b;
-  return BUCKETS[BUCKETS.length - 1];
+const BUCKETS = [180, 240, 320, 420, 560, 800, 1200];
+function bucketPx(px: number, maxPx: number): number {
+  for (const b of BUCKETS) if (b >= px) return Math.min(b, maxPx);
+  return maxPx;
 }
 
 /** Pure: wrap a witanime URL in Photon at `targetPx` wide, else return unchanged. */
-export function buildPhotonUrl(src: string, targetPx: number): string {
+export function buildPhotonUrl(src: string, targetPx: number, maxPx = 800): string {
   let u: URL;
   try { u = new URL(src); } catch { return src; }
   if (!PHOTON_OK.test(u.hostname)) return src;
-  return `https://i0.wp.com/${u.hostname}${u.pathname}?w=${bucketPx(targetPx)}&quality=75&strip=all&ssl=1`;
+  return `https://i0.wp.com/${u.hostname}${u.pathname}?w=${bucketPx(targetPx, maxPx)}&quality=75&strip=all&ssl=1`;
 }
 
 /**
@@ -39,10 +39,10 @@ export function buildPhotonUrl(src: string, targetPx: number): string {
  * (a 2:3 poster gains nothing from 3× density). Returns undefined for empty input,
  * the raw URL when width is unknown or the host isn't Photon-serviceable.
  */
-export function posterUrl(src?: string | null, width?: number): string | undefined {
+export function posterUrl(src?: string | null, width?: number, maxPx = 800): string | undefined {
   if (!src) return undefined;
   if (!width) return src;
   // Lazy require so pure helpers stay importable in node (tests) without RN.
   const dpr = Math.min(require("react-native").PixelRatio.get() || 2, 2);
-  return buildPhotonUrl(src, Math.ceil(width * dpr));
+  return buildPhotonUrl(src, Math.ceil(width * dpr), maxPx);
 }

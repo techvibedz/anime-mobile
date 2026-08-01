@@ -11,6 +11,7 @@
 // electron/main.ts) with window.pantoufa.fetchHtml replaced by fetchHtml().
 
 import type { RawServer } from "./index";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
 import { fuzzyScore } from "../fuzzy";
@@ -28,33 +29,83 @@ const A3RB_BASE = "https://anime3rb.com";
 export const WIT_DOMAINS = [
   "https://witanime.you",
   "https://witanime.life",
-  "https://witanime.club",
 ];
 let _resolvedWitBase: string | null = null;
+let _witBaseInflight: Promise<string> | null = null;
+// After a total probe failure, don't re-probe (or re-log) on every call —
+// but also don't poison the session with a permanent fallback. Calls inside
+// this window get the primary domain back immediately; the next call after
+// the window re-probes, so a transient outage self-heals.
+let _witFailUntil = 0;
+const WIT_FAIL_WINDOW_MS = 60_000;
+const WIT_BASE_STORAGE_KEY = "@wit_base_v1";
 
-/** Return a witanime base URL that actually answers (3s probe). Cached for the
- *  session. Falls back to the primary if none respond (so the normal fetch
- *  retry/timeout logic still applies instead of hard-failing). */
+export function isWitAnimeHtml(html: string): boolean {
+  return /anime-card-container|episodes-card-container|lucodeia-slider-slide-item|وايت\s*انمي/i.test(html);
+}
+
+export function rewriteWitUrl(raw: string, base: string): string {
+  try {
+    const url = new URL(raw);
+    if (!/(^|\.)witanime\./i.test(url.hostname)) return raw;
+    const target = new URL(base);
+    url.protocol = target.protocol;
+    url.host = target.host;
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
+async function probeWit(base: string): Promise<string | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const res = await fetch(base + "/", { signal: ctrl.signal, headers: { "User-Agent": BROWSER_UA } });
+    if (!res.ok) return null;
+    return isWitAnimeHtml(await res.text()) ? base : null;
+  } catch {
+    return null; // DNS fail / timeout / unreachable
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function resolveWitBase(): Promise<string> {
+  let saved: string | null = null;
+  try {
+    const stored = await AsyncStorage.getItem(WIT_BASE_STORAGE_KEY);
+    if (stored && WIT_DOMAINS.includes(stored)) saved = stored;
+  } catch {
+    // storage unreadable — use the normal preference order
+  }
+
+  const candidates = saved
+    ? [saved, ...WIT_DOMAINS.filter((domain) => domain !== saved)]
+    : WIT_DOMAINS;
+  const results = await Promise.all(candidates.map(probeWit));
+  const hit = candidates.find((_, i) => results[i]);
+  if (hit) {
+    _resolvedWitBase = hit;
+    void AsyncStorage.setItem(WIT_BASE_STORAGE_KEY, hit).catch(() => {});
+    return hit;
+  }
+
+  // None answered — return the primary WITHOUT caching it, and hold off
+  // re-probing (and re-logging) for the failure window.
+  _witFailUntil = Date.now() + WIT_FAIL_WINDOW_MS;
+  remoteLog("warn", "scraper", "all witanime TLDs unreachable", { tried: WIT_DOMAINS });
+  return WIT_DOMAINS[0];
+}
+
+/** Return a semantically-valid WitAnime mirror. Concurrent callers share one
+ * probe so cold-start bursts cannot emit duplicate warnings or select different hosts. */
 export async function getWitBase(): Promise<string> {
   if (_resolvedWitBase) return _resolvedWitBase;
-  const tried: string[] = [];
-  for (const base of WIT_DOMAINS) {
-    tried.push(base);
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 3000);
-      await fetch(base + "/", { signal: ctrl.signal, headers: { "User-Agent": BROWSER_UA } });
-      clearTimeout(t);
-      _resolvedWitBase = base;
-      return base;
-    } catch {
-      // DNS fail / timeout / unreachable → try next
-    }
-  }
-  // None answered — keep the primary so callers proceed with normal retry logic
-  _resolvedWitBase = WIT_DOMAINS[0];
-  remoteLog("warn", "scraper", "all witanime TLDs unreachable", { tried });
-  return _resolvedWitBase;
+  if (Date.now() < _witFailUntil) return WIT_DOMAINS[0];
+  if (_witBaseInflight) return _witBaseInflight;
+  _witBaseInflight = resolveWitBase().finally(() => { _witBaseInflight = null; });
+  return _witBaseInflight;
 }
 
 // Must match the scraper WebView / native player UA (see ScraperHost.tsx and
@@ -269,7 +320,8 @@ function parseWitCards(html: string): WitCard[] {
 // Fetch + parse a witanime listing page (genre or all-anime). Returns null on a
 // fetch failure so the caller can fall back to the WebView scrape.
 export async function fetchWitListingDirect(url: string): Promise<WitCard[] | null> {
-  const html = await fetchHtml(url, await getWitBase() + "/");
+  const base = await getWitBase();
+  const html = await fetchHtml(rewriteWitUrl(url, base), base + "/");
   if (!html) return null;
   return parseWitCards(html);
 }
@@ -1062,7 +1114,8 @@ function parseWitServers(html: string): RawServer[] {
 export async function scrapeWitanimeEpisodePageDirect(
   episodeUrl: string,
 ): Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string } | null> {
-  const html = await fetchHtml(episodeUrl, await getWitBase() + "/");
+  const base = await getWitBase();
+  const html = await fetchHtml(rewriteWitUrl(episodeUrl, base), base + "/");
   if (!html) return null;
   const servers = parseWitServers(html);
   if (servers.length === 0) return null;
@@ -1621,28 +1674,12 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
 // the UA that fetched the embed page — fetchHtml's BROWSER_UA matches the
 // native player's playback UA, so the extracted URL stays valid.
 export async function extractMp4upload(iframeUrl: string): Promise<{ url: string; type: "mp4" } | null> {
-  // Canonical www embed form — watch-page / bare-host URLs render a
-  // download page or redirect instead of the player.
   const embedUrl = normalizeEmbedUrl(iframeUrl);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));
-    const html = await fetchHtml(embedUrl, "https://www.mp4upload.com/");
+  for (const timeoutMs of [8000, 15000]) {
+    const html = await fetchEmbed(embedUrl, timeoutMs, "https://www.mp4upload.com/");
     if (!html) continue;
-    // Older mirrors may still serve the packed-JS player — the caller falls
-    // back to the WebView path (which carries the unpacker) for those.
-    if (/eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)/.test(html)) return null;
-    const patterns = [
-      /player\.src\(\s*["']([^"']+\.mp4[^"']*)["']/i,
-      /(?:file|src)\s*:\s*["']([^"']+\.mp4[^"']*)["']/i,
-      /<source[^>]+src\s*=\s*["']([^"']+\.mp4[^"']*)["']/i,
-      /(https?:\/\/[^"'\s\\]+mp4upload\.com[^"'\s\\]*\.mp4[^"'\s\\]*)/i,
-    ];
-    for (const re of patterns) {
-      const url = html.match(re)?.[1];
-      if (url && /^https?:\/\//.test(url) && !/sample[-_.]|placeholder|bigbuckbunny|tos\.mp4/i.test(url)) {
-        return { url, type: "mp4" };
-      }
-    }
+    const url = extractMp4uploadUrl(html);
+    if (url) return { url, type: "mp4" };
   }
   return null;
 }
@@ -1678,12 +1715,12 @@ async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Pro
         ...(referer ? { Referer: referer } : {}),
       },
     });
-    clearTimeout(t);
     if (!res.ok) return null;
     return await res.text();
   } catch {
-    clearTimeout(t);
     return null;
+  } finally {
+    clearTimeout(t);
   }
 }
 
@@ -1744,6 +1781,21 @@ export function extractFromPacked(html: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function extractMp4uploadUrl(html: string): string | null {
+  const isMp4upload = (raw: string) => {
+    try {
+      const host = new URL(raw).hostname.toLowerCase();
+      return (host === "mp4upload.com" || host.endsWith(".mp4upload.com")) && !DECOY_RE.test(raw);
+    } catch {
+      return false;
+    }
+  };
+  const plain = html.match(/https?:\/\/[^"'\s<>\\]+\.mp4[^"'\s<>\\]*/gi)?.find(isMp4upload);
+  if (plain) return plain;
+  const packed = extractFromPacked(html);
+  return packed && isMp4upload(packed) ? packed : null;
 }
 
 // streamwish family (streamwish/hlswish/wishembed/wishfast/…): the master

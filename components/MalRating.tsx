@@ -30,6 +30,7 @@ export function useMalRating(title: string | null | undefined): number | null {
     if (!title) { setScore(null); return; }
     const p = peekMalRating(title);
     if (p !== undefined) { setScore(p); return; } // already known — no fetch
+    setScore(null);
     let cancelled = false;
     getMalRating(title).then((s) => { if (!cancelled) setScore(s); });
     return () => { cancelled = true; };
@@ -40,6 +41,10 @@ export function useMalRating(title: string | null | undefined): number | null {
 /** Corner badge for poster cards. */
 export function MalCardBadge({ title, style }: { title?: string | null; style?: ViewStyle }) {
   const score = useMalRating(title);
+  return <MalScoreBadge score={score} style={style} />;
+}
+
+export function MalScoreBadge({ score, style }: { score: number | null; style?: ViewStyle }) {
   if (score == null) return null;
   return (
     <View style={[styles.cardBadge, style]}>

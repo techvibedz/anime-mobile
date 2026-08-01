@@ -6,18 +6,17 @@
 // screen uses. Rows stream in as each is confirmed; a slow/unreachable source
 // falls back to the unfiltered list rather than a misleading empty screen.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View, Text, Pressable, FlatList, ScrollView, RefreshControl,
-  ActivityIndicator, Dimensions, StyleSheet,
+  Dimensions, StyleSheet,
 } from "react-native";
+import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { fetchSeasonAnime, seasonOptions, type CatalogAnime } from "../lib/seasons";
-import { filterAvailableItems } from "../lib/schedule";
 import { CatalogCard, type CatalogCardData } from "../components/CatalogCard";
-import { useOpenSource } from "../components/useOpenSource";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
@@ -42,81 +41,46 @@ export default function SeasonsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(false);
 
-  // Raw (JP-filtered) catalogue per season, and the source-verified subset.
-  const [rawByKey, setRawByKey] = useState<Record<string, CatalogAnime[]>>({});
-  const [availByKey, setAvailByKey] = useState<Record<string, CatalogAnime[]>>({});
-  const [partial, setPartial] = useState<CatalogAnime[]>([]);
-  const [verifyingKey, setVerifyingKey] = useState<string | null>(null);
+  const [itemsByKey, setItemsByKey] = useState<Record<string, CatalogAnime[]>>({});
 
   const active = options[selected];
   const key = `${active.season}-${active.year}`;
 
-  const verify = useCallback((force = false) => {
-    const opt = options[selected];
-    const k = `${opt.season}-${opt.year}`;
-    if (!force && availByKey[k]) return () => {};
+  useEffect(() => {
+    if (itemsByKey[key]) return;
     let cancelled = false;
     setError(false);
-    setPartial([]);
-    setVerifyingKey(k);
-    (async () => {
-      let raw = force ? undefined : rawByKey[k];
-      if (!raw) {
-        raw = await fetchSeasonAnime(opt.season, opt.year).catch(() => [] as CatalogAnime[]);
+    fetchSeasonAnime(active.season, active.year)
+      .then((rows) => {
         if (cancelled) return;
-        setRawByKey((p) => ({ ...p, [k]: raw! }));
-      }
-      if (raw.length === 0) {
-        if (!cancelled) { setError(true); setVerifyingKey((v) => (v === k ? null : v)); }
-        return;
-      }
-      // Stream verified rows in; cap the wait so a flaky source can't hang it.
-      const deadline = new Promise<CatalogAnime[] | null>((r) => setTimeout(() => r(null), 12000));
-      const avail = await Promise.race([
-        filterAvailableItems(raw, (soFar) => { if (!cancelled) setPartial(soFar); }),
-        deadline,
-      ]);
-      if (cancelled) return;
-      // A timeout (null) or an all-empty result on a non-empty season means the
-      // sources were unreachable — show the raw list rather than a blank screen.
-      const result = !avail || (avail.length === 0 && raw.length > 0) ? raw : avail;
-      setAvailByKey((p) => ({ ...p, [k]: result }));
-      setVerifyingKey((v) => (v === k ? null : v));
-    })();
+        if (rows.length === 0) setError(true);
+        else setItemsByKey((p) => ({ ...p, [key]: rows }));
+      })
+      .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; };
-  }, [options, selected, availByKey, rawByKey]);
+  }, [active.season, active.year, itemsByKey, key]);
 
-  // Verify the selected season the first time it's viewed.
-  useEffect(() => verify(), [selected]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    const k = key;
-    setAvailByKey((p) => { const n = { ...p }; delete n[k]; return n; });
-    setRawByKey((p) => { const n = { ...p }; delete n[k]; return n; });
-    const cleanup = verify(true);
-    setRefreshing(false);
-    return cleanup;
-  }, [key, verify]);
+    setError(false);
+    try {
+      const rows = await fetchSeasonAnime(active.season, active.year);
+      if (rows.length === 0) setError(true);
+      else setItemsByKey((p) => ({ ...p, [key]: rows }));
+    } catch {
+      setError(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [active.season, active.year, key]);
 
-  // Verified cards carry a resolved sourceHref → open /anime/<href> directly.
-  // Unverified ones resolve on tap (cached, brief spinner); search is only the
-  // last-resort fallback — never the default path.
-  const { open, resolvingId } = useOpenSource();
   const openItem = useCallback(
-    (c: CatalogCardData) => { open({ id: c.id, title: c.title, sourceHref: c.href }); },
-    [open],
+    (c: CatalogCardData) => router.push(`/(tabs)/search?q=${encodeURIComponent(c.title)}`),
+    [],
   );
 
-  const verifying = verifyingKey === key && !availByKey[key];
-  // Show the AniList catalogue the INSTANT it lands (≈1s) instead of holding a
-  // blank grid for the up-to-12s per-title source verification. Verification
-  // still runs in the background and swaps in the availability-filtered subset
-  // when it completes (`availByKey`); the raw list is the fast first paint.
-  const items = availByKey[key] ?? rawByKey[key] ?? (verifying ? partial : undefined);
-  // Cold paint: no rows at all yet (catalogue in flight + nothing verified) →
-  // hold a skeleton grid instead of a blank screen with a far-away spinner.
-  const showSkeleton = items === undefined || (verifying && items.length === 0);
+  const items = itemsByKey[key];
+  const showSkeleton = items === undefined && !error;
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
@@ -163,14 +127,6 @@ export default function SeasonsScreen() {
             <Text style={s.listHeadCount}>{t.scheduleCount(items?.length ?? 0)}</Text>
           </View>
         }
-        ListFooterComponent={
-          verifying && !showSkeleton ? (
-            <View style={s.footerCheck}>
-              <ActivityIndicator size="small" color={C.accent} />
-              <Text style={s.footerCheckText}>{t.scheduleChecking}</Text>
-            </View>
-          ) : null
-        }
         ListEmptyComponent={
           showSkeleton ? (
             <View style={s.skeletonGrid}>
@@ -188,7 +144,7 @@ export default function SeasonsScreen() {
             </View>
           )
         }
-        renderItem={({ item }) => <CatalogCard item={toCard(item)} width={CARD_W} onPress={openItem} loading={resolvingId === item.id} />}
+        renderItem={({ item }) => <CatalogCard item={toCard(item)} width={CARD_W} onPress={openItem} />}
       />
     </View>
   );
@@ -218,9 +174,6 @@ const s = StyleSheet.create({
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
     borderRadius: R.pill, paddingHorizontal: 10, paddingVertical: 3, overflow: "hidden",
   },
-
-  footerCheck: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 18 },
-  footerCheckText: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium" },
 
   skeletonGrid: { flexDirection: "row", flexWrap: "wrap", gap: GAP },
 

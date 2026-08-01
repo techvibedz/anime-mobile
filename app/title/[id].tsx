@@ -17,6 +17,7 @@ import { fetchAniListDetail, type AniListDetail } from "../../lib/seasons";
 import { translateToArabic } from "../../lib/translate";
 import { arGenre, arFormat } from "../../lib/anilistLabels";
 import { GlassFill } from "../../components/GlassFill";
+import { MalBadge, MalCardBadge, useMalRating } from "../../components/MalRating";
 import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -86,6 +87,7 @@ export default function TitleDetailScreen() {
   }, [data?.title, fallbackTitle]);
 
   const title = data?.title || fallbackTitle;
+  const malScore = useMalRating(title);
   const banner = data?.banner || data?.cover || fallbackBanner || fallbackImg;
   const status = data?.status ? STATUS_AR[data.status] || data.status : null;
   const airDate = fmtDate(data?.startAt ?? null);
@@ -129,7 +131,8 @@ export default function TitleDetailScreen() {
 
           {/* Quick meta */}
           <View style={ss.metaRow}>
-            {data?.score != null && (
+            <MalBadge score={malScore} />
+            {malScore == null && data?.score != null && (
               <View style={ss.scorePill}>
                 <Ionicons name="star" size={12} color={C.gold} />
                 <Text style={ss.scoreText}>{(data.score / 10).toFixed(1)}</Text>
@@ -237,6 +240,7 @@ export default function TitleDetailScreen() {
                           <Ionicons name="image-outline" size={22} color={C.textMuted} />
                         </View>
                       )}
+                      <MalCardBadge title={r.title} />
                     </View>
                     <Text style={ss.relTitle} numberOfLines={2}>{r.title}</Text>
                     {r.format ? <Text style={ss.relFmt}>{arFormat(r.format)}</Text> : null}

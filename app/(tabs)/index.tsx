@@ -144,7 +144,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
               />
             </View>
             {item.image && (
-              <Image source={{ uri: posterUrl(item.image, SW) }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
+              <Image source={{ uri: posterUrl(item.image, SW * 1.5, 1200) }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
             )}
             {/* Protection scrim — deepened so the title / synopsis / CTAs always
                 clear WCAG AA against the darkened plate, never against raw art. */}

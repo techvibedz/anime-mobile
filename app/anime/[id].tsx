@@ -28,7 +28,7 @@ import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatc
 import { recordAnimeCompletion } from "../../lib/completion";
 import { fetchSeriesFinished } from "../../lib/airing";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
-import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, getAltTitles } from "../../lib/animeInfo";
+import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, getAltTitles, peekMalRating } from "../../lib/animeInfo";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
 import { normLatin, seasonNum, formatCat } from "../../lib/relations";
 import { MalBadge, MalCardBadge } from "../../components/MalRating";
@@ -131,6 +131,7 @@ export default function AnimeDetailScreen() {
   // This also warms the shared cache the Info tab reads, so opening it is instant.
   useEffect(() => {
     if (!data?.title) return;
+    setMalScore(peekMalRating(data.title) ?? null);
     let cancelled = false;
     fetchAnimeMal(data.title).then((m) => { if (!cancelled) setMalScore(m.score); });
     return () => { cancelled = true; };

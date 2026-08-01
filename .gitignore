@@ -11,8 +11,8 @@ dist/
 *.mobileprovision
 *.orig.*
 web-build/
-ios/
-android/
+/ios/
+/android/
 
 # Sensitive / runtime files
 server/cookies-*.json

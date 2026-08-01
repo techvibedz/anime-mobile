@@ -9,6 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { C } from "../lib/theme";
 import { PosterCard, PosterPill } from "./PosterCard";
 import { CompletionBadge } from "./CompletionBadge";
+import { MalScoreBadge, useMalRating } from "./MalRating";
 
 export interface CatalogCardData {
   id: number;
@@ -19,6 +20,25 @@ export interface CatalogCardData {
   badge?: string | null;
   /** Resolved source URL — when set, the card can open the detail page directly. */
   href?: string | null;
+}
+
+/**
+ * Corner score for the grid: the MyAnimeList rating once it resolves
+ * (fire-and-forget, cached), the AniList score pill as a fallback until then
+ * so the card never sits bare. Never both at once — one corner, one pill.
+ */
+function ScoreCorner({ title, score }: { title: string; score: number | null }) {
+  const mal = useMalRating(title);
+  if (mal != null) return <MalScoreBadge score={mal} />;
+  if (score != null) {
+    return (
+      <PosterPill>
+        <Ionicons name="star" size={9} color={C.gold} />
+        <Text className="text-gold text-[10px] font-heading">{(score / 10).toFixed(1)}</Text>
+      </PosterPill>
+    );
+  }
+  return null;
 }
 
 export const CatalogCard = memo(function CatalogCard({
@@ -42,14 +62,7 @@ export const CatalogCard = memo(function CatalogCard({
       loading={loading}
       recyclingKey={String(item.id)}
       titleLines={2}
-      topRight={
-        item.score != null ? (
-          <PosterPill>
-            <Ionicons name="star" size={9} color={C.gold} />
-            <Text className="text-gold text-[10px] font-heading">{(item.score / 10).toFixed(1)}</Text>
-          </PosterPill>
-        ) : null
-      }
+      topRight={<ScoreCorner title={item.title} score={item.score} />}
       bottomRight={
         <>
           {item.badge ? (

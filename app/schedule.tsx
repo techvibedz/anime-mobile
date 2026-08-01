@@ -29,6 +29,7 @@ import { fetchWeeklySchedule, filterAvailableItems, type ScheduleDay, type Sched
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
+import { MalScoreBadge, useMalRating } from "../components/MalRating";
 
 function airTime(unixSeconds: number): string {
   const d = new Date(unixSeconds * 1000);
@@ -227,6 +228,7 @@ export default function ScheduleScreen() {
 }
 
 function ScheduleRow({ item, onPress }: { item: ScheduleItem; onPress: (i: ScheduleItem) => void }) {
+  const malScore = useMalRating(item.title);
   return (
     <Pressable
       onPress={() => onPress(item)}
@@ -242,7 +244,7 @@ function ScheduleRow({ item, onPress }: { item: ScheduleItem; onPress: (i: Sched
         <Text style={s.title} numberOfLines={2}>{item.title}</Text>
         <View style={s.metaRow}>
           {item.format ? <Text style={s.metaText}>{item.format}</Text> : null}
-          {item.score != null ? (
+          {malScore == null && item.score != null ? (
             <View style={s.scorePill}>
               <Ionicons name="star" size={9} color={C.gold} />
               <Text style={s.scoreText}>{item.score}</Text>
@@ -259,6 +261,7 @@ function ScheduleRow({ item, onPress }: { item: ScheduleItem; onPress: (i: Sched
             <Ionicons name="film-outline" size={20} color={C.textMuted} />
           </View>
         )}
+        <MalScoreBadge score={malScore} />
       </View>
     </Pressable>
   );

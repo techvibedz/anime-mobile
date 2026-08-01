@@ -3,6 +3,7 @@ import {
   fetchWitListingDirect,
   searchWitanimeDirect,
   getWitBase,
+  rewriteWitUrl,
   type WitCard,
 } from "./direct";
 import {
@@ -67,8 +68,11 @@ export type RawDetail = {
 
 export async function scrapeEpisodesPage(animeUrl: string) {
   const is4up = /anime4up/i.test(animeUrl);
+  const url = /witanime\./i.test(animeUrl)
+    ? rewriteWitUrl(animeUrl, await getWitBase())
+    : animeUrl;
   return enqueue({
-    url: animeUrl,
+    url,
     injectAfter: is4up ? EXTRACT_EPISODES_4UP : EXTRACT_EPISODES_WIT,
     timeoutMs: 35000,
   }) as Promise<RawDetail>;
@@ -236,8 +240,11 @@ export async function findCrossSourceUrl(
 export type RawServer = { id: string; name: string; iframeUrl: string; provider: string };
 
 export async function scrapeVideoServers(episodeUrl: string) {
+  const url = /witanime\./i.test(episodeUrl)
+    ? rewriteWitUrl(episodeUrl, await getWitBase())
+    : episodeUrl;
   return enqueue({
-    url: episodeUrl,
+    url,
     injectAfter: EXTRACT_VIDEO_SERVERS,
     timeoutMs: 60000,
   }) as Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null; up4AnimeUrl?: string | null }>;

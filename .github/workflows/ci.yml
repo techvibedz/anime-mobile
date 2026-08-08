@@ -1,0 +1,88 @@
+name: CI/CD
+
+# test  → runs on every push + PR (the gate)
+# release → manual dispatch → EAS preview APK + GitHub release upload
+# ota   → manual dispatch only (publish-ota.sh hits legacy runtimes; a human must
+#         confirm the JS is safe for old native binaries — see script header)
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "release (preview APK + GitHub release) or ota (publish JS to installs)"
+        type: choice
+        options: [release, ota]
+        default: release
+      message:
+        description: "OTA update message"
+        type: string
+        default: "OTA update"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  release:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - name: Build preview APK
+        run: eas build --profile preview --platform android --non-interactive --wait --json > build.json
+      - name: Download APK
+        run: |
+          BUILD_URL=$(jq -r '.[0].artifacts.buildUrl' build.json)
+          VERSION=$(jq -r '.expo.version' app.json)
+          test -n "$BUILD_URL" && test "$BUILD_URL" != "null"
+          curl --fail --location "$BUILD_URL" --output "pantoufa-$VERSION.apk"
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MESSAGE: ${{ inputs.message }}
+        run: |
+          VERSION=$(jq -r '.expo.version' app.json)
+          printf '%s\n' "$RELEASE_MESSAGE" > release-notes.txt
+          gh release create "v$VERSION" "pantoufa-$VERSION.apk" \
+            --target "$GITHUB_SHA" \
+            --title "Pantoufa $VERSION" \
+            --notes-file release-notes.txt
+
+  ota:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'ota'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - run: npm run publish-ota -- "${{ inputs.message }}"

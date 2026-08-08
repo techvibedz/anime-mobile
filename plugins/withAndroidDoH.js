@@ -56,7 +56,9 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
     private val client = OkHttpClient()
-    private val cache = ConcurrentHashMap<String, List<InetAddress>>()
+    private data class CacheEntry(val addresses: List<InetAddress>, val expiresAt: Long)
+    private data class DohResult(val addresses: List<InetAddress>, val ttlMs: Long)
+    private val cache = ConcurrentHashMap<String, CacheEntry>()
 
     // Known-blocked source hosts: resolve via DoH FIRST (also beats DNS
     // poisoning, where the system resolver answers with a bogus IP instead of
@@ -73,7 +75,11 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
     private val forceDoh = listOf("anime4up", "anime3rb", "witanime", "vid3rb")
 
     override fun lookup(hostname: String): List<InetAddress> {
-        cache[hostname]?.let { return it }
+        val now = System.currentTimeMillis()
+        cache[hostname]?.let {
+            if (it.expiresAt > now) return it.addresses
+            cache.remove(hostname, it)
+        }
         val prefer = forceDoh.any { hostname.contains(it, ignoreCase = true) }
         if (!prefer) {
             try {
@@ -83,9 +89,9 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
             }
         }
         val viaDoh = resolveDoh(hostname)
-        if (viaDoh.isNotEmpty()) {
-            cache[hostname] = viaDoh
-            return viaDoh
+        if (viaDoh != null) {
+            cache[hostname] = CacheEntry(viaDoh.addresses, now + viaDoh.ttlMs)
+            return viaDoh.addresses
         }
         return try {
             system.lookup(hostname)
@@ -94,8 +100,8 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
         }
     }
 
-    private fun resolveDoh(hostname: String): List<InetAddress> {
-        for (resolver in listOf("https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query")) {
+    private fun resolveDoh(hostname: String): DohResult? {
+        for (resolver in listOf("https://1.1.1.1/dns-query", "https://8.8.8.8/resolve")) {
             try {
                 val req = Request.Builder()
                     .url("$resolver?name=$hostname&type=A")
@@ -106,23 +112,33 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
                     val body = resp.body?.string() ?: return@use
                     val answers = JSONObject(body).optJSONArray("Answer") ?: return@use
                     val ips = ArrayList<InetAddress>()
+                    var ttlSeconds = 600L
                     for (i in 0 until answers.length()) {
                         val ans = answers.getJSONObject(i)
                         if (ans.optInt("type") == 1) { // A record
                             val ip = ans.optString("data")
-                            if (ip.isNotEmpty()) {
-                                // Literal IP — getByName parses it, no recursion.
-                                try { ips.add(InetAddress.getByName(ip)) } catch (_: Exception) {}
-                            }
+                            parseIpv4(ip)?.let { ips.add(it) }
+                            ttlSeconds = minOf(ttlSeconds, ans.optLong("TTL", 60L))
                         }
                     }
-                    if (ips.isNotEmpty()) return ips
+                    if (ips.isNotEmpty()) {
+                        val ttlMs = ttlSeconds.coerceIn(30L, 600L) * 1000L
+                        return DohResult(ips.distinct(), ttlMs)
+                    }
                 }
             } catch (_: Exception) {
                 // try the next resolver
             }
         }
-        return emptyList()
+        return null
+    }
+
+    private fun parseIpv4(ip: String): InetAddress? {
+        val parts = ip.split(".")
+        if (parts.size != 4) return null
+        val octets = parts.map { it.toIntOrNull() ?: return null }
+        if (octets.any { it !in 0..255 }) return null
+        return InetAddress.getByAddress(octets.map { it.toByte() }.toByteArray())
     }
 }
 
@@ -236,20 +252,8 @@ object PantoufaDohProxy {
         val host = hostPort.substringBeforeLast(":")
         val portNum = hostPort.substringAfterLast(":").toIntOrNull() ?: 443
 
-        val addr = resolve(host)
-        if (addr == null) { closeQuietly(client); return }
-        val upstream = Socket()
-        try {
-            upstream.connect(InetSocketAddress(addr, portNum), 10000)
-            // Long-lived tunnel: no read timeout — Chromium closes idle
-            // connections itself, which EOFs our pipes and frees the threads.
-            upstream.soTimeout = 0
-            upstream.tcpNoDelay = true
-        } catch (e: Exception) {
-            closeQuietly(client)
-            closeQuietly(upstream)
-            return
-        }
+        val upstream = connect(host, portNum)
+        if (upstream == null) { closeQuietly(client); return }
 
         if (prefix.isEmpty()) {
             // CONNECT: acknowledge, then become a pure byte tunnel.
@@ -267,8 +271,22 @@ object PantoufaDohProxy {
         pool.execute { pipe(upstream, client) }  // upstream → client
     }
 
-    private fun resolve(host: String): InetAddress? =
-        runCatching { dns.lookup(host).firstOrNull() }.getOrNull()
+    private fun connect(host: String, port: Int): Socket? {
+        val addresses = runCatching { dns.lookup(host) }.getOrNull() ?: return null
+        for (addr in addresses) {
+            val socket = Socket()
+            try {
+                socket.connect(InetSocketAddress(addr, port), 10000)
+                // Long-lived tunnel: Chromium closes idle connections itself.
+                socket.soTimeout = 0
+                socket.tcpNoDelay = true
+                return socket
+            } catch (_: Exception) {
+                closeQuietly(socket)
+            }
+        }
+        return null
+    }
 
     // Read until CRLFCRLF, capped at 16 KiB — CONNECT headers never get close.
     private fun readHeaders(input: InputStream): ByteArray? {
@@ -389,12 +407,16 @@ function withDohRegistration(config) {
   });
 }
 
-module.exports = function withAndroidDoH(config) {
+function withAndroidDoH(config) {
   config = withDohKotlinSource(config);
   config = withDohRegistration(config);
   config = withWebkitDependency(config);
   return config;
-};
+}
+
+module.exports = withAndroidDoH;
+module.exports.KOTLIN_SOURCE = KOTLIN_SOURCE;
+module.exports.PROXY_KOTLIN_SOURCE = PROXY_KOTLIN_SOURCE;
 
 // react-native-webview pulls androidx.webkit as `implementation`, which keeps
 // it OFF the app module's compile classpath — MainApplication's ProxyController

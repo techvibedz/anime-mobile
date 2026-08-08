@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
-import { _claimNext, _hasPending, _peek, _resolve, _reject, _subscribe, ScrapeJob } from "./bus";
+import { _claimNext, _consumeCancelled, _hasPending, _peek, _resolve, _reject, _subscribe, ScrapeJob } from "./bus";
+import { VIDEO_USER_AGENT } from "../videoProviders";
+import { remoteLog } from "../remoteLog";
+import {
+  classifySourceFailure,
+  clearSourcePreference,
+  identifySource,
+  isRetryableSourceStatus,
+  markSourceHealthy,
+  nextCandidateIndex,
+} from "./sourceDomains";
 
 // Number of concurrent WebView slots. Each slot can run one scrape job at a
 // time. 4 lets the parallel video-server scrape (wit+up4 = 2 slots) run while
@@ -85,21 +95,58 @@ function ScraperSlot({
 }) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webRef = useRef<WebView | null>(null);
+  const [attemptIndex, setAttemptIndex] = useState(0);
+  const attemptIndexRef = useRef(0);
+  const changingUrlRef = useRef(false);
   // URL the after-load script was last early-injected into. Reset on every
   // load start so reloads/redirects re-inject into the new document.
   const lastInjectedUrlRef = useRef<string | null>(null);
 
+  const currentUrl = job?.urls[attemptIndex] || job?.url || "";
+
+  useEffect(() => {
+    attemptIndexRef.current = 0;
+    changingUrlRef.current = false;
+    setAttemptIndex(0);
+  }, [job?.id]);
+
   useEffect(() => {
     if (!job) return;
+    attemptIndexRef.current = attemptIndex;
     lastInjectedUrlRef.current = null;
     timerRef.current = setTimeout(() => {
-      _reject(job.id, `scrape timeout after ${job.timeoutMs}ms`);
-      onDone();
+      failAttempt(`scrape timeout after ${job.timeoutMs}ms`);
     }, job.timeoutMs);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [job?.id]);
+  }, [job?.id, attemptIndex]);
+
+  function failAttempt(message: string, statusCode?: number, retry = true) {
+    if (!job || changingUrlRef.current) return;
+    const next = retry ? nextCandidateIndex(attemptIndexRef.current, job.urls.length) : null;
+    if (next !== null) {
+      changingUrlRef.current = true;
+      if (timerRef.current) clearTimeout(timerRef.current);
+      void clearSourcePreference(currentUrl).catch(() => {});
+      attemptIndexRef.current = next;
+      lastInjectedUrlRef.current = null;
+      setAttemptIndex(next);
+      return;
+    }
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const source = identifySource(currentUrl);
+    let hostname = "unknown";
+    try { hostname = new URL(currentUrl).hostname; } catch {}
+    void remoteLog("warn", "scraper", "source WebView failed", {
+      source,
+      hostname,
+      failure: classifySourceFailure(message, statusCode),
+      statusCode: statusCode || null,
+    });
+    _reject(job.id, message);
+    onDone();
+  }
 
   // react-native-webview only evaluates `injectedJavaScript` in onPageFinished
   // — i.e. after EVERY image, ad iframe and tracker on the source page has
@@ -113,7 +160,7 @@ function ScraperSlot({
     if (!job) return;
     const { progress, url } = e.nativeEvent;
     if (progress < 0.08) return;
-    const cur = url || job.url;
+    const cur = url || currentUrl;
     if (lastInjectedUrlRef.current === cur) return;
     lastInjectedUrlRef.current = cur;
     webRef.current?.injectJavaScript(wrapOnce(job));
@@ -124,13 +171,13 @@ function ScraperSlot({
     try {
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === "result") {
+        if (changingUrlRef.current) return;
         if (timerRef.current) clearTimeout(timerRef.current);
+        void markSourceHealthy(currentUrl).catch(() => {});
         _resolve(job.id, msg.data);
         onDone();
       } else if (msg.type === "error") {
-        if (timerRef.current) clearTimeout(timerRef.current);
-        _reject(job.id, msg.message || "scrape error");
-        onDone();
+        failAttempt(msg.message || "scrape error");
       }
       // ignore other types
     } catch {
@@ -152,8 +199,8 @@ function ScraperSlot({
   return (
     <WebView
       ref={webRef}
-      source={{ uri: job.url }}
-      userAgent="Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+      source={{ uri: currentUrl }}
+      userAgent={VIDEO_USER_AGENT}
       javaScriptEnabled
       domStorageEnabled
       thirdPartyCookiesEnabled
@@ -178,13 +225,16 @@ function ScraperSlot({
       injectedJavaScriptBeforeContentLoaded={ANTI_HIJACK_JS + (job.injectBefore || "")}
       injectedJavaScript={wrapOnce(job)}
       onShouldStartLoadWithRequest={shouldStartLoad}
-      onLoadStart={() => { lastInjectedUrlRef.current = null; }}
+      onLoadStart={(e) => {
+        if (e.nativeEvent.url === currentUrl || e.nativeEvent.url.startsWith(currentUrl)) {
+          changingUrlRef.current = false;
+        }
+        lastInjectedUrlRef.current = null;
+      }}
       onLoadProgress={maybeInjectEarly}
       onMessage={handleMessage}
       onError={(e) => {
-        if (timerRef.current) clearTimeout(timerRef.current);
-        _reject(job.id, `WebView error: ${e.nativeEvent.description}`);
-        onDone();
+        failAttempt(`WebView error: ${e.nativeEvent.description}`);
       }}
       onHttpError={(e) => {
         // Cloudflare answers the FIRST main-frame request of a challenge
@@ -195,9 +245,7 @@ function ScraperSlot({
         // timeout decide instead. 429 is likewise transient.
         const sc = e.nativeEvent.statusCode;
         if (sc === 403 || sc === 503 || sc === 429) return;
-        if (timerRef.current) clearTimeout(timerRef.current);
-        _reject(job.id, `HTTP ${sc}`);
-        onDone();
+        failAttempt(`HTTP ${sc}`, sc, isRetryableSourceStatus(sc));
       }}
       style={{ width: 1, height: 1 }}
     />
@@ -215,6 +263,12 @@ export function ScraperHost() {
     setSlots((prev) => {
       const next = [...prev];
       let changed = false;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] && _consumeCancelled(next[i]!.id)) {
+          next[i] = null;
+          changed = true;
+        }
+      }
       let bg = next.filter((j) => j && !j.priority).length;
       for (let i = 0; i < next.length; i++) {
         if (next[i] !== null || !_hasPending()) continue;

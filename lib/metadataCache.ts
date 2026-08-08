@@ -15,8 +15,10 @@
 // episode_queue), so every call is guarded by a cheap session check.
 
 import { supabase, isSupabaseConfigured } from "./supabase";
+import { createMetadataWriteGate } from "./metadataWriteGate";
 
 const TABLE = "anime_metadata_cache";
+const allowMetadataWrite = createMetadataWriteGate(10, 60_000, 6 * 60 * 60 * 1000);
 
 // A cloud hit older than this is still served instantly, but triggers a
 // background re-scrape that upserts the entry. This bounds how long an ongoing
@@ -98,6 +100,7 @@ export async function writeCloudMetadata(
   title: string | null = null,
 ): Promise<void> {
   if (!animeUrl || !(await hasSession())) return;
+  if (!allowMetadataWrite(animeUrl)) return;
   try {
     const { error } = await supabase.rpc("submit_anime_metadata", {
       p_anime_url: animeUrl,

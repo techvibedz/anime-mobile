@@ -19,6 +19,8 @@ const HELPERS = eval("`" + grab("HELPERS") + "`");
 const WIT_BASE = "https://witanime.you";
 const UP4_BASE = "https://w1.anime4up.rest";
 const want = "test title";
+// The real generated classifier is syntax-checked by videoProviders.test.ts.
+const providerClassifierScript = () => "function provider(url){return 'generic';}";
 
 const names = [
   "EXTRACT_HOME_WIT", "EXTRACT_HOME_4UP", "EXTRACT_EPISODES_WIT",

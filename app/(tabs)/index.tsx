@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchHome } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
+import { episodeNumberFromUrl } from "../../lib/videoProviders";
 import { addFavorite, isFavorite, toAnimeUrl } from "../../lib/favorites";
 import { getContinueWatching, progressPercent, dismissFromContinue } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
@@ -179,7 +180,11 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
                       // the heavy watch-screen mount blocks the thread.
                       requestAnimationFrame(() => router.push({
                         pathname: `/watch/${encodeURIComponent(item.href)}`,
-                        params: animeUrl ? { anime: animeUrl } : {},
+                        params: {
+                          ...(animeUrl ? { anime: animeUrl } : {}),
+                          animeTitle: item.title,
+                          ...(episodeNumberFromUrl(item.href) != null ? { epNum: String(episodeNumberFromUrl(item.href)) } : {}),
+                        },
                       }));
                     } else {
                       router.push(`/anime/${encodeURIComponent(item.href)}`);
@@ -602,6 +607,9 @@ function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClos
                 onClose();
                 const params: Record<string, string> = {};
                 if (episode.image) params.img = encodeURIComponent(episode.image);
+                if (episode.animeTitle) params.animeTitle = episode.animeTitle;
+                const epNum = episodeNumberFromUrl(episode.href);
+                if (epNum != null) params.epNum = String(epNum);
                 // Pass animeHref so the watch screen can compute prev/next.
                 const rawAnime = episode.animeHref || episode.href;
                 const animeUrl = rawAnime && rawAnime.includes('/anime/')
@@ -751,6 +759,8 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
         const params: Record<string, string> = {};
         if (entry.url4up) params.url4up = encodeURIComponent(entry.url4up);
         if (entry.image) params.img = encodeURIComponent(entry.image);
+        if (entry.animeTitle) params.animeTitle = entry.animeTitle;
+        if (epNum != null) params.epNum = String(epNum);
         // Pass anime URL so prev/next + back-to-anime work. Falls back
         // to slug-deriving from the episode URL if animeHref is missing
         // or points to an episode page (old cached entries).

@@ -296,6 +296,9 @@ export default function SeeAllScreen() {
                   setEpisodePopup(null);
                   const params: Record<string, string> = {};
                   if (ep.image) params.img = encodeURIComponent(ep.image);
+                  if (ep.animeTitle) params.animeTitle = ep.animeTitle;
+                  const epNum = episodeNumberFrom(ep);
+                  if (epNum != null) params.epNum = String(epNum);
                   router.push({ pathname: `/watch/${encodeURIComponent(ep.href)}`, params });
                 }}
               >

@@ -13,6 +13,7 @@ dist/
 web-build/
 /ios/
 /android/
+/modules/*/android/build/
 
 # Sensitive / runtime files
 server/cookies-*.json

@@ -16,6 +16,20 @@ import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
 import { fuzzyScore } from "../fuzzy";
 import { remoteLog } from "../remoteLog";
+import { classifyProvider, classifyProviderWithName, VIDEO_USER_AGENT as BROWSER_UA } from "../videoProviders";
+import {
+  candidateForAttempt,
+  clearSourcePreference,
+  getSourceCandidates,
+  identifySource,
+  isRetryableSourceStatus,
+  isValidSourceHtml,
+  markSourceHealthy,
+  rewriteToCandidate,
+  SOURCE_DOMAINS,
+} from "./sourceDomains";
+
+export { classifyProvider } from "../videoProviders";
 
 const UP4_BASE = "https://w1.anime4up.rest";
 const A3RB_BASE = "https://anime3rb.com";
@@ -26,10 +40,7 @@ const A3RB_BASE = "https://anime3rb.com";
 // network/VPN changes nothing because the new DNS also doesn't know the TLD.
 // Probe each known domain once per session, cache whichever answers, and
 // route every witanime fetch through it. Add new mirrors here as they appear.
-export const WIT_DOMAINS = [
-  "https://witanime.you",
-  "https://witanime.life",
-];
+export const WIT_DOMAINS = SOURCE_DOMAINS.witanime.map((host) => `https://${host}`);
 let _resolvedWitBase: string | null = null;
 let _witBaseInflight: Promise<string> | null = null;
 // After a total probe failure, don't re-probe (or re-log) on every call —
@@ -111,9 +122,6 @@ export async function getWitBase(): Promise<string> {
 // Must match the scraper WebView / native player UA (see ScraperHost.tsx and
 // the watch screen's videoSource headers) — some CDNs bind tokens to the UA
 // that minted them.
-const BROWSER_UA =
-  "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
-
 // Both sites are intermittently flaky: a single GET routinely hits a timeout,
 // a 429 rate-limit (lookups fire several GETs in a burst), a 503, or a
 // transient Cloudflare hiccup. Retry each GET a few times with a GROWING
@@ -127,25 +135,39 @@ const BROWSER_UA =
 const FETCH_ATTEMPT_TIMEOUTS = [8000, 16000, 24000];
 export async function fetchHtml(url: string, referer?: string): Promise<string | null> {
   const ATTEMPTS = FETCH_ATTEMPT_TIMEOUTS.length;
+  const candidates = await getSourceCandidates(url);
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const attemptUrl = candidateForAttempt(candidates, attempt);
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), FETCH_ATTEMPT_TIMEOUTS[attempt - 1]);
     try {
-      const res = await fetch(url, {
+      const res = await fetch(attemptUrl, {
         signal: controller.signal,
         headers: {
           "User-Agent": BROWSER_UA,
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "ar,en;q=0.9",
-          ...(referer ? { Referer: referer } : {}),
+          ...(referer ? { Referer: rewriteToCandidate(referer, attemptUrl) } : {}),
         },
       });
       clearTimeout(t);
-      if (res.ok) return await res.text();
-      const retryable = res.status === 429 || res.status === 403 || res.status >= 500;
+      if (res.ok) {
+        const html = await res.text();
+        const source = identifySource(attemptUrl);
+        if (!source || isValidSourceHtml(source, html)) {
+          void markSourceHealthy(attemptUrl).catch(() => {});
+          return html;
+        }
+        void clearSourcePreference(attemptUrl).catch(() => {});
+        if (attempt === ATTEMPTS) return null;
+        continue;
+      }
+      if (res.status === 404 || res.status === 410) return null;
+      const retryable = isRetryableSourceStatus(res.status);
       if (!retryable || attempt === ATTEMPTS) return null;
     } catch {
       clearTimeout(t);
+      void clearSourcePreference(attemptUrl).catch(() => {});
       if (attempt === ATTEMPTS) return null;
     }
     await new Promise((r) => setTimeout(r, 600 * attempt));
@@ -173,28 +195,38 @@ export async function fetchHtml(url: string, referer?: string): Promise<string |
 async function rawGetA3rb(url: string): Promise<{ html: string | null; status: number }> {
   const ATTEMPT_TIMEOUTS = [8000, 20000];
   const ATTEMPTS = ATTEMPT_TIMEOUTS.length;
+  const candidates = await getSourceCandidates(url);
   let lastStatus = 0;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const attemptUrl = candidateForAttempt(candidates, attempt);
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUTS[attempt - 1]);
     try {
-      const res = await fetch(url, {
+      const res = await fetch(attemptUrl, {
         signal: controller.signal,
         headers: {
           "User-Agent": BROWSER_UA,
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "ar,en;q=0.9",
-          Referer: A3RB_BASE + "/",
+          Referer: rewriteToCandidate(A3RB_BASE + "/", attemptUrl),
         },
       });
       clearTimeout(t);
       lastStatus = res.status;
-      if (res.ok) return { html: await res.text(), status: res.status };
+      if (res.ok) {
+        const html = await res.text();
+        if (isValidSourceHtml("anime3rb", html)) {
+          void markSourceHealthy(attemptUrl).catch(() => {});
+          return { html, status: res.status };
+        }
+        void clearSourcePreference(attemptUrl).catch(() => {});
+      }
       // 404/410 won't change on retry — bail immediately so a wrong slug probe
       // stays cheap and does NOT escalate to a WebView load.
       if (res.status === 404 || res.status === 410) return { html: null, status: res.status };
     } catch {
       clearTimeout(t);
+      void clearSourcePreference(attemptUrl).catch(() => {});
     }
     if (attempt < ATTEMPTS) await new Promise((r) => setTimeout(r, 500 * attempt));
   }
@@ -516,30 +548,6 @@ function tm_score(want: string, title: string): number {
   return s;
 }
 
-/* ── Provider classification (mirrors the injected scripts) ── */
-
-export function classifyProvider(url: string): string {
-  const u = (url || "").toLowerCase();
-  if (/mp4upload/.test(u)) return "mp4upload";
-  if (/dailymotion|dai\.ly/.test(u)) return "dailymotion";
-  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|vibuxer|audinifer|masukestin|hanerix|playerwish/.test(u)) return "streamwish";
-  if (/voe\./.test(u)) return "voe";
-  if (/share4max|megamax/.test(u)) return "share4max";
-  if (/rubyvidhub|streamruby|rubystm|ruby/.test(u)) return "streamruby";
-  if (/doodstream|dood\.|dsvplay|d-s\.io|vidply/.test(u)) return "doodstream";
-  if (/uqload/.test(u)) return "uqload";
-  if (/ok\.ru/.test(u)) return "okru";
-  if (/videa\.|vidvaita|vidit/.test(u)) return "videa";
-  if (/vk\.com/.test(u)) return "vk";
-  if (/vid3rb|anime3rb/.test(u)) return "vid3rb";
-  // witanime's current default hosts. Give them their own ids so they aren't
-  // classified "generic" and dropped by the witanime-generic filter in the
-  // server merge — they play via the iframe fallback.
-  if (/luluvdo|lulustream|luluvid/.test(u)) return "luluvdo";
-  if (/yonaplay/.test(u)) return "yonaplay";
-  return "generic";
-}
-
 // Normalize mp4upload URLs to the canonical embed form so they autoplay
 // (watch-page and bare-host embed URLs render blank/redirect otherwise).
 function normalizeEmbedUrl(src: string): string {
@@ -847,20 +855,16 @@ function up4EpisodeNumber(href: string, title?: string): number | null {
 }
 
 // Parse an anime4up anime page's episode list straight from static HTML.
-function parseUp4Episodes(
+export function parseUp4Episodes(
   html: string,
 ): { title: string; number: number; type: string; screenshot: string; href: string }[] {
-  // Constrain to the episodes-list container when present. The page chrome
-  // (the "latest episodes" rail on paginated pages) carries /episode/ links
-  // from the NEWEST part of the series, which widen the parsed number range —
-  // findUp4EpisodeAcrossPages then sees the wanted episode "within this
-  // page's range but missing", concludes numbering gap, and gives up even
-  // though the neighbouring page actually has it (verified live: One Piece
-  // /page/16/ parses as 420–1165 unscoped, 420–467 scoped).
-  const segStart = html.indexOf("episodes-list-content");
-  if (segStart >= 0) {
-    const segEnd = html.indexOf("pagination", segStart);
-    html = html.slice(segStart, segEnd > segStart ? segEnd : undefined);
+  // Current pages use a real .anime-grid element; matching the old class name
+  // with indexOf hit its CSS declaration and sliced away every episode card.
+  const grid = /<div[^>]*class=["'][^"']*\banime-grid\b[^"']*["'][^>]*>/i.exec(html);
+  if (grid?.index != null) {
+    const rest = html.slice(grid.index);
+    const pagination = /<(?:div|nav)[^>]*class=["'][^"']*\bpagination\b/i.exec(rest);
+    html = rest.slice(0, pagination?.index);
   }
   const out: { title: string; number: number; type: string; screenshot: string; href: string }[] = [];
   const seen = new Set<string>();
@@ -967,7 +971,7 @@ export async function findUp4EpisodeAcrossPages(
 // initial response, so a single GET returns all servers fast and reliably —
 // the WebView render trips anime4up's ad redirects / JS gates and frequently
 // comes back empty.
-function parseUp4Servers(html: string): RawServer[] {
+export function parseUp4Servers(html: string): RawServer[] {
   // Constrain to the #episode-servers list when present to avoid menu/li noise.
   let scope = html;
   const segStart = html.indexOf('id="episode-servers"');
@@ -989,7 +993,7 @@ function parseUp4Servers(html: string): RawServer[] {
     } catch { continue; }
     seen.add(src);
     const name = (m[2] || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() || `Server ${out.length + 1}`;
-    out.push({ id: String(out.length), name, iframeUrl: src, provider: classifyProvider(src) });
+    out.push({ id: String(out.length), name, iframeUrl: src, provider: classifyProviderWithName(src, name) });
   }
   return out;
 }
@@ -1076,9 +1080,9 @@ function witDecodeServer(res: string, cfg: { d?: number[]; k?: string }): string
   } catch { return null; }
 }
 
-function parseWitServers(html: string): RawServer[] {
-  const zx = html.match(/_zX\s*=\s*"([^"]+)"/);
-  const zk = html.match(/_zK\s*=\s*"([^"]+)"/);
+export function parseWitServers(html: string): RawServer[] {
+  const zx = html.match(/_zX\s*=\s*"([^"]+)"/) || html.match(/_zH\s*=\s*"([^"]+)"/);
+  const zk = html.match(/_zK\s*=\s*"([^"]+)"/) || html.match(/_zW\s*=\s*"([^"]+)"/);
   if (!zx || !zk) return [];
   let reg: string[], cfg: { d?: number[]; k?: string }[];
   try {
@@ -1676,7 +1680,9 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
 export async function extractMp4upload(iframeUrl: string): Promise<{ url: string; type: "mp4" } | null> {
   const embedUrl = normalizeEmbedUrl(iframeUrl);
   for (const timeoutMs of [8000, 15000]) {
-    const html = await fetchEmbed(embedUrl, timeoutMs, "https://www.mp4upload.com/");
+    const got = await fetchEmbed(embedUrl, timeoutMs, "https://www.mp4upload.com/");
+    if (got.blocked) return null;
+    const html = got.html;
     if (!html) continue;
     const url = extractMp4uploadUrl(html);
     if (url) return { url, type: "mp4" };
@@ -1702,7 +1708,13 @@ const DECOY_RE =
 // retries statuses. Keeps the direct path cheap when a host is bot-blocking
 // plain GETs: bail to the WebView in seconds instead of burning ~48s in
 // escalating retries first.
-async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Promise<string | null> {
+// Returns the FINAL (post-redirect) URL too: doodstream mirrors 301 to a new
+// domain (dsvplay → playmogo), and the pass_md5 endpoint + Referer must hit
+// that final host, not the dead one. `blocked` marks a Cloudflare challenge
+// (403/503 or a challenge body) so callers bail to the WebView NOW instead of
+// spending their second attempt on a block that won't clear.
+type EmbedPage = { html: string | null; finalUrl: string; blocked: boolean };
+async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Promise<EmbedPage> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -1715,10 +1727,14 @@ async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Pro
         ...(referer ? { Referer: referer } : {}),
       },
     });
-    if (!res.ok) return null;
-    return await res.text();
+    const finalUrl = res.url || url;
+    if (res.status === 403 || res.status === 503) return { html: null, finalUrl, blocked: true };
+    if (!res.ok) return { html: null, finalUrl, blocked: false };
+    const html = await res.text();
+    if (looksLikeCfChallenge(html)) return { html: null, finalUrl, blocked: true };
+    return { html, finalUrl, blocked: false };
   } catch {
-    return null;
+    return { html: null, finalUrl: url, blocked: false };
   } finally {
     clearTimeout(t);
   }
@@ -1783,26 +1799,37 @@ export function extractFromPacked(html: string): string | null {
   }
 }
 
+export function isMp4uploadMediaUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    return (host === "mp4upload.com" || host.endsWith(".mp4upload.com")) &&
+      url.pathname.toLowerCase().endsWith(".mp4") &&
+      !DECOY_RE.test(raw);
+  } catch {
+    return false;
+  }
+}
+
 export function extractMp4uploadUrl(html: string): string | null {
-  const isMp4upload = (raw: string) => {
-    try {
-      const host = new URL(raw).hostname.toLowerCase();
-      return (host === "mp4upload.com" || host.endsWith(".mp4upload.com")) && !DECOY_RE.test(raw);
-    } catch {
-      return false;
-    }
-  };
-  const plain = html.match(/https?:\/\/[^"'\s<>\\]+\.mp4[^"'\s<>\\]*/gi)?.find(isMp4upload);
+  const decoded = String(html || "").replace(/\\\//g, "/").replace(/&amp;|&#0?38;/gi, "&");
+  const plain = decoded.match(/https?:\/\/[^"'\s<>\\]+\.mp4[^"'\s<>\\]*/gi)?.find(isMp4uploadMediaUrl);
   if (plain) return plain;
-  const packed = extractFromPacked(html);
-  return packed && isMp4upload(packed) ? packed : null;
+  const packed = extractFromPacked(decoded);
+  return packed && isMp4uploadMediaUrl(packed) ? packed : null;
+}
+
+export function extractVideasUrl(html: string): string | null {
+  return pickMediaUrl(html);
 }
 
 // streamwish family (streamwish/hlswish/wishembed/wishfast/…): the master
 // m3u8 lives in packed JS in the embed page's initial HTML.
 export async function extractStreamwish(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const html = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
+    const got = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
+    if (got.blocked) return null;
+    const html = got.html;
     if (!html) continue;
     const url = extractFromPacked(html) || pickMediaUrl(html);
     if (url) return { url, type: mediaType(url) };
@@ -1810,6 +1837,12 @@ export async function extractStreamwish(embedUrl: string): Promise<{ url: string
     return null;
   }
   return null;
+}
+
+export async function extractVideas(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  const got = await fetchEmbed(embedUrl, 10000);
+  const url = got.html ? extractVideasUrl(got.html) : null;
+  return url ? { url, type: mediaType(url) } : null;
 }
 
 // NOTE: voe deliberately has NO direct resolver. Live testing (2026-07) shows
@@ -1824,11 +1857,13 @@ export async function extractStreamwish(embedUrl: string): Promise<{ url: string
 // the WebView collector's tryDood().
 export async function extractDoodstream(embedUrl: string): Promise<{ url: string; type: "mp4" } | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const html = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
+    const got = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
+    if (got.blocked) return null;
+    const html = got.html;
     if (!html) continue;
     const m = html.match(/['"]([^'"]*\/pass_md5\/[^'"]+)['"]/);
     if (!m) return null;
-    const passUrl = m[1].startsWith("http") ? m[1] : new URL(m[1], embedUrl).toString();
+    const passUrl = m[1].startsWith("http") ? m[1] : new URL(m[1], got.finalUrl).toString();
     const tk = html.match(/token=([a-zA-Z0-9]+)/);
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), 10000);
@@ -1837,7 +1872,7 @@ export async function extractDoodstream(embedUrl: string): Promise<{ url: string
         signal: controller.signal,
         headers: {
           "User-Agent": BROWSER_UA,
-          Referer: embedUrl,
+          Referer: got.finalUrl,
           "X-Requested-With": "XMLHttpRequest",
         },
       });

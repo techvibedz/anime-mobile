@@ -3,6 +3,8 @@
 //   { type: 'result', data: <any> }   — final answer
 //   { type: 'error',  message: string } — failure
 //
+import { providerClassifierScript } from "../videoProviders";
+
 // Common pattern: wait for Cloudflare to clear + selector to appear, then
 // scrape DOM. All selectors mirror the cheerio queries from
 // server/routes/merged.js.
@@ -581,24 +583,7 @@ _waitFor(
 // The site's own JS decodes the obfuscated server data into iframes on demand.
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_VIDEO_SERVERS = `(function(){${HELPERS}
-function provider(url) {
-  url = (url || '').toLowerCase();
-  if (/mp4upload/.test(url)) return 'mp4upload';
-  if (/dailymotion|dai\\.ly/.test(url)) return 'dailymotion';
-  if (/streamwish|hlswish|wishembed|wishfast|hgcloud|jwembed|vibuxer|audinifer|masukestin|hanerix|playerwish/.test(url)) return 'streamwish';
-  if (/voe\\./.test(url)) return 'voe';
-  if (/share4max|megamax/.test(url)) return 'share4max';
-  if (/rubyvidhub|streamruby|rubystm|ruby/.test(url)) return 'streamruby';
-  if (/doodstream|dood\\.|dsvplay|d-s\\.io|vidply/.test(url)) return 'doodstream';
-  if (/uqload/.test(url)) return 'uqload';
-  if (/ok\\.ru/.test(url)) return 'okru';
-  if (/videa\\.|vidvaita|vidit/.test(url)) return 'videa';
-  if (/vk\\.com/.test(url)) return 'vk';
-  if (/mega\\.nz/.test(url)) return 'mega';
-  if (/luluvdo|lulustream|luluvid/.test(url)) return 'luluvdo';
-  if (/yonaplay/.test(url)) return 'yonaplay';
-  return 'generic';
-}
+${providerClassifierScript("provider")}
 function badIframe(src) {
   if (!src || src.indexOf('http') !== 0) return true;
   if (/google|facebook|pyppo|popads|disqus/.test(src)) return true;

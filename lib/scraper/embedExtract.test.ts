@@ -6,7 +6,7 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
-import { extractFromPacked, extractMp4uploadUrl, pickMediaUrl } from "./direct";
+import { extractFromPacked, extractMp4uploadUrl, extractVideasUrl, isMp4uploadMediaUrl, parseUp4Episodes, parseUp4Servers, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -71,6 +71,14 @@ test("mp4upload inline player.src object yields the direct mp4", () => {
   assert.equal(extractMp4uploadUrl(html), MP4UPLOAD);
 });
 
+test("mp4upload parser decodes JSON-escaped URLs and HTML query entities", () => {
+  const html = '<script>player.src({src:"https:\\/\\/s14.mp4upload.com\\/d\\/abc\\/video.mp4?token=1&amp;expires=2"});</script>';
+  assert.equal(
+    extractMp4uploadUrl(html),
+    "https://s14.mp4upload.com/d/abc/video.mp4?token=1&expires=2",
+  );
+});
+
 test("mp4upload packed player.src yields the direct mp4", () => {
   const html = `<script>${pack(`player.src({type:"video/mp4",src:"${MP4UPLOAD}"});`)}</script>`;
   assert.equal(extractMp4uploadUrl(html), MP4UPLOAD);
@@ -83,6 +91,52 @@ test("mp4upload parser rejects sample files", () => {
 test("mp4upload parser skips an unrelated mp4 before the real stream", () => {
   const html = `src:"https://cdn.example.com/trailer.mp4";src:"${MP4UPLOAD}"`;
   assert.equal(extractMp4uploadUrl(html), MP4UPLOAD);
+});
+
+test("mp4upload parser ignores player CSS on the mp4upload host", () => {
+  const html = `
+    <link href="https://www.mp4upload.com/player/videojs/skins/nuevo/videojs.min.css">
+    <script>player.src({src:"${MP4UPLOAD}"});</script>`;
+  assert.equal(extractMp4uploadUrl(html), MP4UPLOAD);
+});
+
+test("mp4upload parser returns null for CSS-only HTML", () => {
+  assert.equal(
+    extractMp4uploadUrl('<link href="https://www.mp4upload.com/player/videojs/video.min.css">'),
+    null,
+  );
+});
+
+test("mp4upload direct playback accepts only its progressive MP4", () => {
+  assert.equal(isMp4uploadMediaUrl(MP4UPLOAD), true);
+  assert.equal(isMp4uploadMediaUrl("https://s14.mp4upload.com/live/playlist.m3u8"), false);
+  assert.equal(isMp4uploadMediaUrl("https://example.com/video.mp4"), false);
+});
+
+test("videas static HTML yields its direct playlist", () => {
+  const url = "https://cdn.videas.fr/v-medias/example/playlist.m3u8";
+  assert.equal(extractVideasUrl(`<script>player.setup({file:"${url}"})</script>`), url);
+});
+
+test("current Anime4up HTML exposes private CDN and redirected DoodStream servers", () => {
+  const servers = parseUp4Servers(`<ul id="episode-servers">
+    <li data-watch="https://4o.z4m2r9t.shop/Anime4up-S1/mal/35120/8/sub/"><a>anime4up1 <span>[FHD]</span></a></li>
+    <li data-watch="https://playmogo.com/e/t0rdyelb0krl"><a>DoodStream <span>[FHD]</span></a></li>
+    <li data-watch="https://mp4upload.com/embed-5a5h09ih6s0t.html"><a>Mp4upload <span>[FHD]</span></a></li>
+  </ul>`);
+  assert.deepEqual(servers.map((server) => server.provider), ["anime4upcdn", "doodstream", "mp4upload"]);
+});
+
+test("current Anime4up anime page ignores stylesheet selectors and finds episode cards", () => {
+  const episodes = parseUp4Episodes(`
+    <style>.episodes-list-content { display: flex } .pagination { display: table }</style>
+    <div class="anime-grid">
+      <div class="ep_num">
+        <a href="https://w1.anime4up.rest/episode/one-piece-%D8%A7%D9%84%D8%AD%D9%84%D9%82%D8%A9-1129/">الحلقة 1129</a>
+      </div>
+      <a href="https://w1.anime4up.rest/episode/one-piece-%D8%A7%D9%84%D8%AD%D9%84%D9%82%D8%A9-1129/" class="overlay"></a>
+    </div>`);
+  assert.deepEqual(episodes.map((episode) => episode.number), [1129]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -43,6 +43,7 @@ import { t } from "../../lib/i18n";
 import { Rise } from "../../components/Rise";
 import { useReducedMotion } from "../../lib/motion";
 import { useSidebar } from "../../components/Sidebar";
+import { shouldShowSynopsis } from "../../lib/animeDetail";
 
 // Core React Native bundles a Clipboard native module (no extra dependency), so
 // copying works over OTA on the existing build. Deep-import since the top-level
@@ -88,6 +89,7 @@ export default function AnimeDetailScreen() {
     if (!id) return;
     const url = decodeURIComponent(id);
     let cancelled = false;
+    let resolvedTitle: string | null = null;
     favoriteListOf(url).then(setBookmarkList);
     (async () => {
       try {
@@ -103,6 +105,7 @@ export default function AnimeDetailScreen() {
         });
         if (cancelled) return;
         if (res.success) {
+          resolvedTitle = res.data.title;
           setData(res.data);
           setEpisodes4up(res.data.episodes4up || []);
           setMerged(res.data.merged || null);
@@ -118,7 +121,7 @@ export default function AnimeDetailScreen() {
       // the "both sources" badge appears and url4up flows to /watch.
       // This runs after the UI is already showing, so the user doesn't wait.
       try {
-        const enrich = await fetchEpisodesUp4(url, /* title */ null);
+        const enrich = await fetchEpisodesUp4(url, resolvedTitle);
         if (cancelled) return;
         if (enrich.merged) setMerged(enrich.merged);
         if (enrich.episodes4up.length > 0) setEpisodes4up(enrich.episodes4up);
@@ -127,8 +130,8 @@ export default function AnimeDetailScreen() {
     return () => { cancelled = true; };
   }, [id]);
 
-  // Resolve the MyAnimeList score for the header badge once the title is known.
-  // This also warms the shared cache the Info tab reads, so opening it is instant.
+  // Resolve the lightweight MyAnimeList score for the header badge once the
+  // title is known. The slower full facts load only when the Info tab opens.
   useEffect(() => {
     if (!data?.title) return;
     setMalScore(peekMalRating(data.title) ?? null);
@@ -293,7 +296,7 @@ export default function AnimeDetailScreen() {
         fetchAnimeMal(res.data.title).then((m) => setMalScore(m.score)).catch(() => {});
       }
       try {
-        const enrich = await fetchEpisodesUp4(animeHref, null);
+        const enrich = await fetchEpisodesUp4(animeHref, res.data.title);
         if (enrich.merged) setMerged(enrich.merged);
         if (enrich.episodes4up.length > 0) setEpisodes4up(enrich.episodes4up);
       } catch {}
@@ -403,7 +406,7 @@ export default function AnimeDetailScreen() {
           <AiringCountdown title={data.title} />
 
           {/* Synopsis */}
-          {data.synopsis ? (
+          {shouldShowSynopsis(animeHref, data.synopsis) ? (
             <Pressable onPress={() => setSynopsisOpen((v) => !v)}>
               <Text style={ss.synopsis} numberOfLines={synopsisOpen ? undefined : 3}>
                 {data.synopsis}

@@ -36,6 +36,7 @@ import {
   extractVid3rb,
   extractMp4upload,
   extractStreamwish,
+  extractVideas,
   extractDoodstream,
   fetchWitHomeDirect,
   fetchAnime4upHomeDirect,
@@ -46,6 +47,25 @@ import { fuzzyScore } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 import { readCloudHome, writeCloudHome } from "./homeCloudCache";
 import { remoteLog } from "./remoteLog";
+import { createRequestCache, withTimeout } from "./requestCache";
+import {
+  anime4upEpisodeUrl,
+  episodeNumberFromUrl,
+  isDownloadProvider,
+  validateDirectServers,
+  isProviderSupported,
+  mergeVideoServers,
+  selectServerCandidates,
+  serverCandidateSignature,
+  normalizeServerUrl,
+  probeMediaUrl,
+  providerPolicy,
+  preferredAnime4upEpisodeUrl,
+  selectWarmupServers,
+  validateMediaUrl,
+  videoPlaybackHeaders,
+  VIDEO_USER_AGENT,
+} from "./videoProviders";
 
 // v2 cache keys: bumped to discard payloads written by the earlier build that
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
@@ -63,9 +83,12 @@ const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const RECENT_CACHE_PREFIX = "@recent_v2:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v2:";
+const SERVERS_CACHE_PREFIX = "@servers_v3:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
+const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
+const completeVideoServerRequests = createRequestCache<VideoServersPayload>(30_000);
+const videoResolutionRequests = createRequestCache<ResolveVideoResult>(20_000);
 
 async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
   try {
@@ -194,6 +217,7 @@ export interface VideoServer {
   name: string;
   iframeUrl: string;
   provider: string;
+  videoUrl?: string;
 }
 
 /* ── Search types ───────────────────────────── */
@@ -934,6 +958,7 @@ async function resolveAnime3rbTitleUrl(animeTitle: string): Promise<string | nul
 // binge-watching — play instantly with no fetch at all.
 const a3rbServersMem = new Map<string, { servers: RawServer[]; ts: number }>();
 const A3RB_SERVERS_TTL = 12 * 60 * 1000;
+const a3rbServerRequests = createRequestCache<RawServer[]>(A3RB_SERVERS_TTL);
 function a3rbServersKey(animeTitle: string, epNumber: number) {
   return `${animeTitle.toLowerCase().trim()}#${epNumber}`;
 }
@@ -948,9 +973,9 @@ export function prefetchAnime3rbServers(animeTitle: string, epNumber: number): v
 }
 
 // Servers for an episode by anime title + episode number. Returns [] on any
-// miss (unknown anime, episode not yet uploaded, transient fetch failure) —
-// the watch screen's retry loop decides whether to try again.
-export async function fetchAnime3rbServers(animeTitle: string, epNumber: number): Promise<RawServer[]> {
+// miss (unknown anime, episode not yet uploaded, transient fetch failure).
+// Explicit refresh is the retry boundary; identical in-flight calls coalesce.
+async function fetchAnime3rbServersFresh(animeTitle: string, epNumber: number): Promise<RawServer[]> {
   if (!animeTitle || epNumber == null) return [];
   const epUrlFor = (slug: string) => `https://anime3rb.com/episode/${slug}/${epNumber}`;
   const memKey = a3rbServersKey(animeTitle, epNumber);
@@ -996,6 +1021,16 @@ export async function fetchAnime3rbServers(animeTitle: string, epNumber: number)
   const slug = titleUrl.replace(/\/+$/, "").split("/").pop();
   if (!slug) return [];
   return remember(await scrapeAnime3rbEpisodeServers(epUrlFor(slug)).catch(() => [] as RawServer[]));
+}
+
+export function fetchAnime3rbServers(animeTitle: string, epNumber: number): Promise<RawServer[]> {
+  if (!animeTitle || epNumber == null) return Promise.resolve([]);
+  const key = a3rbServersKey(animeTitle, epNumber);
+  return a3rbServerRequests.run(
+    key,
+    () => fetchAnime3rbServersFresh(animeTitle, epNumber),
+    { valid: (servers) => servers.length > 0 },
+  );
 }
 
 // Servers for a KNOWN anime3rb episode URL (no title/number resolution needed).
@@ -1122,14 +1157,15 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string, for
   const valid = (d: VideoServersPayload) =>
     d.data.servers.length > 0 &&
     (!url4up || primaryIsUp4 || d.data.servers.some((s) => s.source === "anime4up"));
-  if (force) {
-    // User-requested refresh: skip the cache entirely and re-scrape, so
-    // servers that were missing from a cached/partial list can show up.
+  return serverRequests.run(key, async () => {
+    if (!force) {
+      const cached = await readCache<VideoServersPayload>(key, SERVERS_CACHE_TTL);
+      if (cached && valid(cached)) return cached;
+    }
     const data = await fetchVideoServersFresh(episodeUrl, url4up);
     if (valid(data)) void writeCache(key, data);
     return data;
-  }
-  return swr(key, SERVERS_CACHE_TTL, () => fetchVideoServersFresh(episodeUrl, url4up), valid);
+  }, { force, valid });
 }
 
 // anime4up's server list lives in the static HTML, so a single plain GET
@@ -1191,36 +1227,30 @@ async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Prom
   // scrape it inline — that would delay showing the primary servers.
   const harvestedUp4 = primary && primary.source === "witanime" ? primary.up4EpisodeUrl : null;
 
-  const seen = new Set<string>();
-  const merged: (VideoServer & { source?: string })[] = [];
-  function add(arr: any[] | undefined, source: string, keepGeneric = false) {
+  const groups: (VideoServer & { source?: string })[][] = [];
+  function add(arr: any[] | undefined, source: string) {
     if (!arr) return;
+    const group: (VideoServer & { source?: string })[] = [];
     for (const s of arr) {
-      if (!s.iframeUrl || seen.has(s.iframeUrl)) continue;
-      // Drop unclassifiable "generic" servers from the WebView witanime scrape —
-      // they're junk (the site's own placeholder player). Keep anime4up's
-      // generic-classified servers (their embed hosts often aren't in the
-      // provider list but are real), and keep DIRECT-decoded ones (keepGeneric):
-      // those are validated real embeds, so a brand-new witanime host still
-      // plays via the iframe fallback instead of silently vanishing.
-      if (s.provider === "generic" && source !== "anime4up" && !keepGeneric) continue;
-      seen.add(s.iframeUrl);
-      merged.push({
-        id: String(merged.length),
+      if (!s.iframeUrl || !isProviderSupported(s.provider)) continue;
+      group.push({
+        id: String(group.length),
         name: s.name,
         iframeUrl: s.iframeUrl,
         provider: s.provider,
         source,
       });
     }
+    groups.push(group);
   }
   // Witanime is primary, anime4up extras appended.
   if (primary && primary.source === "witanime") {
-    add(primary.servers, "witanime", !!primary.direct);
+    add(primary.servers, "witanime");
     if (secondary) add(secondary.servers, "anime4up");
   } else if (primary && primary.source === "anime4up") {
     add(primary.servers, "anime4up");
   }
+  const merged = mergeVideoServers(groups);
 
   return {
     success: true,
@@ -1234,6 +1264,238 @@ async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Prom
       up4EpisodeUrl: harvestedUp4 || undefined,
     },
   };
+}
+
+export type CompleteVideoServersOptions = {
+  episodeUrl: string;
+  url4up?: string | null;
+  url3rb?: string | null;
+  animeHref?: string | null;
+  animeTitle?: string | null;
+  episodeNumber?: number | null;
+  force?: boolean;
+  // Called once the PRIMARY source's servers are ready, before the slower
+  // anime4up/anime3rb cross-source lookups finish — the watch screen shows
+  // these immediately and merges the complete list when it lands.
+  onPartial?: (payload: VideoServersPayload) => void;
+  onCandidates?: (payload: VideoServersPayload) => void;
+};
+
+async function resolveDirectServerList(
+  servers: readonly (VideoServer & { source?: string })[],
+  timeoutMs: number,
+  fresh: boolean,
+  onUpdate?: (servers: (VideoServer & { source?: string; videoUrl: string })[]) => void,
+): Promise<(VideoServer & { source?: string; videoUrl: string })[]> {
+  return validateDirectServers(
+    servers,
+    (server) => resolveDirectServerUrl(server, timeoutMs, fresh),
+    onUpdate,
+  );
+}
+
+async function resolveDirectServerUrl(
+  server: VideoServer,
+  timeoutMs: number,
+  fresh: boolean,
+): Promise<string | null> {
+  const result = await withTimeout(
+    resolveVideo(server.iframeUrl, server.provider, { priority: false, fresh }),
+    timeoutMs,
+    { success: false } as ResolveVideoResult,
+  );
+  const videoUrl = result.success ? result.data?.videoUrl || null : null;
+  if (!videoUrl) return null;
+  const reachable = await probeMediaUrl(
+    videoUrl,
+    videoPlaybackHeaders(videoUrl, server.iframeUrl, server.provider),
+  );
+  return reachable ? videoUrl : null;
+}
+
+/** Discover every applicable source concurrently and return one complete,
+ * bounded list. A source failure is isolated; successful siblings survive. */
+export function fetchCompleteVideoServers(options: CompleteVideoServersOptions): Promise<VideoServersPayload> {
+  const episodeUrl = normalizeServerUrl(options.episodeUrl) || options.episodeUrl;
+  const key = JSON.stringify([
+    episodeUrl,
+    options.url4up || "",
+    options.url3rb || "",
+    options.animeHref || "",
+    options.animeTitle || "",
+    options.episodeNumber ?? "",
+  ]);
+  return completeVideoServerRequests.run(key, async () => {
+    const discoveryDeadline = Date.now() + 45_000;
+    const primaryIsUp4 = /anime4up/i.test(episodeUrl);
+    const primaryIsA3rb = /anime3rb\.com\/episode\//i.test(episodeUrl);
+    const primaryPromise = primaryIsA3rb
+      ? Promise.resolve(null)
+      : fetchVideoServers(episodeUrl, undefined, !!options.force).catch(() => null);
+
+    const episodeNumber = options.episodeNumber ?? episodeNumberFromUrl(episodeUrl);
+    const loadUp4 = async (title: string): Promise<VideoServersPayload | null> => {
+      if (primaryIsUp4) return null;
+      let href = options.url4up || null;
+      if (!href && title && episodeNumber != null) {
+        const guessed = anime4upEpisodeUrl(title, episodeNumber);
+        const direct = guessed
+          ? await scrapeAnime4upEpisodePageDirect(guessed).catch(() => null)
+          : null;
+        if (direct) {
+          const servers = mergeVideoServers([direct.servers.map((server) => ({ ...server, source: "anime4up" }))]);
+          return {
+            success: servers.length > 0,
+            data: {
+              episodeTitle: direct.episodeTitle,
+              animeTitle: direct.animeTitle || title,
+              animeHref: "",
+              serverCount: servers.length,
+              servers,
+              navigation: { prev: null, next: null },
+              up4EpisodeUrl: guessed || undefined,
+            },
+          };
+        }
+      }
+      if (!href && title && episodeNumber != null) {
+        href = await resolveUp4EpisodeUrl(title, episodeNumber).catch(() => null);
+      }
+      if (!href || normalizeServerUrl(href) === normalizeServerUrl(episodeUrl)) return null;
+      return fetchVideoServers(href, undefined, !!options.force).catch(() => null);
+    };
+    const loadA3rb = async (title: string): Promise<RawServer[]> => {
+      if (/anime3rb\.com\/episode\//i.test(episodeUrl)) {
+        return fetchAnime3rbServersByUrl(episodeUrl);
+      }
+      if (options.url3rb) return fetchAnime3rbServersByUrl(options.url3rb);
+      if (title && episodeNumber != null) return fetchAnime3rbServers(title, episodeNumber);
+      return [];
+    };
+
+    const initialTitle = (options.animeTitle || "").trim();
+    let up4Promise = initialTitle || options.url4up ? loadUp4(initialTitle) : null;
+    let a3rbPromise = initialTitle || options.url3rb || /anime3rb\.com\/episode\//i.test(episodeUrl)
+      ? loadA3rb(initialTitle)
+      : null;
+    const primary = await withTimeout(primaryPromise, discoveryDeadline - Date.now(), null);
+    const resolvedTitle = initialTitle || primary?.data.animeTitle || "";
+    const exactUp4 = preferredAnime4upEpisodeUrl(options.url4up, primary?.data.up4EpisodeUrl);
+    if (!options.url4up && exactUp4 && normalizeServerUrl(exactUp4) !== normalizeServerUrl(episodeUrl)) {
+      up4Promise = fetchVideoServers(exactUp4, undefined, !!options.force).catch(() => null);
+    }
+    if (!up4Promise) up4Promise = loadUp4(resolvedTitle);
+    if (!a3rbPromise) a3rbPromise = loadA3rb(resolvedTitle);
+
+    const discovered = new Map<string, (VideoServer & { source?: string })[]>();
+    let lastCandidateSignature = "";
+    const emitCandidates = (metadata: VideoServersPayload | null) => {
+      const servers = selectServerCandidates(mergeVideoServers([...discovered.values()]));
+      if (servers.length === 0) return;
+      const signature = serverCandidateSignature(servers);
+      if (signature === lastCandidateSignature) return;
+      lastCandidateSignature = signature;
+      options.onCandidates?.({
+        success: true,
+        data: {
+          episodeTitle: metadata?.data.episodeTitle || (episodeNumber != null ? `الحلقة ${episodeNumber}` : ""),
+          animeTitle: resolvedTitle || metadata?.data.animeTitle || "",
+          animeHref: options.animeHref || metadata?.data.animeHref || "",
+          serverCount: servers.length,
+          servers,
+          navigation: metadata?.data.navigation || { prev: null, next: null },
+        },
+      });
+    };
+    if (primary?.data.servers.length) {
+      discovered.set("primary", primary.data.servers);
+      emitCandidates(primary);
+    }
+    const observedUp4 = up4Promise.then((result) => {
+      if (result?.data.servers.length) {
+        discovered.set("anime4up", result.data.servers);
+        emitCandidates(primary || result);
+      }
+      return result;
+    });
+    const observedA3rb = a3rbPromise.then((servers) => {
+      if (servers.length) {
+        discovered.set("anime3rb", servers.map((server) => ({ ...server, source: "anime3rb" })));
+        emitCandidates(primary);
+      }
+      return servers;
+    });
+
+    let lastPlayableSignature = "";
+    const emit = (
+      playable: (VideoServer & { source?: string; videoUrl: string })[],
+      metadata: VideoServersPayload | null,
+    ) => {
+      if (playable.length === 0) return;
+      const signature = serverCandidateSignature(playable);
+      if (signature === lastPlayableSignature) return;
+      lastPlayableSignature = signature;
+      options.onPartial?.({
+        success: true,
+        data: {
+          episodeTitle: metadata?.data.episodeTitle || (episodeNumber != null ? `الحلقة ${episodeNumber}` : ""),
+          animeTitle: resolvedTitle || metadata?.data.animeTitle || "",
+          animeHref: options.animeHref || metadata?.data.animeHref || "",
+          serverCount: playable.length,
+          servers: playable,
+          navigation: metadata?.data.navigation || { prev: null, next: null },
+        },
+      });
+    };
+
+    // Warm the best three native candidates immediately, including their
+    // hidden extractor fallback. Limiting this to three leaves one WebView
+    // slot available for cross-source discovery instead of saturating the pool.
+    if (primary && primary.data.servers.length > 0) {
+      void resolveDirectServerList(
+        selectWarmupServers(primary.data.servers),
+        40_000,
+        !!options.force,
+        (playable) => emit(playable, primary),
+      );
+    }
+    const remaining = Math.max(0, discoveryDeadline - Date.now());
+    const [up4, a3rb] = await Promise.all([
+      withTimeout(observedUp4, remaining, null),
+      withTimeout(observedA3rb, remaining, [] as RawServer[]),
+    ]);
+    const a3rbServers: (VideoServer & { source?: string })[] = a3rb.map((server) => ({
+      ...server,
+      source: "anime3rb",
+    }));
+    const candidates = mergeVideoServers([
+      primary?.data.servers || [],
+      up4?.data.servers || [],
+      a3rbServers,
+    ]);
+    const metadata = primary || up4;
+    const servers = await resolveDirectServerList(
+      candidates,
+      40_000,
+      !!options.force,
+      (playable) => emit(playable, metadata),
+    );
+    return {
+      success: servers.length > 0,
+      data: {
+        episodeTitle: metadata?.data.episodeTitle || (episodeNumber != null ? `الحلقة ${episodeNumber}` : ""),
+        animeTitle: resolvedTitle || metadata?.data.animeTitle || "",
+        animeHref: options.animeHref || metadata?.data.animeHref || "",
+        serverCount: servers.length,
+        servers,
+        navigation: metadata?.data.navigation || { prev: null, next: null },
+        up4EpisodeUrl: options.url4up || up4?.data.up4EpisodeUrl || undefined,
+      },
+    };
+  }, {
+    force: !!options.force,
+    valid: (result) => result.data.servers.length > 0,
+  });
 }
 
 /* ── /search ────────────────────────────────── */
@@ -1496,10 +1758,6 @@ export async function fetchAllAnime(page = 1): Promise<{
  * out a progressive .mp4 are considered: vid3rb (anime3rb's first-party host,
  * direct 1080p) first, then mp4upload. Returns the URL plus the CDN headers the
  * file fetch needs (the signed URLs are bound to the right Referer/UA). */
-const DL_UA =
-  "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
-const DL_RANK: Record<string, number> = { vid3rb: 0, mp4upload: 1 };
-
 function dlQualityScore(name: string): number {
   const n = (name || "").toLowerCase();
   if (n.includes("fhd") || n.includes("1080")) return 3;
@@ -1509,7 +1767,7 @@ function dlQualityScore(name: string): number {
 }
 
 function dlHeaders(provider: string): Record<string, string> {
-  const h: Record<string, string> = { "User-Agent": DL_UA };
+  const h: Record<string, string> = { "User-Agent": VIDEO_USER_AGENT };
   if (provider === "mp4upload") h.Referer = "https://www.mp4upload.com/";
   else if (provider === "vid3rb") h.Referer = "https://anime3rb.com/";
   return h;
@@ -1530,20 +1788,15 @@ export async function listDownloadServers(opts: {
   animeTitle?: string | null;
 }): Promise<DownloadServer[]> {
   const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
-  const cands: { name: string; iframeUrl: string; provider: string }[] = [];
-  try {
-    let a3: RawServer[] = [];
-    if (url3rb) a3 = await fetchAnime3rbServersByUrl(url3rb);
-    else if (animeTitle && epNum != null) a3 = await fetchAnime3rbServers(animeTitle, epNum);
-    for (const s of a3) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
-  } catch {}
-  try {
-    const res = await fetchVideoServers(episodeHref, url4up);
-    if (res?.success) for (const s of res.data.servers) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
-  } catch {}
-  return cands
-    .filter((c) => c.provider in DL_RANK && c.iframeUrl)
-    .sort((a, b) => (DL_RANK[a.provider] - DL_RANK[b.provider]) || (dlQualityScore(b.name) - dlQualityScore(a.name)))
+  const complete = await fetchCompleteVideoServers({
+    episodeUrl: episodeHref,
+    url4up,
+    url3rb,
+    animeTitle,
+    episodeNumber: epNum,
+  }).catch(() => null);
+  return (complete?.data.servers || [])
+    .filter((server) => isDownloadProvider(server.provider) && server.iframeUrl)
     .map((c) => ({ name: c.name, iframeUrl: c.iframeUrl, provider: c.provider, quality: dlQualityLabel(c.name) }));
 }
 
@@ -1557,7 +1810,7 @@ export async function resolveDownloadUrl(opts: {
 }): Promise<{ url: string; headers: Record<string, string>; type: "mp4" } | null> {
   const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
 
-  if (opts.server?.iframeUrl && opts.server.provider in DL_RANK) {
+  if (opts.server?.iframeUrl && isDownloadProvider(opts.server.provider)) {
     const r = await resolveVideo(opts.server.iframeUrl, opts.server.provider).catch(() => null);
     const url = r?.success ? r.data?.videoUrl : null;
     if (url && r!.data!.type !== "hls" && !/\.m3u8(\?|$)/i.test(url)) {
@@ -1565,25 +1818,15 @@ export async function resolveDownloadUrl(opts: {
     }
   }
 
-  const cands: { name: string; iframeUrl: string; provider: string }[] = [];
-
-  // anime3rb (vid3rb → direct 1080p .mp4) — the best download source.
-  try {
-    let a3: RawServer[] = [];
-    if (url3rb) a3 = await fetchAnime3rbServersByUrl(url3rb);
-    else if (animeTitle && epNum != null) a3 = await fetchAnime3rbServers(animeTitle, epNum);
-    for (const s of a3) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
-  } catch {}
-
-  // Primary (witanime/anime4up) — for the mp4upload server.
-  try {
-    const res = await fetchVideoServers(episodeHref, url4up);
-    if (res?.success) for (const s of res.data.servers) cands.push({ name: s.name, iframeUrl: s.iframeUrl, provider: s.provider });
-  } catch {}
-
-  const downloadable = cands
-    .filter((c) => c.provider in DL_RANK && c.iframeUrl)
-    .sort((a, b) => (DL_RANK[a.provider] - DL_RANK[b.provider]) || (dlQualityScore(b.name) - dlQualityScore(a.name)));
+  const complete = await fetchCompleteVideoServers({
+    episodeUrl: episodeHref,
+    url4up,
+    url3rb,
+    animeTitle,
+    episodeNumber: epNum,
+  }).catch(() => null);
+  const downloadable = (complete?.data.servers || [])
+    .filter((server) => isDownloadProvider(server.provider) && server.iframeUrl);
 
   for (const c of downloadable) {
     const r = await resolveVideo(c.iframeUrl, c.provider).catch(() => null);
@@ -1597,16 +1840,27 @@ export async function resolveDownloadUrl(opts: {
 
 /* ── /resolve-video ─────────────────────────── */
 
-export async function resolveVideo(iframeUrl: string, provider: string, priority = false): Promise<{
+export type ResolveVideoResult = {
   success: boolean;
   data?: { videoUrl: string; type: string };
   error?: string;
-}> {
+};
+
+export type ResolveVideoOptions = boolean | { priority?: boolean; fresh?: boolean };
+
+async function resolveVideoFresh(iframeUrl: string, provider: string, priority: boolean): Promise<ResolveVideoResult> {
+  const success = (result: { url: string; type: string } | null): ResolveVideoResult | null =>
+    result && validateMediaUrl(result.url, provider)
+      ? { success: true, data: { videoUrl: result.url, type: result.type } }
+      : null;
+  const policy = providerPolicy(provider);
+
   // anime3rb's first-party host: one static GET on the player page yields
   // direct tokenized .mp4 qualities — near-instant, no WebView slot needed.
   if (provider === "vid3rb") {
     const r = await extractVid3rb(iframeUrl).catch(() => null);
-    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+    const resolved = success(r);
+    if (resolved) return resolved;
     return { success: false, error: "Could not extract vid3rb video URL" };
   }
   // mp4upload now inlines the direct .mp4 URL in the embed page's static
@@ -1615,7 +1869,8 @@ export async function resolveVideo(iframeUrl: string, provider: string, priority
   // mirror that still serves the packed player.
   if (provider === "mp4upload") {
     const r = await extractMp4upload(iframeUrl).catch(() => null);
-    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+    const resolved = success(r);
+    if (resolved) return resolved;
     void remoteLog("warn", "video", "mp4upload direct extraction missed; using WebView", {
       iframeUrl: iframeUrl.slice(0, 200),
     });
@@ -1629,14 +1884,23 @@ export async function resolveVideo(iframeUrl: string, provider: string, priority
   // plain GET can't pass — see the note in direct.ts.)
   if (provider === "streamwish") {
     const r = await extractStreamwish(iframeUrl).catch(() => null);
-    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+    const resolved = success(r);
+    if (resolved) return resolved;
+  }
+  if (provider === "videas") {
+    const r = await extractVideas(iframeUrl).catch(() => null);
+    const resolved = success(r);
+    if (resolved) return resolved;
   }
   if (provider === "doodstream") {
     const r = await extractDoodstream(iframeUrl).catch(() => null);
-    if (r) return { success: true, data: { videoUrl: r.url, type: r.type } };
+    const resolved = success(r);
+    if (resolved) return resolved;
   }
+  if (policy.resolution === "direct") return { success: false, error: `Could not extract ${provider} video URL` };
   try {
     const r = await scrapeExtractVideoUrl(iframeUrl, priority);
+    if (!validateMediaUrl(r.url, provider)) return { success: false, error: `${provider} returned an invalid media URL` };
     return {
       success: true,
       data: { videoUrl: r.url, type: /\.m3u8/i.test(r.url) ? "hls" : "mp4" },
@@ -1647,4 +1911,20 @@ export async function resolveVideo(iframeUrl: string, provider: string, priority
     });
     return { success: false, error: e?.message ?? "Could not extract video URL" };
   }
+}
+
+export function resolveVideo(
+  iframeUrl: string,
+  provider: string,
+  options: ResolveVideoOptions = false,
+): Promise<ResolveVideoResult> {
+  const normalized = normalizeServerUrl(iframeUrl);
+  if (!normalized) return Promise.resolve({ success: false, error: "Invalid embed URL" });
+  const opts = typeof options === "boolean" ? { priority: options, fresh: false } : options;
+  const key = `${provider}|${normalized}`;
+  return videoResolutionRequests.run(
+    key,
+    () => resolveVideoFresh(normalized, provider, !!opts.priority),
+    { force: !!opts.fresh, valid: (result) => result.success && !!result.data?.videoUrl },
+  );
 }

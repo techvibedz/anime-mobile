@@ -4,9 +4,12 @@
 // from this bus. Multiple jobs run concurrently (one per slot). Callers use
 // `enqueue()` and await the result.
 
+import { getSourceCandidates } from "./sourceDomains";
+
 export type ScrapeJob = {
   id: string;
   url: string;
+  urls: string[];
   // JS injected BEFORE document starts loading (for fetch/XHR hooks).
   injectBefore?: string;
   // JS injected AFTER document loads — must call postMessage with the result.
@@ -29,6 +32,7 @@ type Pending = {
 let _seq = 0;
 const _queue: Pending[] = [];
 const _inFlight = new Map<string, Pending>(); // job id → pending
+const _cancelled = new Set<string>();
 let _onChange: (() => void) | null = null;
 
 // Rapid-navigation backlog guard. Each detail/watch screen enqueues background
@@ -86,10 +90,37 @@ export function _reject(id: string, message: string) {
   _onChange?.();
 }
 
-export function enqueue(job: Omit<ScrapeJob, "id">): Promise<any> {
+/** Drop work that was only warming/discovering servers. Priority jobs are
+ * explicit user selections and must survive. */
+export function _cancelBackground() {
+  const message = "cancelled: playback selected";
+  for (let i = _queue.length - 1; i >= 0; i--) {
+    if (_queue[i].job.priority) continue;
+    const [pending] = _queue.splice(i, 1);
+    pending.reject(new Error(message));
+  }
+  for (const [id, pending] of _inFlight) {
+    if (pending.job.priority) continue;
+    _inFlight.delete(id);
+    _cancelled.add(id);
+    pending.reject(new Error(message));
+  }
+  _onChange?.();
+}
+
+export function _isCancelled(id: string): boolean {
+  return _cancelled.has(id);
+}
+
+export function _consumeCancelled(id: string): boolean {
+  return _cancelled.delete(id);
+}
+
+export async function enqueue(job: Omit<ScrapeJob, "id" | "urls">): Promise<any> {
   const id = `s${++_seq}`;
+  const urls = await getSourceCandidates(job.url);
   return new Promise((resolve, reject) => {
-    const entry = { job: { ...job, id }, resolve, reject };
+    const entry = { job: { ...job, urls, id }, resolve, reject };
     if (job.priority) {
       // Place ahead of any non-priority jobs already queued.
       const at = _queue.findIndex((p) => !p.job.priority);

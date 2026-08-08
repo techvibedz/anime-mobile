@@ -16,6 +16,7 @@ const HELPERS = eval("`" + grab("HELPERS") + "`");
 const WIT_BASE = "https://witanime.you";
 const UP4_BASE = "https://w1.anime4up.rest";
 const want = "test title";
+const providerClassifierScript = () => "function provider(url){return 'generic';}";
 
 // Mirror of wrapOnce() in lib/scraper/ScraperHost.tsx.
 function wrapOnce(job) {

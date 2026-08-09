@@ -12,6 +12,13 @@
 import type { User } from "@supabase/supabase-js";
 import * as Application from "expo-application";
 import { supabase, isSupabaseConfigured } from "./supabase";
+import {
+  mapAdminHistoryRow,
+  mergeWatchSummaries,
+  type AdminHistoryRow,
+  type AdminWatchEntry,
+  type WatchSummaryRow,
+} from "./adminHistory";
 
 // The installed native app version — what tells us who's on an old build. This
 // is the APK version, NOT the OTA/JS bundle, so it's the right signal for "needs
@@ -115,6 +122,10 @@ export interface UsageRow {
   createdAt: string | null;
   /** Installed native app (APK) version, or null if not yet reported. */
   version: string | null;
+  /** Distinct episode history rows synchronized by this user. */
+  episodesStarted: number;
+  /** Episodes completed automatically or marked watched manually. */
+  episodesCompleted: number;
 }
 
 /**
@@ -125,9 +136,12 @@ export interface UsageRow {
  */
 export async function fetchAllUsage(): Promise<UsageRow[]> {
   if (!isSupabaseConfigured) return [];
-  const { data, error } = await supabase.rpc("admin_list_users");
+  const [{ data, error }, summary] = await Promise.all([
+    supabase.rpc("admin_list_users"),
+    supabase.rpc("admin_watch_summary"),
+  ]);
   if (error || !data) return [];
-  return (data as any[]).map((r) => ({
+  const users = (data as any[]).map((r) => ({
     userId: r.user_id,
     email: r.email ?? "",
     name: r.name ?? "",
@@ -139,6 +153,10 @@ export async function fetchAllUsage(): Promise<UsageRow[]> {
     createdAt: r.created_at ?? null,
     version: r.version ?? null,
   }));
+  return mergeWatchSummaries(
+    users,
+    summary.error ? [] : ((summary.data as WatchSummaryRow[] | null) ?? []),
+  );
 }
 
 export interface DailyRow {
@@ -164,3 +182,17 @@ export async function fetchUserDaily(userId: string): Promise<DailyRow[]> {
     opens: Number(r.opens) || 0,
   }));
 }
+
+export type AdminHistoryResult =
+  | { ok: true; entries: AdminWatchEntry[] }
+  | { ok: false; entries: []; error: string };
+
+/** Admin-only: complete synchronized episode history for one selected user. */
+export async function fetchUserWatchHistory(userId: string): Promise<AdminHistoryResult> {
+  if (!isSupabaseConfigured) return { ok: false, entries: [], error: "not_configured" };
+  const { data, error } = await supabase.rpc("admin_user_watch_history", { p_user_id: userId });
+  if (error || !data) return { ok: false, entries: [], error: error?.message ?? "failed" };
+  return { ok: true, entries: (data as AdminHistoryRow[]).map(mapAdminHistoryRow) };
+}
+
+export type { AdminWatchEntry } from "./adminHistory";

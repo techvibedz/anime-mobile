@@ -303,6 +303,17 @@ export default function UsersScreen() {
                       label={t.usersVersion}
                       value={u.version ? `v${u.version}` : t.usersNever}
                     />
+                    <Stat
+                      icon="play-outline"
+                      label={t.usersEpisodesStarted}
+                      value={String(u.episodesStarted)}
+                    />
+                    <Stat
+                      icon="checkmark-circle-outline"
+                      label={t.usersEpisodesCompleted}
+                      value={String(u.episodesCompleted)}
+                      strong
+                    />
                   </View>
                 </Pressable>
               );

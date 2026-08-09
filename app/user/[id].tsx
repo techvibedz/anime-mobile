@@ -15,8 +15,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
 import { isAdmin } from "../../lib/presence";
-import { fetchUserDaily, type DailyRow } from "../../lib/usage";
+import {
+  fetchUserDaily,
+  fetchUserWatchHistory,
+  type AdminWatchEntry,
+  type DailyRow,
+} from "../../lib/usage";
 import { adminOpenChat } from "../../lib/adminChat";
+import { posterUrl } from "../../lib/img";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora, ScreenHeader } from "../../components/ScreenChrome";
@@ -63,6 +69,13 @@ function dayLabel(day: string): string {
   return `${dd}/${mm}/${y}`;
 }
 
+function historyDate(iso: string): string {
+  const date = new Date(iso);
+  return isNaN(date.getTime()) ? "" : date.toLocaleString("ar");
+}
+
+type ProfileTab = "usage" | "history";
+
 export default function UserDetailScreen() {
   const insets = useSafeAreaInsets();
   const { user, ready } = useAuth();
@@ -80,7 +93,11 @@ export default function UserDetailScreen() {
   const lastSeen = params.last || "";
 
   const [days, setDays] = useState<DailyRow[]>([]);
+  const [history, setHistory] = useState<AdminWatchEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [activeTab, setActiveTab] = useState<ProfileTab>("usage");
   const [refreshing, setRefreshing] = useState(false);
   const [chatOpening, setChatOpening] = useState(false);
 
@@ -92,9 +109,19 @@ export default function UserDetailScreen() {
 
   const load = useCallback(async () => {
     if (!userId) return;
-    const next = await fetchUserDaily(userId);
-    setDays(next);
+    setHistoryError(false);
+    const [nextDays, nextHistory] = await Promise.all([
+      fetchUserDaily(userId),
+      fetchUserWatchHistory(userId),
+    ]);
+    setDays(nextDays);
+    if (nextHistory.ok) {
+      setHistory(nextHistory.entries);
+    } else {
+      setHistoryError(true);
+    }
     setLoaded(true);
+    setHistoryLoaded(true);
   }, [userId]);
 
   useEffect(() => {
@@ -103,8 +130,11 @@ export default function UserDetailScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
   }, [load]);
 
   // Open (or reopen) the thread with this user, then drop into the conversation.
@@ -134,6 +164,7 @@ export default function UserDetailScreen() {
   const activeDays = days.length;
   const avgSeconds = activeDays ? Math.round(totalSeconds / activeDays) : 0;
   const maxSeconds = days.reduce((m, d) => Math.max(m, d.seconds), 0);
+  const completedEpisodes = history.filter((entry) => entry.completed).length;
   const initial = (name || email || "?").trim().charAt(0).toUpperCase();
 
   return (
@@ -180,6 +211,8 @@ export default function UserDetailScreen() {
           <Summary icon="enter-outline" label={t.userTotalOpens} value={String(totalOpens)} />
           <Summary icon="calendar-outline" label={t.userActiveDays} value={String(activeDays)} />
           <Summary icon="speedometer-outline" label={t.userAvgPerDay} value={fmtDuration(avgSeconds)} />
+          <Summary icon="play-outline" label={t.usersEpisodesStarted} value={String(history.length)} />
+          <Summary icon="checkmark-circle-outline" label={t.usersEpisodesCompleted} value={String(completedEpisodes)} strong />
         </View>
 
         {/* Open / jump into the chat thread with this user */}
@@ -198,42 +231,162 @@ export default function UserDetailScreen() {
           </Text>
         </Pressable>
 
+        <View style={s.tabBar} accessibilityRole="tablist">
+          {([
+            { key: "usage" as const, label: t.userUsageTab },
+            { key: "history" as const, label: t.userHistoryTab },
+          ]).map((tab) => {
+            const active = activeTab === tab.key;
+            return (
+              <Pressable
+                key={tab.key}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+                onPress={() => setActiveTab(tab.key)}
+                style={[s.tabItem, active && s.tabItemActive]}
+              >
+                <Text style={[s.tabText, active && s.tabTextActive]}>{tab.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         {/* Daily list */}
-        {!loaded ? (
-          <View style={s.loadingWrap}>
-            <ActivityIndicator size="large" color={C.accent} />
-          </View>
-        ) : days.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyIcon}>
-              <Ionicons name="calendar-outline" size={30} color={C.textMuted} />
-            </View>
-            <Text style={s.emptyTitle}>{t.userNoDays}</Text>
-            <Text style={s.emptySub}>{t.userNoDaysSub}</Text>
-          </View>
-        ) : (
-          <View style={s.list}>
-            {days.map((d) => {
-              const pct = maxSeconds > 0 ? Math.max(0.06, d.seconds / maxSeconds) : 0;
-              return (
-                <View key={d.day} style={s.dayRow}>
-                  <View style={s.dayHead}>
-                    <Text style={s.dayTime} numberOfLines={1}>{fmtDuration(d.seconds)}</Text>
-                    <Text style={s.dayLabel} numberOfLines={1}>{dayLabel(d.day)}</Text>
-                  </View>
-                  <View style={s.dayBarTrack}>
-                    <View style={[s.dayBarFill, { width: `${Math.round(pct * 100)}%` }]} />
-                  </View>
-                  <View style={s.dayMeta}>
-                    <Text style={s.dayOpens}>{t.userDayOpens(d.opens)}</Text>
-                  </View>
+        {activeTab === "usage" && (
+          <View style={s.tabContent}>
+            {!loaded ? (
+              <View style={s.loadingWrap}>
+                <ActivityIndicator size="large" color={C.accent} />
+              </View>
+            ) : days.length === 0 ? (
+              <View style={s.emptyWrap}>
+                <View style={s.emptyIcon}>
+                  <Ionicons name="calendar-outline" size={30} color={C.textMuted} />
                 </View>
-              );
-            })}
+                <Text style={s.emptyTitle}>{t.userNoDays}</Text>
+                <Text style={s.emptySub}>{t.userNoDaysSub}</Text>
+              </View>
+            ) : (
+              <View style={s.list}>
+                {days.map((d) => {
+                  const pct = maxSeconds > 0 ? Math.max(0.06, d.seconds / maxSeconds) : 0;
+                  return (
+                    <View key={d.day} style={s.dayRow}>
+                      <View style={s.dayHead}>
+                        <Text style={s.dayTime} numberOfLines={1}>{fmtDuration(d.seconds)}</Text>
+                        <Text style={s.dayLabel} numberOfLines={1}>{dayLabel(d.day)}</Text>
+                      </View>
+                      <View style={s.dayBarTrack}>
+                        <View style={[s.dayBarFill, { width: `${Math.round(pct * 100)}%` }]} />
+                      </View>
+                      <View style={s.dayMeta}>
+                        <Text style={s.dayOpens}>{t.userDayOpens(d.opens)}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        )}
+
+        {activeTab === "history" && (
+          <View style={s.tabContent}>
+            {!historyLoaded ? (
+              <View style={s.historyLoading}>
+                <ActivityIndicator size="large" color={C.accent} />
+              </View>
+            ) : historyError ? (
+              <View style={s.emptyWrap}>
+                <View style={s.emptyIcon}>
+                  <Ionicons name="cloud-offline-outline" size={30} color={C.textMuted} />
+                </View>
+                <Text style={s.emptyTitle}>{t.userHistoryError}</Text>
+                <Pressable style={s.retryBtn} onPress={load}>
+                  <Text style={s.retryText}>{t.userHistoryRetry}</Text>
+                </Pressable>
+              </View>
+            ) : history.length === 0 ? (
+              <View style={s.emptyWrap}>
+                <View style={s.emptyIcon}>
+                  <Ionicons name="play-outline" size={30} color={C.textMuted} />
+                </View>
+                <Text style={s.emptyTitle}>{t.userHistoryEmpty}</Text>
+                <Text style={s.emptySub}>{t.userHistoryEmptySub}</Text>
+              </View>
+            ) : (
+              <View style={s.historyList}>
+                {history.map((entry) => {
+                  const percent = Math.round(entry.progress * 100);
+                  return (
+                    <Pressable
+                      key={entry.episodeHref}
+                      disabled={!entry.animeTitle}
+                      accessibilityRole="button"
+                      accessibilityLabel={entry.animeTitle}
+                      accessibilityHint="يفتح صفحة البحث"
+                      onPress={() => router.push(`/(tabs)/search?q=${encodeURIComponent(entry.animeTitle)}`)}
+                      style={({ pressed }) => [s.historyRow, pressed && s.historyRowPressed]}
+                    >
+                      <HistoryPoster key={entry.image} image={entry.image} />
+                      <View style={s.historyBody}>
+                        <Text style={s.historyAnime} numberOfLines={1}>{entry.animeTitle}</Text>
+                        <Text style={s.historyEpisode} numberOfLines={1}>{entry.episodeTitle}</Text>
+                        <View style={s.historyMeta}>
+                          <Text style={[s.historyStatus, entry.completed && s.historyCompleted]}>
+                            {entry.completed ? t.userHistoryCompleted : t.userHistoryProgress(percent)}
+                          </Text>
+                          <Text style={s.historyWhen}>{historyDate(entry.updatedAt)}</Text>
+                        </View>
+                        <View style={s.historyTrack}>
+                          <View
+                            style={[
+                              s.historyFill,
+                              entry.completed && s.historyFillCompleted,
+                              { width: `${entry.completed ? 100 : percent}%` },
+                            ]}
+                          />
+                        </View>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
     </View>
+  );
+}
+
+function HistoryPoster({ image }: { image: string }) {
+  const raw = image.trim();
+  const optimized = posterUrl(raw, 62);
+  const [useRaw, setUseRaw] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const uri = failed ? undefined : useRaw ? raw || undefined : optimized;
+
+  if (!uri) {
+    return (
+      <View style={[s.historyImage, s.historyImageFallback]}>
+        <Ionicons name="film-outline" size={22} color={C.textMuted} />
+      </View>
+    );
+  }
+
+  return (
+    <Image
+      source={{ uri }}
+      style={s.historyImage}
+      contentFit="cover"
+      cachePolicy="memory-disk"
+      transition={120}
+      onError={() => {
+        if (!useRaw && optimized !== raw) setUseRaw(true);
+        else setFailed(true);
+      }}
+    />
   );
 }
 
@@ -310,6 +463,20 @@ const s = StyleSheet.create({
   chatBtnBusy: { opacity: 0.7 },
   chatBtnText: { color: C.textOnAccent, fontSize: 14.5, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
+  tabBar: {
+    flexDirection: "row", marginTop: 18,
+    borderBottomWidth: 1, borderBottomColor: C.line,
+  },
+  tabItem: {
+    flex: 1, alignItems: "center", justifyContent: "center",
+    paddingVertical: 13, borderBottomWidth: 2,
+    borderBottomColor: "transparent", marginBottom: -1,
+  },
+  tabItemActive: { borderBottomColor: C.ember },
+  tabText: { color: C.textMuted, fontSize: 14, fontFamily: "Cairo_600SemiBold" },
+  tabTextActive: { color: C.bone, fontFamily: "Cairo_700Bold" },
+  tabContent: { paddingTop: 16 },
+
   list: { marginTop: 8, gap: 8 },
   dayRow: {
     padding: 14, borderRadius: R.lg,
@@ -326,6 +493,41 @@ const s = StyleSheet.create({
   dayBarFill: { height: "100%", borderRadius: R.pill, backgroundColor: C.accent },
   dayMeta: { marginTop: 8, alignItems: "flex-end" },
   dayOpens: { color: C.textMuted, fontSize: 11.5, fontFamily: "Cairo_500Medium" },
+
+  historyLoading: { paddingVertical: 40, alignItems: "center" },
+  historyList: { gap: 8 },
+  historyRow: {
+    flexDirection: "row-reverse", padding: 10, borderRadius: R.lg,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    ...ELEVATION_CARD,
+  },
+  historyRowPressed: { opacity: 0.82, transform: [{ scale: 0.99 }] },
+  historyImage: { width: 62, height: 82, borderRadius: R.md },
+  historyImageFallback: {
+    backgroundColor: C.glass, alignItems: "center", justifyContent: "center",
+    borderWidth: 1, borderColor: C.glassBorder,
+  },
+  historyBody: { flex: 1, marginRight: 12, alignItems: "flex-end" },
+  historyAnime: { color: C.text, fontSize: 14, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  historyEpisode: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium", marginTop: 2, textAlign: "right" },
+  historyMeta: {
+    alignSelf: "stretch", flexDirection: "row-reverse", justifyContent: "space-between",
+    alignItems: "center", marginTop: 8,
+  },
+  historyStatus: { color: C.accent, fontSize: 11, fontFamily: "Cairo_700Bold" },
+  historyCompleted: { color: C.success },
+  historyWhen: { color: C.textMuted, fontSize: 9.5, fontFamily: "Cairo_500Medium" },
+  historyTrack: {
+    alignSelf: "stretch", height: 5, borderRadius: R.pill, overflow: "hidden",
+    backgroundColor: C.glass, marginTop: 8,
+  },
+  historyFill: { height: "100%", borderRadius: R.pill, backgroundColor: C.accent },
+  historyFillCompleted: { backgroundColor: C.success },
+  retryBtn: {
+    marginTop: 12, paddingHorizontal: 18, paddingVertical: 8, borderRadius: R.pill,
+    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+  },
+  retryText: { color: C.accent, fontSize: 12, fontFamily: "Cairo_700Bold" },
 
   loadingWrap: { paddingVertical: 60, alignItems: "center" },
   emptyWrap: { alignItems: "center", paddingVertical: 56 },

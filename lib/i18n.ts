@@ -420,6 +420,8 @@ export const ar = {
   usersNoMatch: "لا نتائج مطابقة",
   usersNoMatchSub: "جرّب كلمة بحث مختلفة أو فلتراً آخر.",
   usersShowing: (n: number, total: number) => `عرض ${n} من ${total}`,
+  usersEpisodesStarted: "بدأ مشاهدتها",
+  usersEpisodesCompleted: "حلقات مكتملة",
 
   // Per-user daily detail (admin only)
   userTotalTime: "إجمالي الوقت",
@@ -427,11 +429,20 @@ export const ar = {
   userActiveDays: "أيام النشاط",
   userAvgPerDay: "المعدل اليومي",
   userDailyTitle: "النشاط اليومي",
+  userUsageTab: "وقت الاستخدام",
+  userHistoryTab: "سجل المشاهدة",
   userDayOpens: (n: number) => `${n} ${n === 1 ? "فتحة" : "فتحات"}`,
   userToday: "اليوم",
   userYesterday: "أمس",
   userNoDays: "لا توجد أيام مسجّلة بعد",
   userNoDaysSub: "ستظهر هنا تفاصيل كل يوم يفتح فيه المستخدم التطبيق ومدّة استخدامه.",
+  userHistoryTitle: "سجل المشاهدة الكامل",
+  userHistoryCompleted: "مكتملة",
+  userHistoryProgress: (n: number) => `شاهد ${n}%`,
+  userHistoryEmpty: "لا يوجد سجل مشاهدة",
+  userHistoryEmptySub: "لم يشاهد هذا المستخدم أي حلقة بعد.",
+  userHistoryError: "تعذّر تحميل سجل المشاهدة",
+  userHistoryRetry: "إعادة المحاولة",
 
   // Watch Party — "شاهد معاً"
   wpTitle: "المشاهدة المشتركة",

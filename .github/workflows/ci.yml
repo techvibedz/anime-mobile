@@ -61,10 +61,9 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_MESSAGE: ${{ inputs.message }}
         run: |
           VERSION=$(jq -r '.expo.version' app.json)
-          printf '%s\n' "$RELEASE_MESSAGE" > release-notes.txt
+          node -e "require('fs').writeFileSync('release-notes.txt', require('./version.json').release_notes)"
           gh release create "v$VERSION" "pantoufa-$VERSION.apk" \
             --target "$GITHUB_SHA" \
             --title "Pantoufa $VERSION" \

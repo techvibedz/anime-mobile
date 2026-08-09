@@ -373,6 +373,40 @@ export type WitHomeAnime = { title: string; href: string; image: string | null; 
 export type WitHomeEpisode = { title: string; href: string; image: string | null; animeTitle: string; animeHref: string; isNew: boolean };
 export type WitHome = { featured: WitHomeFeatured[]; animes: WitHomeAnime[]; episodes: WitHomeEpisode[] };
 
+function parseHomeSlides(html: string): { featured: WitHomeFeatured[]; episodes: WitHomeEpisode[] } {
+  const featured: WitHomeFeatured[] = [];
+  const episodes: WitHomeEpisode[] = [];
+  const seen = new Set<string>();
+  const re = /<a\b([^>]*\bclass=["'][^"']*lucodeia-slider-slide-item[^"']*["'][^>]*)>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const tag = m[1] || "";
+    const body = m[2] || "";
+    const href = (tag.match(/\bhref=["']([^"']+)["']/i)?.[1] || "").trim();
+    if (!href || seen.has(href)) continue;
+    seen.add(href);
+    const fullTitle = htmlDecode(
+      tag.match(/\btitle=["']([^"']*)["']/i)?.[1] || body.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i)?.[1]?.replace(/<[^>]+>/g, "") || "",
+    ).trim();
+    if (!fullTitle) continue;
+    const episodeMatch = fullTitle.match(/^(.*?)\s+الحلقة\s*(\d+)/);
+    const animeTitle = episodeMatch?.[1]?.trim() || fullTitle;
+    const image = tag.match(/url\(\s*['"]?([^'")]+)['"]?\s*\)/i)?.[1]?.trim() || null;
+    featured.push({ title: animeTitle, href, image, description: null, genres: [] });
+    if (episodeMatch) {
+      episodes.push({
+        title: `الحلقة ${episodeMatch[2]}`,
+        href,
+        image,
+        animeTitle,
+        animeHref: "",
+        isNew: true,
+      });
+    }
+  }
+  return { featured: featured.slice(0, 5), episodes };
+}
+
 // Parse the featured slider (<a class="lucodeia-slider-slide-item" …>). Static
 // HTML carries only the title/href/background-image — the genres/description
 // meta is injected by JS, so those come back empty (the hero still renders with
@@ -712,12 +746,23 @@ export async function fetchWitMoviesListing(): Promise<WitCard[] | null> {
 // the direct fetch only needs the network, not a working WebView, so a brand-
 // new user whose WebView is broken/outdated still gets a populated home.
 export async function fetchAnime4upHomeDirect(): Promise<
-  { title: string; href: string; image: string | null; type: string | null }[] | null
+  WitHome | null
 > {
   const html = await fetchHtml(UP4_BASE + "/", UP4_BASE + "/");
   if (!html) return null;
-  const cards = parseAnime4upCards(html);
-  return cards.length ? cards : null;
+  return parseAnime4upHomeHtml(html);
+}
+
+export function parseAnime4upHomeHtml(html: string): WitHome | null {
+  const { featured, episodes } = parseHomeSlides(html);
+  const animes: WitHomeAnime[] = parseAnime4upCards(html).map((card) => ({
+    ...card,
+    status: null,
+    description: null,
+    isNew: true,
+    rating: null,
+  }));
+  return featured.length || episodes.length || animes.length ? { featured, animes, episodes } : null;
 }
 
 // The anime4up current-season catalogue, scraped directly. anime4up's main menu

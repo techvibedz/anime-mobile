@@ -55,7 +55,11 @@ export async function scrapeAnime4upHome() {
     url: `${UP4_BASE}/home8/`,
     injectAfter: EXTRACT_HOME_4UP,
     timeoutMs: 35000,
-  }) as Promise<{ animes: Pick<RawAnime, "title" | "href" | "image" | "type">[] }>;
+  }) as Promise<{
+    featured: RawFeatured[];
+    animes: Pick<RawAnime, "title" | "href" | "image" | "type">[];
+    episodes: RawEpisodeCard[];
+  }>;
 }
 
 /* ── EPISODES (detail page) ────────────────────── */

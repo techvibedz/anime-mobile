@@ -140,10 +140,26 @@ _waitFor(
 })();true;`;
 
 // ──────────────────────────────────────────────────────────────
-// HOME (anime4up) — anime cards only
+// HOME (anime4up) — episode hero slides + anime cards
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_HOME_4UP = `(function(){${HELPERS}
 function scrape() {
+  var featured = [];
+  var episodes = [];
+  document.querySelectorAll('.lucodeia-slider-slide-item').forEach(function (el) {
+    var href = el.getAttribute('href') || '';
+    var fullTitle = (el.getAttribute('title') || (el.querySelector('h2') && el.querySelector('h2').textContent) || '').trim();
+    var match = fullTitle.match(/^(.*?)\s+الحلقة\s*(\d+)/);
+    if (!href || !fullTitle) return;
+    var animeTitle = match ? match[1].trim() : fullTitle;
+    var bgMatch = (el.getAttribute('style') || '').match(/url\(['"]?([^'"()]+)['"]?\)/);
+    var image = bgMatch ? bgMatch[1] : null;
+    featured.push({ title: animeTitle, href: href, image: image, description: null, genres: [] });
+    if (match) episodes.push({
+      title: 'الحلقة ' + match[2], href: href, image: image,
+      animeTitle: animeTitle, animeHref: '', isNew: true,
+    });
+  });
   var seen = {};
   var animes = [];
   document.querySelectorAll('.anime-card-container').forEach(function (el) {
@@ -160,10 +176,10 @@ function scrape() {
       type: (typeEl && typeEl.textContent.trim()) || null,
     });
   });
-  return { animes: animes };
+  return { featured: featured.slice(0, 5), animes: animes, episodes: episodes };
 }
 _waitFor(
-  function(){ return !!document.querySelector('.anime-card-container'); },
+  function(){ return !!document.querySelector('.anime-card-container, .lucodeia-slider-slide-item'); },
   function(ok, reason){ if (ok) _send('result', { data: scrape() }); else _send('error', { message: reason }); },
   20000
 );

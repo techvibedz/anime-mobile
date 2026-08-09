@@ -41,11 +41,13 @@ import {
   fetchWitHomeDirect,
   fetchAnime4upHomeDirect,
   fetchAnime3rbHomeDirect,
+  type WitHome,
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
 import { fuzzyScore } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 import { readCloudHome, writeCloudHome } from "./homeCloudCache";
+import { selectHomeSource } from "./homeSourceSelection";
 import { remoteLog } from "./remoteLog";
 import { createRequestCache, withTimeout } from "./requestCache";
 import {
@@ -325,13 +327,17 @@ function homeHasContent(p: HomePayload | null | undefined): p is HomePayload {
   return !!p && (p.data.featured.length > 0 || p.data.sections.length > 0);
 }
 
+function sourceHomeHasContent(home: WitHome | null | undefined): home is WitHome {
+  return !!home && (home.featured.length > 0 || home.animes.length > 0 || home.episodes.length > 0);
+}
+
 function buildHomePayload(
   wit: { featured: FeaturedItem[]; animes: any[]; episodes: any[] },
   up4Animes: { title: string; href: string; image: string | null; type: string | null }[],
   // Label the cards with the source they actually came from. Normally
   // "witanime"; the anime3rb last-resort path passes "anime3rb" so the detail
   // screen treats the href as an anime3rb page (not a witanime one).
-  primarySource: "witanime" | "anime3rb" = "witanime",
+  primarySource: "witanime" | "anime4up" | "anime3rb" = "witanime",
 ): HomePayload {
   const used4up = new Set<string>();
   const merged: MergedAnimeItem[] = wit.animes.map((w: any) => {
@@ -379,47 +385,48 @@ function buildHomePayload(
 }
 
 async function fetchHomeFresh(): Promise<HomePayload> {
-  // Fast path: parse the witanime home page straight from its static HTML (one
-  // plain GET, no WebView). This avoids the ~10-15s WebView cold-start + CF
-  // clear that made the home feed the slowest screen in the app. Fall back to
-  // the WebView scrape only when the direct fetch is empty (CF challenge / cold
-  // body) so the home is never blank.
-  let wit = await fetchWitHomeDirect().catch(() => null);
-  if (!wit) wit = await scrapeWitanimeHome().catch(() => null);
-  // FALLBACK to anime4up's home when witanime yields NOTHING. A region/ISP
-  // block on witanime.you (a single-user "stuck on loading" cause) used to
-  // leave the home screen permanently empty; anime4up lives on a different
-  // host that may be reachable. Only paid when wit is empty, so working users
-  // see zero extra cost. Without this, a blocked user never sees home content.
-  let up4Animes: { title: string; href: string; image: string | null; type: string | null }[] = [];
-  const witEmpty = !wit || (wit.animes.length === 0 && wit.episodes.length === 0 && wit.featured.length === 0);
-  if (witEmpty) {
-    // Direct (no-WebView) first: only needs the network, not a working WebView.
-    // A brand-new user whose hidden WebView is broken/outdated still gets a
-    // populated home — the single-user "stuck on loading" cause where VPN
-    // changes nothing because the WebView, not the network, is the broken part.
-    let up4 = await fetchAnime4upHomeDirect().catch(() => null);
-    if (up4 && up4.length > 0) {
-      up4Animes = up4;
-    } else {
-      // WebView fallback for when the static HTML doesn't carry the cards.
-      const viaWv = await scrapeAnime4upHome().catch(() => null);
-      up4Animes = viaWv?.animes ?? [];
-    }
-  }
-  // THIRD independent source: anime3rb's home (direct GET, JSON-LD parse). Paid
-  // only when BOTH WordPress sources are empty — the classic signature of an
-  // ISP-level block on their domains, which anime3rb's domain often escapes.
-  let a3rb: { featured: FeaturedItem[]; animes: any[]; episodes: any[] } | null = null;
-  if (witEmpty && up4Animes.length === 0) {
-    a3rb = await fetchAnime3rbHomeDirect().catch(() => null);
-  }
-  const a3rbEmpty = !a3rb || (a3rb.animes.length === 0 && a3rb.episodes.length === 0 && a3rb.featured.length === 0);
+  const selected = await selectHomeSource<WitHome>([
+    {
+      source: "witanime",
+      load: async () => {
+        const direct = await fetchWitHomeDirect().catch(() => null);
+        if (sourceHomeHasContent(direct)) return direct;
+        const viaWebView = await scrapeWitanimeHome().catch(() => null);
+        return sourceHomeHasContent(viaWebView) ? viaWebView : null;
+      },
+    },
+    {
+      source: "anime4up",
+      load: async () => {
+        const direct = await fetchAnime4upHomeDirect().catch(() => null);
+        if (direct) return direct;
+        const viaWebView = await scrapeAnime4upHome().catch(() => null);
+        if (!viaWebView) return null;
+        const normalized: WitHome = {
+          featured: viaWebView.featured ?? [],
+          episodes: viaWebView.episodes ?? [],
+          animes: (viaWebView.animes ?? []).map((anime) => ({
+            ...anime,
+            status: null,
+            description: null,
+            isNew: true,
+            rating: null,
+          })),
+        };
+        return sourceHomeHasContent(normalized) ? normalized : null;
+      },
+    },
+    {
+      source: "anime3rb",
+      load: () => fetchAnime3rbHomeDirect().catch(() => null),
+    },
+  ]);
+
   // LAST RESORT: the crowdsourced cloud home cache. A device blocked from EVERY
   // source domain (IP/SNI-level ISP filtering — DNS-over-HTTPS can't help) can
   // still reach Supabase, so it downloads the latest feed a working scout
   // uploaded instead of showing an empty home.
-  if (witEmpty && up4Animes.length === 0 && a3rbEmpty) {
+  if (!selected) {
     const cloud = await readCloudHome<HomePayload>().catch(() => null);
     if (homeHasContent(cloud)) {
       // Persist locally too: the next launch's SWR path serves it instantly,
@@ -435,20 +442,15 @@ async function fetchHomeFresh(): Promise<HomePayload> {
     // affected user. The per-stage flags tell the admin how far the cascade
     // got: wit/up4/a3rb empty points at a network-level block; cloud: "miss"
     // means no scout payload was available either.
-    void remoteLog("warn", "home", "fetchHomeFresh empty — both sources", {
-      witNull: witEmpty,
-      up4Count: up4Animes.length,
-      a3rbNull: a3rbEmpty,
+    void remoteLog("warn", "home", "fetchHomeFresh empty — all sources", {
+      witanime: "empty",
+      anime4up: "empty",
+      anime3rb: "empty",
       cloud: "miss",
     });
     return { success: true, data: { featured: [], sections: [] } };
   }
-  const result = witEmpty
-    ? a3rbEmpty
-      // anime4up-only feed (wit + a3rb empty, up4 has cards).
-      ? buildHomePayload({ featured: [], animes: [], episodes: [] }, up4Animes)
-      : buildHomePayload(a3rb!, [], "anime3rb")
-    : buildHomePayload(wit!, up4Animes);
+  const result = buildHomePayload(selected.home, [], selected.source);
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
   // serving it on every launch.

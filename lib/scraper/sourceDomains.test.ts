@@ -3,7 +3,9 @@ import {
   candidateForAttempt,
   classifySourceFailure,
   isRetryableSourceStatus,
+  isTopLevelWebViewError,
   isValidSourceHtml,
+  identifySource,
   nextCandidateIndex,
   preferredHostFromValue,
   sourceCandidates,
@@ -12,7 +14,9 @@ import {
 assert.deepEqual(sourceCandidates("https://witanime.you/anime/x?y=1", null), [
   "https://witanime.you/anime/x?y=1",
   "https://witanime.life/anime/x?y=1",
+  "https://witanime.cyou/anime/x?y=1",
 ]);
+assert.equal(identifySource("https://witanime.cyou/anime/x"), "witanime");
 assert.deepEqual(sourceCandidates("https://w1.anime4up.rest/home8/", "anime4up.rest"), [
   "https://anime4up.rest/home8/",
   "https://w1.anime4up.rest/home8/",
@@ -62,5 +66,15 @@ assert.equal(isRetryableSourceStatus(429), true);
 assert.equal(isRetryableSourceStatus(500), true);
 assert.equal(nextCandidateIndex(0, 2), 1);
 assert.equal(nextCandidateIndex(1, 2), null);
+
+assert.equal(
+  isTopLevelWebViewError("https://witanime.you/missing.js", "https://witanime.you/anime/example/"),
+  false,
+);
+assert.equal(
+  isTopLevelWebViewError("https://witanime.you/anime/example/#player", "https://witanime.you/anime/example/"),
+  true,
+);
+assert.equal(isTopLevelWebViewError(undefined, "https://witanime.you/anime/example/"), true);
 
 console.log("sourceDomains tests passed");

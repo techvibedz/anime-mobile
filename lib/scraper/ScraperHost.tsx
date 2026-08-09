@@ -8,6 +8,7 @@ import {
   clearSourcePreference,
   identifySource,
   isRetryableSourceStatus,
+  isTopLevelWebViewError,
   markSourceHealthy,
   nextCandidateIndex,
 } from "./sourceDomains";
@@ -98,6 +99,7 @@ function ScraperSlot({
   const [attemptIndex, setAttemptIndex] = useState(0);
   const attemptIndexRef = useRef(0);
   const changingUrlRef = useRef(false);
+  const topLevelUrlRef = useRef("");
   // URL the after-load script was last early-injected into. Reset on every
   // load start so reloads/redirects re-inject into the new document.
   const lastInjectedUrlRef = useRef<string | null>(null);
@@ -107,6 +109,7 @@ function ScraperSlot({
   useEffect(() => {
     attemptIndexRef.current = 0;
     changingUrlRef.current = false;
+    topLevelUrlRef.current = job?.urls[0] || job?.url || "";
     setAttemptIndex(0);
   }, [job?.id]);
 
@@ -130,6 +133,7 @@ function ScraperSlot({
       if (timerRef.current) clearTimeout(timerRef.current);
       void clearSourcePreference(currentUrl).catch(() => {});
       attemptIndexRef.current = next;
+      topLevelUrlRef.current = job.urls[next];
       lastInjectedUrlRef.current = null;
       setAttemptIndex(next);
       return;
@@ -142,7 +146,10 @@ function ScraperSlot({
       source,
       hostname,
       failure: classifySourceFailure(message, statusCode),
+      error: message.slice(0, 300),
       statusCode: statusCode || null,
+      attempt: attemptIndexRef.current + 1,
+      candidateCount: job.urls.length,
     });
     _reject(job.id, message);
     onDone();
@@ -226,6 +233,7 @@ function ScraperSlot({
       injectedJavaScript={wrapOnce(job)}
       onShouldStartLoadWithRequest={shouldStartLoad}
       onLoadStart={(e) => {
+        topLevelUrlRef.current = e.nativeEvent.url;
         if (e.nativeEvent.url === currentUrl || e.nativeEvent.url.startsWith(currentUrl)) {
           changingUrlRef.current = false;
         }
@@ -234,6 +242,7 @@ function ScraperSlot({
       onLoadProgress={maybeInjectEarly}
       onMessage={handleMessage}
       onError={(e) => {
+        if (!isTopLevelWebViewError(e.nativeEvent.url, topLevelUrlRef.current)) return;
         failAttempt(`WebView error: ${e.nativeEvent.description}`);
       }}
       onHttpError={(e) => {
@@ -243,6 +252,7 @@ function ScraperSlot({
         // later (this was why anime4up servers only appeared when CF
         // cookies were already warm). Let the injected _waitFor / the job
         // timeout decide instead. 429 is likewise transient.
+        if (!isTopLevelWebViewError(e.nativeEvent.url, topLevelUrlRef.current)) return;
         const sc = e.nativeEvent.statusCode;
         if (sc === 403 || sc === 503 || sc === 429) return;
         failAttempt(`HTTP ${sc}`, sc, isRetryableSourceStatus(sc));

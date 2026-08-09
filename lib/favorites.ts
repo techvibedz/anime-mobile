@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { supabase, isSupabaseConfigured } from "./supabase";
+import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 
 const KEY = "anime_favorites";
 
@@ -45,7 +45,7 @@ function isAnimeUrl(href: string): boolean {
 
 async function pushFavoriteToCloud(fav: FavoriteAnime) {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   const { error } = await supabase.from("favorites").upsert({
     user_id: user.id,
@@ -60,7 +60,7 @@ async function pushFavoriteToCloud(fav: FavoriteAnime) {
 
 async function deleteFavoriteFromCloud(href: string) {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   await supabase.from("favorites").delete().eq("user_id", user.id).eq("href", href);
 }
@@ -68,7 +68,7 @@ async function deleteFavoriteFromCloud(href: string) {
 /** Hydrate local cache from Supabase (called after sign-in). */
 export async function pullFavoritesFromCloud() {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   const { data, error } = await supabase.from("favorites")
     .select("*")

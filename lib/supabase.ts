@@ -36,5 +36,11 @@ export const supabase = createClient(
 
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
+/** Read the persisted client session without a remote Auth user request. */
+export async function getSessionUser() {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user ?? null;
+}
+
 /** Base URL for invoking Edge Functions, e.g. `${SUPABASE_FUNCTIONS_URL}/episode-notifier`. */
 export const SUPABASE_FUNCTIONS_URL = SUPABASE_URL ? `${SUPABASE_URL}/functions/v1` : "";

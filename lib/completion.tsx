@@ -15,7 +15,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { normAnimeKey, animeTitleKey, getCompletedSets, type CompletedSets } from "./history";
-import { supabase, isSupabaseConfigured } from "./supabase";
+import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 
 const KEY = "anime_completion_v2";
 
@@ -70,7 +70,7 @@ function notify() {
 /** Push one record to Supabase (fire-and-forget; logs on failure). */
 async function pushToCloud(rec: AnimeCompletion) {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   const { error } = await supabase.from("anime_completion").upsert({
     user_id: user.id,
@@ -135,7 +135,7 @@ export async function recordAnimeCompletion(rec: {
 /** Hydrate the local cache from Supabase (called after sign-in). */
 export async function pullCompletionFromCloud(): Promise<void> {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   const { data, error } = await supabase.from("anime_completion")
     .select("*")

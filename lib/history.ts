@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { supabase, isSupabaseConfigured } from "./supabase";
+import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 
 const KEY = "watch_history";
 const MAX_ITEMS = 200;
@@ -34,7 +34,7 @@ function autoCompleted(e: WatchEntry): boolean {
 /** Push a single history entry to Supabase (fire-and-forget; logs on failure). */
 async function pushToCloud(entry: WatchEntry) {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   const { error } = await supabase.from("watch_history").upsert({
     user_id: user.id,
@@ -55,7 +55,7 @@ async function pushToCloud(entry: WatchEntry) {
 
 async function deleteFromCloud(episodeHref: string) {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   await supabase.from("watch_history").delete()
     .eq("user_id", user.id)
@@ -65,7 +65,7 @@ async function deleteFromCloud(episodeHref: string) {
 /** Hydrate local cache from Supabase (called after sign-in). */
 export async function pullHistoryFromCloud() {
   if (!isSupabaseConfigured) return;
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) return;
   const { data, error } = await supabase.from("watch_history")
     .select("*")

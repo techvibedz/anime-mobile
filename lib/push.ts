@@ -12,7 +12,7 @@
 import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { getNotificationsEnabled, getNotificationScope, type NotificationScope } from "./settings";
-import { supabase, isSupabaseConfigured } from "./supabase";
+import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 
 let Notifications: typeof import("expo-notifications") | null = null;
 try {
@@ -174,8 +174,7 @@ export async function registerPushTokenAsync(userId: string): Promise<void> {
 export async function updateNotificationScopeRemote(scope: NotificationScope): Promise<void> {
   if (!isSupabaseConfigured) return;
   try {
-    const { data } = await supabase.auth.getUser();
-    const userId = data?.user?.id;
+    const userId = (await getSessionUser())?.id;
     if (!userId) return;
     await supabase.from("push_tokens").update({ notification_scope: scope }).eq("user_id", userId);
   } catch {
@@ -191,8 +190,7 @@ export async function updateNotificationScopeRemote(scope: NotificationScope): P
 export async function updateNotificationsEnabledRemote(enabled: boolean): Promise<void> {
   if (!isSupabaseConfigured) return;
   try {
-    const { data } = await supabase.auth.getUser();
-    const userId = data?.user?.id;
+    const userId = (await getSessionUser())?.id;
     if (!userId) return;
     await supabase.from("push_tokens").update({ enabled }).eq("user_id", userId);
   } catch {

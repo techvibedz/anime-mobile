@@ -26,6 +26,7 @@ import { getFavorites, toAnimeUrl, type FavoriteAnime } from "./favorites";
 import { normAnimeKey } from "./history";
 import { getNotificationScope, type NotificationScope } from "./settings";
 import { supabase, isSupabaseConfigured } from "./supabase";
+import { shouldRunEpisodeNotifier } from "./notificationQueue";
 
 const LIST_KEY = "@notifications_v1";
 // v3: dedup keys switched to the TLD-normalized anime key (see normAnimeKey).
@@ -428,13 +429,15 @@ export async function reportRecentEpisodes(opts?: { force?: boolean }): Promise<
     if (fresh.length === 0) return 0;
 
     // Idempotent upload (ON CONFLICT DO NOTHING keeps the first-seen row/time).
-    const { error } = await supabase
+    const { data: inserted, error } = await supabase
       .from("episode_queue")
-      .upsert(fresh, { onConflict: "episode_key", ignoreDuplicates: true });
+      .upsert(fresh, { onConflict: "episode_key", ignoreDuplicates: true })
+      .select("episode_key");
     // On failure, don't persist the seen-set so we retry these next time.
     if (error) return 0;
 
     await writeQueueSeen(seen);
+    if (!shouldRunEpisodeNotifier(inserted)) return 0;
 
     // Nudge the notifier for near-instant delivery (the cron is the backstop).
     // Must go through supabase.functions.invoke — a bare fetch omits the `apikey`
@@ -443,7 +446,7 @@ export async function reportRecentEpisodes(opts?: { force?: boolean }): Promise<
     try {
       await supabase.functions.invoke("episode-notifier", { body: {} });
     } catch {}
-    return fresh.length;
+    return inserted.length;
   } catch {
     return 0;
   }

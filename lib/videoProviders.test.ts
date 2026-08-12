@@ -6,6 +6,7 @@ import {
   anime4upEpisodeUrl,
   episodeNumberFromUrl,
   selectServerCandidates,
+  selectDownloadCandidates,
   serverCandidateSignature,
   isDirectProvider,
   isProviderSupported,
@@ -149,6 +150,26 @@ test("sorts by provider reliability then quality", () => {
     "Anime3rb 720p",
     "Mp4upload 480p",
     "Voe 1080p",
+  ]);
+});
+
+test("download picker keeps unique progressive providers in preferred quality order", () => {
+  const selected = selectDownloadCandidates([
+    [
+      { name: "Mp4upload 720p", provider: "mp4upload", iframeUrl: "https://mp4upload.com/e/1/" },
+      { name: "HLS 1080p", provider: "streamwish", iframeUrl: "https://streamwish.to/e/1" },
+    ],
+    [
+      { name: "Anime3rb 720p", provider: "vid3rb", iframeUrl: "https://video.vid3rb.com/player/1#vid3rb=720" },
+      { name: "Anime3rb 1080p", provider: "vid3rb", iframeUrl: "https://video.vid3rb.com/player/1#vid3rb=1080" },
+      { name: "Duplicate", provider: "mp4upload", iframeUrl: "https://mp4upload.com/e/1" },
+      { name: "Empty", provider: "mp4upload", iframeUrl: "" },
+    ],
+  ]);
+  assert.deepEqual(selected.map(({ provider, quality }) => [provider, quality]), [
+    ["vid3rb", "FHD"],
+    ["vid3rb", "HD"],
+    ["mp4upload", "HD"],
   ]);
 });
 

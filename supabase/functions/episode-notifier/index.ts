@@ -235,6 +235,29 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Check the small shared queue before downloading every user's tokens and
+  // favorites. Most cron runs are idle, so fan-out data is unnecessary egress.
+  const cutoff = new Date(Date.now() - QUEUE_TTL_HOURS * 3600 * 1000).toISOString();
+  const { data: queueRows } = await supabase
+    .from("episode_queue")
+    .select("*")
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: true })
+    .limit(500);
+  const sanitized = ((queueRows ?? []) as QueueRow[]).filter(isPlausibleRow).map(sanitizeRow);
+  const queueByKey = new Map<string, QueueRow>();
+  for (const q of sanitized) {
+    const ek = `${normAnimeKey(q.anime_key)}#${q.episode_number}`;
+    if (!queueByKey.has(ek)) queueByKey.set(ek, q);
+  }
+  const queue = [...queueByKey.values()];
+  if (queue.length === 0) {
+    try {
+      await supabase.from("episode_queue").delete().lt("created_at", cutoff);
+    } catch { /* ignore */ }
+    return new Response(JSON.stringify({ ok: true, queued: 0 }), { headers: JSON_HEADERS });
+  }
+
   // 1. Tokens, split by scope (default "all" matches the app default).
   const { data: tokenRows } = await supabase
     .from("push_tokens")
@@ -273,25 +296,6 @@ Deno.serve(async (req) => {
       if (nt) titles.add(nt);
     }
   }
-
-  // 3. Recent queue rows (the witanime feed the app reported).
-  const cutoff = new Date(Date.now() - QUEUE_TTL_HOURS * 3600 * 1000).toISOString();
-  const { data: queueRows } = await supabase
-    .from("episode_queue")
-    .select("*")
-    .gte("created_at", cutoff)
-    .order("created_at", { ascending: true })
-    .limit(500);
-  const sanitized = ((queueRows ?? []) as QueueRow[]).filter(isPlausibleRow).map(sanitizeRow);
-  // Collapse rows that are the SAME episode under different witanime TLDs
-  // (.life vs .you) to one, keeping the earliest (rows arrive created_at-asc).
-  // Halves the work below and removes any dependence on claim ordering.
-  const queueByKey = new Map<string, QueueRow>();
-  for (const q of sanitized) {
-    const ek = `${normAnimeKey(q.anime_key)}#${q.episode_number}`;
-    if (!queueByKey.has(ek)) queueByKey.set(ek, q);
-  }
-  const queue = [...queueByKey.values()];
 
   // ── Flood guard: never push episodes that predate the token ──────
   // The bug this fixes: the OLD guard only protected users with ZERO notification

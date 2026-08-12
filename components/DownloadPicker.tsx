@@ -29,6 +29,7 @@ export function DownloadPicker({
 }) {
   // null = still loading the server list; [] = none found.
   const [servers, setServers] = useState<DownloadServer[] | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!visible || !meta) {
@@ -49,7 +50,7 @@ export function DownloadPicker({
     return () => {
       alive = false;
     };
-  }, [visible, meta]);
+  }, [visible, meta, attempt]);
 
   const pick = (s: DownloadServer) => {
     if (!meta) return;
@@ -73,7 +74,13 @@ export function DownloadPicker({
               <Text style={st.loadingText}>{t.loadingServers}</Text>
             </View>
           ) : servers.length === 0 ? (
-            <Text style={st.empty}>{t.downloadNoServer}</Text>
+            <View style={st.emptyState}>
+              <Text style={st.empty}>{t.downloadNoServer}</Text>
+              <Pressable style={st.retry} onPress={() => setAttempt((value) => value + 1)}>
+                <Ionicons name="refresh" size={16} color={C.accent} />
+                <Text style={st.retryText}>{t.retry}</Text>
+              </Pressable>
+            </View>
           ) : (
             servers.map((s, i) => {
               const fhd = s.quality === "FHD";
@@ -135,13 +142,15 @@ const st = StyleSheet.create({
   },
   loading: { paddingVertical: 28, alignItems: "center", gap: 10 },
   loadingText: { color: C.textMuted, fontSize: 12, fontFamily: "Cairo_500Medium" },
+  emptyState: { alignItems: "center", gap: 8, paddingVertical: 16 },
   empty: {
     color: C.textMuted,
     fontSize: 13,
     textAlign: "center",
-    paddingVertical: 24,
     fontFamily: "Cairo_500Medium",
   },
+  retry: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8 },
+  retryText: { color: C.accent, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
   option: {
     flexDirection: "row",
     alignItems: "center",

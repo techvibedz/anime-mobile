@@ -4,7 +4,7 @@ export type SourceId = "witanime" | "anime4up" | "anime3rb";
 export type SourceFailure = "dns" | "network" | "timeout" | "ssl" | "http" | "cloudflare" | "invalid-content";
 
 export const SOURCE_DOMAINS: Record<SourceId, readonly string[]> = {
-  witanime: ["witanime.you", "witanime.life", "witanime.cyou"],
+  witanime: ["witanime.you", "witanime.life"],
   anime4up: ["w1.anime4up.rest", "anime4up.rest"],
   anime3rb: ["anime3rb.com", "www.anime3rb.com"],
 };

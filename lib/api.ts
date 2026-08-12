@@ -4,7 +4,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   scrapeWitanimeHome,
-  scrapeAnime4upHome,
   scrapeEpisodesPage,
   scrapeSearch,
   scrapeSearchUp4,
@@ -39,15 +38,13 @@ import {
   extractVideas,
   extractDoodstream,
   fetchWitHomeDirect,
-  fetchAnime4upHomeDirect,
-  fetchAnime3rbHomeDirect,
   type WitHome,
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
 import { fuzzyScore } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
-import { readCloudHome, writeCloudHome } from "./homeCloudCache";
-import { selectHomeSource } from "./homeSourceSelection";
+import { writeCloudHome } from "./homeCloudCache";
+import { loadWitanimeHome } from "./homeSourceSelection";
 import { remoteLog } from "./remoteLog";
 import { createRequestCache, withTimeout } from "./requestCache";
 import {
@@ -57,6 +54,7 @@ import {
   validateDirectServers,
   isProviderSupported,
   mergeVideoServers,
+  selectDownloadCandidates,
   selectServerCandidates,
   serverCandidateSignature,
   normalizeServerUrl,
@@ -73,7 +71,7 @@ import {
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
 // detail page with a boilerplate/seasons-grid synopsis. Old cached entries
 // are simply ignored, forcing a fresh scrape with the current parsers.
-const HOME_CACHE_KEY = "@home_cache_v2";
+const HOME_CACHE_KEY = "@home_cache_v3";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -385,72 +383,21 @@ function buildHomePayload(
 }
 
 async function fetchHomeFresh(): Promise<HomePayload> {
-  const selected = await selectHomeSource<WitHome>([
-    {
-      source: "witanime",
-      load: async () => {
-        const direct = await fetchWitHomeDirect().catch(() => null);
-        if (sourceHomeHasContent(direct)) return direct;
-        const viaWebView = await scrapeWitanimeHome().catch(() => null);
-        return sourceHomeHasContent(viaWebView) ? viaWebView : null;
-      },
+  const home = await loadWitanimeHome<WitHome>(
+    async () => {
+      const direct = await fetchWitHomeDirect();
+      return sourceHomeHasContent(direct) ? direct : null;
     },
-    {
-      source: "anime4up",
-      load: async () => {
-        const direct = await fetchAnime4upHomeDirect().catch(() => null);
-        if (direct) return direct;
-        const viaWebView = await scrapeAnime4upHome().catch(() => null);
-        if (!viaWebView) return null;
-        const normalized: WitHome = {
-          featured: viaWebView.featured ?? [],
-          episodes: viaWebView.episodes ?? [],
-          animes: (viaWebView.animes ?? []).map((anime) => ({
-            ...anime,
-            status: null,
-            description: null,
-            isNew: true,
-            rating: null,
-          })),
-        };
-        return sourceHomeHasContent(normalized) ? normalized : null;
-      },
+    async () => {
+      const viaWebView = await scrapeWitanimeHome();
+      return sourceHomeHasContent(viaWebView) ? viaWebView : null;
     },
-    {
-      source: "anime3rb",
-      load: () => fetchAnime3rbHomeDirect().catch(() => null),
-    },
-  ]);
-
-  // LAST RESORT: the crowdsourced cloud home cache. A device blocked from EVERY
-  // source domain (IP/SNI-level ISP filtering — DNS-over-HTTPS can't help) can
-  // still reach Supabase, so it downloads the latest feed a working scout
-  // uploaded instead of showing an empty home.
-  if (!selected) {
-    const cloud = await readCloudHome<HomePayload>().catch(() => null);
-    if (homeHasContent(cloud)) {
-      // Persist locally too: the next launch's SWR path serves it instantly,
-      // and a live scrape (if the block lifts) overwrites it as usual. Never
-      // re-upload a cloud payload — a stale feed would echo between devices.
-      void writeCache(HOME_CACHE_KEY, cloud);
-      void remoteLog("info", "home", "home served from cloud cache", {
-        sections: cloud.data.sections.length,
-      });
-      return cloud;
-    }
-    // EVERY source yielded nothing — the exact "stuck on loading" state for the
-    // affected user. The per-stage flags tell the admin how far the cascade
-    // got: wit/up4/a3rb empty points at a network-level block; cloud: "miss"
-    // means no scout payload was available either.
-    void remoteLog("warn", "home", "fetchHomeFresh empty — all sources", {
-      witanime: "empty",
-      anime4up: "empty",
-      anime3rb: "empty",
-      cloud: "miss",
-    });
+  );
+  if (!home) {
+    void remoteLog("warn", "home", "Witanime home unavailable", { witanime: "empty" });
     return { success: true, data: { featured: [], sections: [] } };
   }
-  const result = buildHomePayload(selected.home, [], selected.source);
+  const result = buildHomePayload(home, []);
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
   // serving it on every launch.
@@ -1760,14 +1707,6 @@ export async function fetchAllAnime(page = 1): Promise<{
  * out a progressive .mp4 are considered: vid3rb (anime3rb's first-party host,
  * direct 1080p) first, then mp4upload. Returns the URL plus the CDN headers the
  * file fetch needs (the signed URLs are bound to the right Referer/UA). */
-function dlQualityScore(name: string): number {
-  const n = (name || "").toLowerCase();
-  if (n.includes("fhd") || n.includes("1080")) return 3;
-  if (n.includes("hd") || n.includes("720")) return 2;
-  if (n.includes("sd") || n.includes("480") || n.includes("360")) return 0;
-  return 1;
-}
-
 function dlHeaders(provider: string): Record<string, string> {
   const h: Record<string, string> = { "User-Agent": VIDEO_USER_AGENT };
   if (provider === "mp4upload") h.Referer = "https://www.mp4upload.com/";
@@ -1777,11 +1716,6 @@ function dlHeaders(provider: string): Record<string, string> {
 
 export type DownloadServer = { name: string; iframeUrl: string; provider: string; quality: string };
 
-function dlQualityLabel(name: string): string {
-  const s = dlQualityScore(name);
-  return s === 3 ? "FHD" : s === 2 ? "HD" : s === 0 ? "SD" : "";
-}
-
 export async function listDownloadServers(opts: {
   episodeHref: string;
   url4up?: string;
@@ -1790,16 +1724,23 @@ export async function listDownloadServers(opts: {
   animeTitle?: string | null;
 }): Promise<DownloadServer[]> {
   const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
-  const complete = await fetchCompleteVideoServers({
-    episodeUrl: episodeHref,
-    url4up,
-    url3rb,
-    animeTitle,
-    episodeNumber: epNum,
-  }).catch(() => null);
-  return (complete?.data.servers || [])
-    .filter((server) => isDownloadProvider(server.provider) && server.iframeUrl)
-    .map((c) => ({ name: c.name, iframeUrl: c.iframeUrl, provider: c.provider, quality: dlQualityLabel(c.name) }));
+  const [primary, anime3rb] = await Promise.all([
+    withTimeout(fetchVideoServers(episodeHref, url4up).catch(() => null), 15_000, null),
+    withTimeout(
+      (url3rb
+        ? fetchAnime3rbServersByUrl(url3rb)
+        : animeTitle && epNum != null
+          ? fetchAnime3rbServers(animeTitle, epNum)
+          : Promise.resolve([] as RawServer[])
+      ).catch(() => [] as RawServer[]),
+      15_000,
+      [] as RawServer[],
+    ),
+  ]);
+  return selectDownloadCandidates([
+    primary?.data.servers || [],
+    anime3rb,
+  ]);
 }
 
 export async function resolveDownloadUrl(opts: {

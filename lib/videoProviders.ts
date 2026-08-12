@@ -138,6 +138,21 @@ export function selectServerCandidates<T extends { provider: string }>(servers: 
   return servers.filter((server) => isDirectProvider(server.provider));
 }
 
+export function selectDownloadCandidates<
+  T extends { id?: string; name: string; provider: string; iframeUrl: string },
+>(groups: readonly (readonly T[])[]): (T & { id: string; quality: string })[] {
+  return mergeVideoServers(groups)
+    .filter((server) => isDownloadProvider(server.provider))
+    .map((server) => ({
+      ...server,
+      quality: qualityScore(server.name) === 3
+        ? "FHD"
+        : qualityScore(server.name) === 2
+          ? "HD"
+          : qualityScore(server.name) === 0 ? "SD" : "",
+    }));
+}
+
 export function serverCandidateSignature(servers: readonly { provider: string; iframeUrl: string; source?: string }[]): string {
   return servers.map((server) => `${server.source || ""}|${server.provider}|${server.iframeUrl}`).join("\n");
 }

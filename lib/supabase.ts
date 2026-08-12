@@ -5,25 +5,18 @@ import { createClient } from "@supabase/supabase-js";
 /**
  * Supabase client for the anime mobile app.
  *
- * Configuration is read from env vars at build time:
+ * Configuration can be overridden by env vars at build time:
  *   EXPO_PUBLIC_SUPABASE_URL=<your project URL>
  *   EXPO_PUBLIC_SUPABASE_ANON_KEY=<your project anon key>
  *
- * Set these in a `.env` file at the project root (see SETUP.md).
+ * The public project URL and anon key remain bundled as OTA-safe defaults.
  */
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
-
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.warn(
-    "[supabase] Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY. " +
-      "Auth and cloud sync will be disabled. See SETUP.md.",
-  );
-}
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "https://iwrphgttbjqifstqttqm.supabase.co";
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3cnBoZ3R0YmpxaWZzdHF0dHFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMTQ1NTgsImV4cCI6MjA5NDU5MDU1OH0.eKooQPiqXAdBvnjvVCWW837pFbXjVdQ_xywinm82EUE";
 
 export const supabase = createClient(
-  SUPABASE_URL || "https://placeholder.supabase.co",
-  SUPABASE_ANON_KEY || "placeholder-anon-key",
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
   {
     auth: {
       storage: AsyncStorage,

@@ -5,7 +5,6 @@ import {
   isRetryableSourceStatus,
   isTopLevelWebViewError,
   isValidSourceHtml,
-  identifySource,
   nextCandidateIndex,
   preferredHostFromValue,
   sourceCandidates,
@@ -14,9 +13,7 @@ import {
 assert.deepEqual(sourceCandidates("https://witanime.you/anime/x?y=1", null), [
   "https://witanime.you/anime/x?y=1",
   "https://witanime.life/anime/x?y=1",
-  "https://witanime.cyou/anime/x?y=1",
 ]);
-assert.equal(identifySource("https://witanime.cyou/anime/x"), "witanime");
 assert.deepEqual(sourceCandidates("https://w1.anime4up.rest/home8/", "anime4up.rest"), [
   "https://anime4up.rest/home8/",
   "https://w1.anime4up.rest/home8/",

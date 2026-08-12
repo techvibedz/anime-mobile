@@ -233,6 +233,7 @@ export default function AdminChatThreadScreen() {
           ref={scrollRef}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           contentContainerStyle={{ padding: S.paddingContent, paddingBottom: 24, flexGrow: 1 }}
         >
           {!loaded ? (
@@ -292,16 +293,18 @@ export default function AdminChatThreadScreen() {
             value={draft}
             onChangeText={setDraft}
             placeholder={closed ? t.chatReplyDisabled : t.chatPlaceholder}
-            placeholderTextColor={closed ? C.textMuted : C.textMuted}
+            placeholderTextColor={C.textMuted}
             multiline
             editable={!closed && !sending && !sendingPhoto}
             textAlign="right"
             textAlignVertical="center"
+            accessibilityLabel={t.chatPlaceholder}
           />
           <Pressable
             onPress={onAttachPhoto}
             disabled={closed || sendingPhoto || sending}
             hitSlop={8}
+            accessibilityRole="button"
             accessibilityLabel={t.chatAttachPhoto}
             style={({ pressed }) => [
               s.attachBtn,
@@ -310,14 +313,16 @@ export default function AdminChatThreadScreen() {
             ]}
           >
             {sendingPhoto ? (
-              <ActivityIndicator size="small" color={C.accent} />
+              <ActivityIndicator size="small" color={C.mint} />
             ) : (
-              <Ionicons name="camera-outline" size={22} color={C.accent} />
+              <Ionicons name="camera-outline" size={23} color={C.mint} />
             )}
           </Pressable>
           <Pressable
             onPress={onSend}
             disabled={closed || sending || sendingPhoto || !draft.trim()}
+            accessibilityRole="button"
+            accessibilityLabel={t.chatSend}
             style={({ pressed }) => [
               s.sendBtn,
               pressed && s.sendBtnPressed,
@@ -325,9 +330,9 @@ export default function AdminChatThreadScreen() {
             ]}
           >
             {sending ? (
-              <ActivityIndicator size="small" color={C.textOnAccent} />
+              <ActivityIndicator size="small" color={C.mint} />
             ) : (
-              <Ionicons name="send" size={22} color={C.textOnAccent} />
+              <Ionicons name="send" size={23} color={C.mint} />
             )}
           </Pressable>
         </View>
@@ -347,18 +352,19 @@ const s = StyleSheet.create({
 
   bubble: {
     borderRadius: R.lg,
-    paddingHorizontal: 13, paddingVertical: 9,
-    maxWidth: "82%",
+    paddingHorizontal: 14, paddingVertical: 10,
+    maxWidth: "84%",
   },
   bubbleMine: {
     alignSelf: "flex-end",
-    backgroundColor: C.accent,
+    backgroundColor: C.accentSoft,
+    borderWidth: 1, borderColor: C.borderAccent,
     borderBottomRightRadius: 5,
   },
   bubbleTheirs: {
     alignSelf: "flex-start",
-    backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surfaceLight,
+    borderWidth: 1, borderColor: C.glassBorder,
     borderBottomLeftRadius: 5,
   },
   bubblePhoto: {
@@ -370,9 +376,9 @@ const s = StyleSheet.create({
     width: 220, height: 220, borderRadius: Math.max(R.lg - 3, 10),
   },
   bubbleBody: { fontSize: 14.5, lineHeight: 20, fontFamily: "Cairo_500Medium", textAlign: "right" },
-  bubbleBodyMine: { color: C.textOnAccent, fontWeight: "600" },
+  bubbleBodyMine: { color: C.text, fontWeight: "600" },
   bubbleBodyTheirs: { color: C.text },
-  bubbleTime: { color: C.textFaint, fontSize: 10, marginTop: 3, fontFamily: "Cairo_500Medium", alignSelf: "flex-start" },
+  bubbleTime: { color: C.textMuted, fontSize: 10, marginTop: 4, fontFamily: "Cairo_500Medium", alignSelf: "flex-start" },
   bubbleTimeMine: { alignSelf: "flex-end" },
 
   closedBanner: {
@@ -403,32 +409,33 @@ const s = StyleSheet.create({
   statusBtnTextClosed: { color: C.textMuted },
 
   composer: {
-    flexDirection: "row-reverse", alignItems: "flex-end",
-    paddingHorizontal: S.paddingContent, paddingTop: 10,
-    backgroundColor: C.bg,
-    borderTopWidth: 1, borderTopColor: C.border,
+    flexDirection: "row", direction: "ltr", alignItems: "flex-end",
+    paddingHorizontal: S.md, paddingTop: 12,
+    backgroundColor: C.surfaceContainer,
+    borderTopWidth: 1, borderTopColor: C.glassBorder,
   },
   input: {
-    flex: 1, minHeight: 44, maxHeight: 120,
-    paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: R.xl, marginRight: 10,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    flex: 1, minHeight: 52, maxHeight: 120,
+    paddingHorizontal: 16, paddingVertical: 11,
+    borderRadius: R.xl,
+    backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.glassBorder,
     color: C.text, fontSize: 14, lineHeight: 20, fontFamily: "Cairo_500Medium",
   },
   inputDisabled: { borderColor: "rgba(255,255,255,0.06)", backgroundColor: C.surfaceLight },
   attachBtn: {
-    width: 44, height: 44, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    width: 52, height: 52, borderRadius: R.circle,
+    backgroundColor: C.mintSoft, borderWidth: 1, borderColor: C.mint,
     alignItems: "center", justifyContent: "center",
-    marginRight: 8,
+    marginLeft: 18,
   },
   attachBtnPressed: { transform: [{ scale: 0.94 }], opacity: 0.7 },
   attachBtnDisabled: { opacity: 0.35 },
   sendBtn: {
-    width: 48, height: 48, borderRadius: R.circle,
-    backgroundColor: C.accent, alignItems: "center", justifyContent: "center",
+    width: 52, height: 52, borderRadius: R.circle,
+    backgroundColor: C.mintSoft, borderWidth: 1, borderColor: C.mint,
+    alignItems: "center", justifyContent: "center", marginLeft: 14,
     ...ELEVATION_GLOW,
   },
   sendBtnPressed: { transform: [{ scale: 0.94 }] },
-  sendBtnDisabled: { opacity: 0.55, backgroundColor: C.accentMuted },
+  sendBtnDisabled: { opacity: 0.35 },
 });

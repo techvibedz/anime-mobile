@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { parseAnime4upHomeHtml } from "./direct";
-import { selectHomeSource } from "../homeSourceSelection";
+import { loadWitanimeHome } from "../homeSourceSelection";
 
 const html = `
   <a href="https://w1.anime4up.rest/episode/anime-bleach-الحلقة-3-مترجمة/"
@@ -27,20 +27,23 @@ async function main() {
   assert.equal(home.animes[0]?.title, "Bleach");
   assert.equal(home.animes[0]?.type, "TV");
 
-  const started = Date.now();
-  const selected = await selectHomeSource([
-    { source: "witanime", load: () => new Promise<null>(() => {}) },
-    { source: "anime4up", load: async () => home },
-    { source: "anime3rb", load: async () => null },
-  ], 10, 100);
-  assert.equal(selected?.source, "anime4up");
-  assert.ok(Date.now() - started < 80, "secondary source must not wait for blocked primary");
+  let webViewCalls = 0;
+  assert.equal(await loadWitanimeHome(async () => home, async () => {
+    webViewCalls += 1;
+    return null;
+  }), home);
+  assert.equal(webViewCalls, 0);
 
-  const preferred = await selectHomeSource([
-    { source: "witanime", load: () => new Promise((resolve) => setTimeout(() => resolve(home), 5)) },
-    { source: "anime4up", load: async () => home },
-  ], 20, 100);
-  assert.equal(preferred?.source, "witanime");
+  assert.equal(await loadWitanimeHome(async () => null, async () => {
+    webViewCalls += 1;
+    return home;
+  }), home);
+  assert.equal(webViewCalls, 1);
+
+  assert.equal(await loadWitanimeHome(
+    async () => { throw new Error("direct failed"); },
+    async () => { throw new Error("webview failed"); },
+  ), null);
 
   console.log("home fallback tests passed");
 }

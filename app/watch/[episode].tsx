@@ -51,6 +51,12 @@ interface ServerState {
   videoUrl: string | null;
 }
 
+const localServer = (videoUrl: string): ServerState => ({
+  server: { id: "local", name: t.downloaded, iframeUrl: "", provider: "local", source: "local" },
+  status: "playing",
+  videoUrl,
+});
+
 // Where a server should land when direct resolution is exhausted.
 const failStatus = (provider?: string): ServerStatus =>
   providerFailureMode(provider) as ServerStatus;
@@ -166,14 +172,14 @@ export default function WatchScreen() {
   // witanime/anime4up URLs). The enrichment effects prefer this.
   const paramEpNum = epNumParam && /^\d+$/.test(epNumParam) ? parseInt(epNumParam, 10) : null;
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!localUri);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [animeTitle, setAnimeTitle] = useState("");
   const [animeHref, setAnimeHref] = useState("");
   const [nextEpisodeHref, setNextEpisodeHref] = useState<string | null>(null);
   const [prevEpisodeHref, setPrevEpisodeHref] = useState<string | null>(null);
-  const [servers, setServers] = useState<ServerState[]>([]);
+  const [servers, setServers] = useState<ServerState[]>(() => localUri ? [localServer(localUri)] : []);
   const [activeIdx, setActiveIdx] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   // Server-selection gate. On a fresh tap from the episode list/home/history we
@@ -651,11 +657,7 @@ export default function WatchScreen() {
     if (!force) autoLoadKeyRef.current = autoLoadKey;
     const generation = loadGenerationRef.current.next();
     if (localUri) {
-      setServers([{
-        server: { id: "local", name: t.downloaded, iframeUrl: "", provider: "local", source: "local" },
-        status: "playing",
-        videoUrl: localUri,
-      }]);
+      setServers([localServer(localUri)]);
       setTitle(animeTitleParam ? decodeURIComponent(animeTitleParam) : "");
       setAnimeTitle(animeTitleParam ? decodeURIComponent(animeTitleParam) : "");
       if (animeParam) setAnimeHref(decodeURIComponent(animeParam));
@@ -1769,7 +1771,7 @@ export default function WatchScreen() {
             <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
-            <Pressable onPress={goToAnimePage} style={ss.titleArea} hitSlop={6}>
+            <View style={ss.titleArea}>
               <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
               {active && (
                 <View style={ss.metaRow}>
@@ -1782,7 +1784,7 @@ export default function WatchScreen() {
                   </Text>
                 </View>
               )}
-            </Pressable>
+            </View>
             <Pressable onPress={goToAnimePage} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="information-circle-outline" size={20} color={C.white} />
             </Pressable>
@@ -1909,7 +1911,7 @@ export default function WatchScreen() {
             <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
-            <Pressable onPress={goToAnimePage} style={ss.titleArea} hitSlop={6}>
+            <View style={ss.titleArea}>
               <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
               {active && (
                 <View style={ss.metaRow}>
@@ -1923,7 +1925,7 @@ export default function WatchScreen() {
                   </Text>
                 </View>
               )}
-            </Pressable>
+            </View>
             <Pressable onPress={goToAnimePage} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="information-circle-outline" size={20} color={C.white} />
             </Pressable>

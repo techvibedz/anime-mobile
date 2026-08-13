@@ -79,6 +79,7 @@ export default function AnimeDetailScreen() {
   // Related anime (sequels, prequels, side stories, spin-offs) from AniList —
   // the source sites carry no related section, so these are resolved by title.
   const [relations, setRelations] = useState<RelatedAnimeEntry[]>([]);
+  const [relationsLoading, setRelationsLoading] = useState(true);
   const [titleCopied, setTitleCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const bookmarked = bookmarkList !== null;
@@ -146,7 +147,12 @@ export default function AnimeDetailScreen() {
   useEffect(() => {
     if (!data?.title) return;
     let cancelled = false;
-    fetchAnimeRelations(data.title, animeHref).then((r) => { if (!cancelled) setRelations(r); });
+    setRelationsLoading(true);
+    fetchAnimeRelations(data.title, animeHref).then((r) => {
+      if (!cancelled) setRelations(r);
+    }).finally(() => {
+      if (!cancelled) setRelationsLoading(false);
+    });
     return () => { cancelled = true; };
   }, [data?.title, animeHref]);
 
@@ -324,7 +330,7 @@ export default function AnimeDetailScreen() {
   const firstPlayable = data.episodes.find((e) => e.href);
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "episodes", label: t.tabEpisodes, count: data.totalEpisodes },
-    ...(relations.length > 0 ? [{ key: "related" as TabKey, label: t.tabRelated, count: relations.length }] : []),
+    { key: "related", label: t.tabRelated, count: relationsLoading ? undefined : relations.length },
     { key: "info", label: t.tabInfo },
   ];
 
@@ -465,7 +471,7 @@ export default function AnimeDetailScreen() {
               animeTitle={data.title}
             />
           )}
-          {activeTab === "related" && <RelatedTab items={relations} />}
+          {activeTab === "related" && <RelatedTab items={relations} loading={relationsLoading} />}
           {activeTab === "info" && <InfoTab data={data} isMainSource={isMainSource} />}
         </View>
       </ScrollView>
@@ -1110,7 +1116,7 @@ function bestRelatedLookupMatch(entry: RelatedLookupEntry, gotTitle: string): nu
 // rejects a single-word coincidence and a season-mismatched base series.
 const MIN_RELATED_TITLE_SCORE = 60;
 
-function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
+function RelatedTab({ items, loading }: { items: RelatedAnimeEntry[]; loading: boolean }) {
   // AniList knows the related anime by name only — the source sites don't link
   // them — so tapping a card resolves the title to a playable source URL via
   // the same cross-source search the search screen uses, then opens its detail
@@ -1210,6 +1216,14 @@ function RelatedTab({ items }: { items: RelatedAnimeEntry[] }) {
     }
   }, [resolvingId]);
 
+  if (loading) {
+    return (
+      <View style={ss.emptyTab}>
+        <ActivityIndicator color={C.accent} />
+        <Text style={ss.emptyTabText}>{t.loading}</Text>
+      </View>
+    );
+  }
   if (items.length === 0) {
     return (
       <View style={ss.emptyTab}>

@@ -42,6 +42,7 @@ import {
   videoPlaybackHeaders,
 } from "../../lib/videoProviders";
 import { _cancelBackground } from "../../lib/scraper/bus";
+import { remoteLog } from "../../lib/remoteLog";
 
 type ServerStatus = "idle" | "resolving" | "playing" | "webview" | "failed";
 
@@ -62,6 +63,10 @@ const failStatus = (provider?: string): ServerStatus =>
   providerFailureMode(provider) as ServerStatus;
 
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 0.75];
+
+function safeHost(raw: string): string | null {
+  try { return new URL(raw).hostname.toLowerCase(); } catch { return null; }
+}
 
 // Short quality tag for the server-selection list ("" when unknown).
 function qualityLabel(name: string): string {
@@ -447,6 +452,17 @@ export default function WatchScreen() {
       if (!srv || !embedUrl || attempts >= 3) { fail(); return; }
       retryCountRef.current[idx] = attempts + 1;
       const seekTo = lastPosMs;
+      const playerError = String((player as any)?.error?.message || (player as any)?.error || "")
+        .slice(0, 240) || null;
+      void remoteLog("warn", "video", "native playback recovery", {
+        provider: srv.provider,
+        source: srv.source || null,
+        stage: hasStarted ? "mid-watch" : "startup",
+        attempt: attempts + 1,
+        mediaHost: safeHost(videoUrl),
+        embedHost: safeHost(embedUrl),
+        playerError,
+      });
       try {
         if (attempts === 0 && hasStarted) {
           // First mid-watch error: assume a transient network blip and reload
@@ -479,7 +495,12 @@ export default function WatchScreen() {
         loadingExtensions = 0;
         graceUntil = Date.now() + failMs;
         healing = false;
-      } catch {
+      } catch (error) {
+        void remoteLog("error", "video", "native playback recovery failed", {
+          provider: srv.provider,
+          mediaHost: safeHost(videoUrl),
+          error: String(error).slice(0, 240),
+        });
         fail();
       }
     };

@@ -43,36 +43,24 @@ import org.json.JSONObject
 import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 /**
- * DNS-over-HTTPS resolver for OkHttp. Some ISPs block the anime source domains
- * (anime4up / anime3rb / witanime) at the DNS layer — fine on mobile data, but
- * on those WiFi networks the system resolver returns NXDOMAIN (or a poisoned
- * IP), so half the servers never load. We resolve those names over HTTPS via
- * Cloudflare (reached by IP, 1.1.1.1, so the block can't touch the resolver
- * itself) and hand OkHttp the real IPs. OkHttp still uses the original hostname
- * for TLS SNI + cert validation and connects from the phone's residential IP,
- * which the sites accept — so this beats the block without breaking TLS.
+ * DNS-over-HTTPS resolver for OkHttp. ISPs can independently poison catalog,
+ * embed and final media CDN hostnames, so every lookup tries encrypted DNS
+ * first. When both bounded DoH endpoints are unavailable, Android system DNS
+ * remains the safe fallback. TLS SNI and certificate validation continue to
+ * use the original hostname.
  */
 class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .callTimeout(5, TimeUnit.SECONDS)
+        .build()
     private data class CacheEntry(val addresses: List<InetAddress>, val expiresAt: Long)
     private data class DohResult(val addresses: List<InetAddress>, val ttlMs: Long)
     private val cache = ConcurrentHashMap<String, CacheEntry>()
-
-    // Known-blocked source hosts: resolve via DoH FIRST (also beats DNS
-    // poisoning, where the system resolver answers with a bogus IP instead of
-    // failing). Everything else uses the system resolver first and only falls
-    // back to DoH if it fails — so normal traffic keeps its fast path.
-    //
-    // "vid3rb" covers anime3rb's first-party video host family
-    // (video.vid3rb.com = the player page that carries the quality sources, and
-    // files-N.vid3rb.com = the streaming CDN). These do NOT contain the string
-    // "anime3rb", so without listing "vid3rb" explicitly they fell through to
-    // the (poisoned) system resolver — anime3rb's title/episode pages resolved
-    // fine over DoH but the player + CDN didn't, so NO Anime3rb server showed up
-    // on blocking ISPs even though the rest of anime3rb worked.
-    private val forceDoh = listOf("anime4up", "anime3rb", "witanime", "vid3rb")
 
     override fun lookup(hostname: String): List<InetAddress> {
         val now = System.currentTimeMillis()
@@ -80,14 +68,9 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
             if (it.expiresAt > now) return it.addresses
             cache.remove(hostname, it)
         }
-        val prefer = forceDoh.any { hostname.contains(it, ignoreCase = true) }
-        if (!prefer) {
-            try {
-                return system.lookup(hostname)
-            } catch (_: Exception) {
-                // system DNS failed (likely a block) — fall through to DoH
-            }
-        }
+        // DoH first for source, embed and final media CDN hosts. A poisoned
+        // system resolver can return a valid-looking blocked IP, so an
+        // exception-only fallback does not cover the common failure mode.
         val viaDoh = resolveDoh(hostname)
         if (viaDoh != null) {
             cache[hostname] = CacheEntry(viaDoh.addresses, now + viaDoh.ttlMs)

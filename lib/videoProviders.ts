@@ -8,7 +8,15 @@ export type ProviderPolicy = {
   failureMode: ProviderFailureMode;
   supported: boolean;
   downloadable?: boolean;
+  adaptive?: boolean;
 };
+
+export const STREAM_BUFFER_POLICY = {
+  lowBufferSeconds: 12,
+  unhealthySwitchMs: 7_000,
+  recoveryBufferSeconds: 30,
+  recoveryStableMs: 120_000,
+} as const;
 
 export const VIDEO_USER_AGENT =
   "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
@@ -46,14 +54,14 @@ export function preferredAnime4upEpisodeUrl(explicit?: string | null, harvested?
 export const PROVIDER_POLICIES: Record<string, ProviderPolicy> = {
   anime4upcdn: { patterns: ["anime4up-s\\d", "z4m2r9t\\.shop"], rank: 0, resolution: "directThenWebView", failureMode: "failed", supported: true },
   mp4upload: { patterns: ["mp4upload"], rank: 1, resolution: "directThenWebView", failureMode: "failed", supported: true, downloadable: true },
-  dailymotion: { patterns: ["dailymotion", "dai\\.ly"], rank: 0, resolution: "directThenWebView", failureMode: "failed", supported: true },
-  streamwish: { patterns: ["streamwish", "hlswish", "wishembed", "wishfast", "hgcloud", "jwembed", "vibuxer", "audinifer", "masukestin", "hanerix", "playerwish"], rank: 2, resolution: "directThenWebView", failureMode: "failed", supported: true },
-  voe: { patterns: ["voe\\."], rank: 4, resolution: "directThenWebView", failureMode: "failed", supported: true },
+  dailymotion: { patterns: ["dailymotion", "dai\\.ly"], rank: 0, resolution: "directThenWebView", failureMode: "failed", supported: true, adaptive: true },
+  streamwish: { patterns: ["streamwish", "hlswish", "wishembed", "wishfast", "hgcloud", "jwembed", "vibuxer", "audinifer", "masukestin", "hanerix", "playerwish"], rank: 2, resolution: "directThenWebView", failureMode: "failed", supported: true, adaptive: true },
+  voe: { patterns: ["voe\\."], rank: 4, resolution: "directThenWebView", failureMode: "failed", supported: true, adaptive: true },
   share4max: { patterns: ["share4max", "megamax"], rank: 7, resolution: "directThenWebView", failureMode: "failed", supported: true },
   streamruby: { patterns: ["rubyvidhub", "streamruby", "rubystm", "ruby"], rank: 7, resolution: "directThenWebView", failureMode: "failed", supported: true },
   doodstream: { patterns: ["doodstream", "dood\\.", "dsvplay", "d-s\\.io", "vidply", "ds2play", "ds2video", "d0o0d", "do0od", "all3do", "doply", "playmogo"], rank: 5, resolution: "directThenWebView", failureMode: "failed", supported: true },
   uqload: { patterns: ["uqload"], rank: 8, resolution: "directThenWebView", failureMode: "failed", supported: true },
-  okru: { patterns: ["ok\\.ru", "odnoklassniki"], rank: 6, resolution: "directThenWebView", failureMode: "failed", supported: true },
+  okru: { patterns: ["ok\\.ru", "odnoklassniki"], rank: 6, resolution: "directThenWebView", failureMode: "failed", supported: true, adaptive: true },
   videas: { patterns: ["app\\.videas\\.fr"], rank: 3, resolution: "directThenWebView", failureMode: "failed", supported: true },
   videa: { patterns: ["videa\\.", "vidvaita", "vidit", "videakid"], rank: 3, resolution: "directThenWebView", failureMode: "failed", supported: true },
   vk: { patterns: ["vk\\.com"], rank: 11, resolution: "webview", failureMode: "webview", supported: true },
@@ -117,6 +125,50 @@ export function isDownloadProvider(provider: string): boolean {
   return providerPolicy(provider).downloadable === true;
 }
 
+/** A server is downloadable when its resolved media is a reachable progressive
+ * file. Provider flags are only a pre-resolution hint; several mirrors switch
+ * between HLS and MP4 per episode, so the final URL is the source of truth. */
+export function isResolvedDownloadServer(server: {
+  provider: string;
+  videoUrl?: string | null;
+}): boolean {
+  const videoUrl = server.videoUrl || "";
+  return isDirectProvider(server.provider) &&
+    validateMediaUrl(videoUrl, server.provider) &&
+    videoContentType(videoUrl, server.provider) === "progressive";
+}
+
+export function providerSupportsAdaptivePlayback(provider: string): boolean {
+  return providerPolicy(provider).adaptive === true;
+}
+
+export function bufferAheadSeconds(currentTime: number, bufferedPosition: number): number | null {
+  if (!Number.isFinite(currentTime) || !Number.isFinite(bufferedPosition) || bufferedPosition < 0) return null;
+  return Math.max(0, bufferedPosition - currentTime);
+}
+
+export function isUnhealthyBufferSample(
+  status: string,
+  currentTime: number,
+  bufferAhead: number | null,
+  previousBufferAhead: number | null,
+): boolean {
+  if (currentTime <= 0) return false;
+  if (status === "loading") return true;
+  if (bufferAhead == null || previousBufferAhead == null) return false;
+  return bufferAhead < STREAM_BUFFER_POLICY.lowBufferSeconds && bufferAhead <= previousBufferAhead + 0.25;
+}
+
+export function updateBufferRiskMs(currentMs: number, unhealthy: boolean, elapsedMs = 1_000): number {
+  return unhealthy
+    ? currentMs + elapsedMs
+    : Math.max(0, currentMs - elapsedMs * 2);
+}
+
+export function isStableBufferSample(status: string, bufferAhead: number | null): boolean {
+  return status === "readyToPlay" && bufferAhead != null && bufferAhead >= STREAM_BUFFER_POLICY.recoveryBufferSeconds;
+}
+
 export function qualityScore(name: string): number {
   const value = String(name || "").toLowerCase();
   if (value.includes("fhd") || value.includes("1080")) return 3;
@@ -139,10 +191,15 @@ export function selectServerCandidates<T extends { provider: string }>(servers: 
 }
 
 export function selectDownloadCandidates<
-  T extends { id?: string; name: string; provider: string; iframeUrl: string },
+  T extends { id?: string; name: string; provider: string; iframeUrl: string; videoUrl?: string },
 >(groups: readonly (readonly T[])[]): (T & { id: string; quality: string })[] {
   return mergeVideoServers(groups)
-    .filter((server) => isDownloadProvider(server.provider))
+    // Before resolution, retain the two historically proven progressive
+    // providers. Once a media URL is present, accept every provider that
+    // actually resolved to a progressive file and reject HLS-only mirrors.
+    .filter((server) => server.videoUrl
+      ? isResolvedDownloadServer(server)
+      : isDownloadProvider(server.provider))
     .map((server) => ({
       ...server,
       quality: qualityScore(server.name) === 3

@@ -44,6 +44,8 @@ export function DownloadPicker({
       url3rb: meta.url3rb,
       epNum: meta.epNum,
       animeTitle: meta.animeTitle,
+      force: attempt > 0,
+      onUpdate: (list) => alive && setServers(list),
     })
       .then((list) => alive && setServers(list))
       .catch(() => alive && setServers([]));
@@ -56,7 +58,13 @@ export function DownloadPicker({
     if (!meta) return;
     startDownload({
       ...meta,
-      server: { name: s.name, iframeUrl: s.iframeUrl, provider: s.provider, quality: s.quality },
+      server: {
+        name: s.name,
+        iframeUrl: s.iframeUrl,
+        provider: s.provider,
+        quality: s.quality,
+        videoUrl: s.videoUrl,
+      },
     });
     onClose();
   };

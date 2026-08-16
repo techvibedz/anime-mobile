@@ -43,7 +43,7 @@ import { t } from "../../lib/i18n";
 import { Rise } from "../../components/Rise";
 import { useReducedMotion } from "../../lib/motion";
 import { useSidebar } from "../../components/Sidebar";
-import { shouldShowSynopsis } from "../../lib/animeDetail";
+import { shouldShowSynopsis, synopsisForDisplay } from "../../lib/animeDetail";
 
 // Core React Native bundles a Clipboard native module (no extra dependency), so
 // copying works over OTA on the existing build. Deep-import since the top-level
@@ -328,6 +328,7 @@ export default function AnimeDetailScreen() {
   }
 
   const firstPlayable = data.episodes.find((e) => e.href);
+  const synopsis = synopsisForDisplay(data.synopsis);
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "episodes", label: t.tabEpisodes, count: data.totalEpisodes },
     { key: "related", label: t.tabRelated, count: relationsLoading ? undefined : relations.length },
@@ -412,10 +413,10 @@ export default function AnimeDetailScreen() {
           <AiringCountdown title={data.title} />
 
           {/* Synopsis */}
-          {shouldShowSynopsis(animeHref, data.synopsis) ? (
+          {shouldShowSynopsis(animeHref, synopsis) ? (
             <Pressable onPress={() => setSynopsisOpen((v) => !v)}>
               <Text style={ss.synopsis} numberOfLines={synopsisOpen ? undefined : 3}>
-                {data.synopsis}
+                {synopsis}
               </Text>
               <Text style={ss.readMore}>{synopsisOpen ? t.showLess : t.readMore}</Text>
             </Pressable>

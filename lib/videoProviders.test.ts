@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import {
+  bufferAheadSeconds,
   classifyProvider,
   classifyProviderWithName,
   createGenerationGuard,
@@ -9,15 +10,21 @@ import {
   selectDownloadCandidates,
   serverCandidateSignature,
   isDirectProvider,
+  isStableBufferSample,
+  isUnhealthyBufferSample,
   isProviderSupported,
+  isResolvedDownloadServer,
   mergeVideoServers,
   normalizeServerUrl,
   probeMediaUrl,
   providerClassifierScript,
   providerFailureMode,
+  providerSupportsAdaptivePlayback,
   preferredAnime4upEpisodeUrl,
   selectWarmupServers,
   sortVideoServers,
+  STREAM_BUFFER_POLICY,
+  updateBufferRiskMs,
   validateDirectServers,
   validateMediaUrl,
 } from "./videoProviders";
@@ -57,6 +64,35 @@ test("classifies every provider currently returned by live source pages", () => 
     assert.equal(classifyProvider(url), expected, url);
   }
   assert.equal(classifyProvider("https://new-player.example/e/1"), "generic");
+});
+
+test("marks known HLS providers as adaptive without changing vid3rb preference", () => {
+  for (const provider of ["dailymotion", "streamwish", "voe", "okru"]) {
+    assert.equal(providerSupportsAdaptivePlayback(provider), true, provider);
+  }
+  assert.equal(providerSupportsAdaptivePlayback("vid3rb"), false);
+  assert.equal(providerSupportsAdaptivePlayback("mp4upload"), false);
+});
+
+test("buffer health detects a shrinking low buffer before a long visible stall", () => {
+  assert.equal(bufferAheadSeconds(30, 40), 10);
+  assert.equal(bufferAheadSeconds(30, -1), null);
+  assert.equal(isUnhealthyBufferSample("loading", 30, 8, 9), true);
+  assert.equal(isUnhealthyBufferSample("readyToPlay", 30, 8, 9), true);
+  assert.equal(isUnhealthyBufferSample("readyToPlay", 30, 8, 7), false);
+  assert.equal(isUnhealthyBufferSample("readyToPlay", 30, 40, 39), false);
+  assert.equal(isUnhealthyBufferSample("loading", 0, 0, 0), false);
+});
+
+test("buffer risk switches after seven unhealthy seconds and recovers with hysteresis", () => {
+  let risk = 0;
+  for (let i = 0; i < 7; i++) risk = updateBufferRiskMs(risk, true);
+  assert.equal(risk, STREAM_BUFFER_POLICY.unhealthySwitchMs);
+  risk = updateBufferRiskMs(risk, false);
+  assert.equal(risk, 5_000);
+  assert.equal(isStableBufferSample("readyToPlay", 30), true);
+  assert.equal(isStableBufferSample("readyToPlay", 12), false);
+  assert.equal(isStableBufferSample("loading", 40), false);
 });
 
 test("the injected classifier uses the same provider rules", () => {
@@ -171,6 +207,32 @@ test("download picker keeps unique progressive providers in preferred quality or
     ["vid3rb", "HD"],
     ["mp4upload", "HD"],
   ]);
+});
+
+test("download picker includes every resolved progressive mirror and excludes HLS", () => {
+  const selected = selectDownloadCandidates([[
+    {
+      name: "Anime4up CDN FHD",
+      provider: "anime4upcdn",
+      iframeUrl: "https://4o.z4m2r9t.shop/episode/1",
+      videoUrl: "https://4o.z4m2r9t.shop/media/episode.mp4",
+    },
+    {
+      name: "DoodStream",
+      provider: "doodstream",
+      iframeUrl: "https://dsvplay.com/e/1",
+      videoUrl: "https://cdn.dood.example/stream/abc?token=x&expiry=1",
+    },
+    {
+      name: "StreamWish",
+      provider: "streamwish",
+      iframeUrl: "https://hgcloud.to/e/1",
+      videoUrl: "https://cdn.example/master.m3u8?token=1",
+    },
+  ]]);
+  assert.deepEqual(selected.map((server) => server.provider), ["anime4upcdn", "doodstream"]);
+  assert.equal(isResolvedDownloadServer(selected[0]), true);
+  assert.equal(isResolvedDownloadServer({ provider: "streamwish", videoUrl: "https://cdn.example/master.m3u8" }), false);
 });
 
 test("warmup validates only the three best native candidates", () => {

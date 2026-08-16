@@ -52,13 +52,15 @@ export interface DownloadMeta {
   episodeHref: string;
   url4up?: string;
   url3rb?: string;
-  server?: { name: string; iframeUrl: string; provider: string; quality: string };
+  server?: { name: string; iframeUrl: string; provider: string; quality: string; videoUrl?: string };
 }
 
 const INDEX_KEY = "@downloads_index_v1";
+const DIR = `${FileSystem.documentDirectory}downloads/`;
 
 let items: DownloadItem[] | null = null;
 const pending = new Set<string>();
+const active = new Map<string, ReturnType<typeof FileSystem.createDownloadResumable>>();
 const operationVersions = new Map<string, number>();
 const listeners = new Set<() => void>();
 let lastEmit = 0;
@@ -132,6 +134,26 @@ function patch(id: string, p: Partial<DownloadItem>) {
   if (!items) return;
   const i = items.findIndex((x) => x.id === id);
   if (i !== -1) items[i] = { ...items[i], ...p };
+}
+
+async function ensureDir() {
+  const info = await FileSystem.getInfoAsync(DIR);
+  if (!info.exists) await FileSystem.makeDirectoryAsync(DIR, { intermediates: true });
+}
+
+async function isMp4File(fileUri: string): Promise<boolean> {
+  try {
+    const info = await FileSystem.getInfoAsync(fileUri);
+    if (!info.exists || !("size" in info) || !info.size) return false;
+    const header = await FileSystem.readAsStringAsync(fileUri, {
+      encoding: FileSystem.EncodingType.Base64,
+      position: 0,
+      length: 12,
+    });
+    return header.includes("ZnR5cA"); // ASCII "ftyp" in an MP4 file header.
+  } catch {
+    return false;
+  }
 }
 
 function updateMonitor() {
@@ -276,27 +298,74 @@ export async function startDownload(meta: DownloadMeta): Promise<string> {
       return id;
     }
     if (!isCurrent()) return id;
-    if (!PantoufaDownloads) throw new Error("Background downloads require the Android 3.3.0 build");
-    if (existing?.downloadId != null) {
+    if (existing?.downloadId != null && PantoufaDownloads) {
       await PantoufaDownloads.remove(existing.downloadId).catch(() => 0);
     }
-    const downloadId = await PantoufaDownloads.enqueue(
-      resolved.url,
-      resolved.headers,
-      `${id}.mp4`,
-      meta.episodeTitle,
-    );
-    if (!isCurrent()) {
-      await PantoufaDownloads.remove(downloadId).catch(() => 0);
-      return id;
+
+    if (resolved.provider === "vid3rb" && PantoufaDownloads) {
+      // Anime3rb is known to work reliably through Android DownloadManager and
+      // keeps downloading in the background when the app is closed.
+      const downloadId = await PantoufaDownloads.enqueue(
+        resolved.url,
+        resolved.headers,
+        `${id}.mp4`,
+        meta.episodeTitle,
+      );
+      if (!isCurrent()) {
+        await PantoufaDownloads.remove(downloadId).catch(() => 0);
+        return id;
+      }
+      patch(id, { status: "downloading", downloadId, server: meta.server });
+      if (!(await persist())) {
+        await PantoufaDownloads.remove(downloadId).catch(() => 0);
+        if (isCurrent()) patch(id, { status: "failed", downloadId: undefined });
+      }
+      emit(true);
+      updateMonitor();
+    } else {
+      // Android DownloadManager uses the phone's system DNS and was the source
+      // of MP4Upload's silent failures. Non-Anime3rb mirrors use the app-owned
+      // downloader, restoring the transport that worked before background
+      // downloads were introduced while retaining headers and live progress.
+      await ensureDir();
+      const fileUri = `${DIR}${id}.mp4`;
+      await FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+      patch(id, {
+        status: "downloading",
+        fileUri,
+        downloadId: undefined,
+        server: meta.server,
+      });
+      await persist();
+      emit(true);
+
+      const resumable = FileSystem.createDownloadResumable(
+        resolved.url,
+        fileUri,
+        { headers: resolved.headers },
+        (progress) => {
+          if (!isCurrent()) return;
+          const total = progress.totalBytesExpectedToWrite;
+          patch(id, {
+            bytes: progress.totalBytesWritten,
+            totalBytes: total > 0 ? total : 0,
+            progress: total > 0 ? progress.totalBytesWritten / total : 0,
+          });
+          emit();
+        },
+      );
+      active.set(id, resumable);
+      const result = await resumable.downloadAsync();
+      active.delete(id);
+      if (!isCurrent()) return id;
+      const valid = !!result?.uri && await isMp4File(result.uri);
+      patch(id, valid
+        ? { status: "completed", fileUri: result!.uri, progress: 1 }
+        : { status: "failed" });
+      if (!valid) await FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+      await persist();
+      emit(true);
     }
-    patch(id, { status: "downloading", downloadId, server: meta.server });
-    if (!(await persist())) {
-      await PantoufaDownloads.remove(downloadId).catch(() => 0);
-      if (isCurrent()) patch(id, { status: "failed", downloadId: undefined });
-    }
-    emit(true);
-    updateMonitor();
   } catch {
     if (isCurrent()) {
       patch(id, { status: "failed" });
@@ -304,6 +373,7 @@ export async function startDownload(meta: DownloadMeta): Promise<string> {
       emit(true);
     }
   } finally {
+    active.delete(id);
     if (isCurrent()) pending.delete(id);
   }
   return id;
@@ -331,6 +401,11 @@ export async function deleteDownload(id: string): Promise<void> {
   const it = items!.find((x) => x.id === id);
   operationVersions.set(id, (operationVersions.get(id) ?? 0) + 1);
   pending.delete(id);
+  const resumable = active.get(id);
+  if (resumable) {
+    await resumable.cancelAsync().catch(() => {});
+    active.delete(id);
+  }
   if (it?.downloadId != null && PantoufaDownloads) {
     await PantoufaDownloads.remove(it.downloadId).catch(() => 0);
   }

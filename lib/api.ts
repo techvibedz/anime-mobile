@@ -50,7 +50,7 @@ import { createRequestCache, withTimeout } from "./requestCache";
 import {
   anime4upEpisodeUrl,
   episodeNumberFromUrl,
-  isDownloadProvider,
+  isResolvedDownloadServer,
   validateDirectServers,
   isProviderSupported,
   mergeVideoServers,
@@ -63,8 +63,8 @@ import {
   preferredAnime4upEpisodeUrl,
   selectWarmupServers,
   validateMediaUrl,
+  videoContentType,
   videoPlaybackHeaders,
-  VIDEO_USER_AGENT,
 } from "./videoProviders";
 
 // v2 cache keys: bumped to discard payloads written by the earlier build that
@@ -1704,17 +1704,16 @@ export async function fetchAllAnime(page = 1): Promise<{
  * Resolve a DIRECT, progressive .mp4 URL for an episode so it can be saved to
  * disk for offline viewing. HLS (.m3u8) sources are skipped — they're a playlist
  * of segments, not a single downloadable file — so only providers proven to hand
- * out a progressive .mp4 are considered: vid3rb (anime3rb's first-party host,
- * direct 1080p) first, then mp4upload. Returns the URL plus the CDN headers the
- * file fetch needs (the signed URLs are bound to the right Referer/UA). */
-function dlHeaders(provider: string): Record<string, string> {
-  const h: Record<string, string> = { "User-Agent": VIDEO_USER_AGENT };
-  if (provider === "mp4upload") h.Referer = "https://www.mp4upload.com/";
-  else if (provider === "vid3rb") h.Referer = "https://anime3rb.com/";
-  return h;
-}
+ * out a progressive file are considered. Returns the URL plus the exact CDN
+ * headers the player uses (signed URLs are often bound to Referer/UA). */
 
-export type DownloadServer = { name: string; iframeUrl: string; provider: string; quality: string };
+export type DownloadServer = {
+  name: string;
+  iframeUrl: string;
+  provider: string;
+  quality: string;
+  videoUrl?: string;
+};
 
 export async function listDownloadServers(opts: {
   episodeHref: string;
@@ -1722,25 +1721,25 @@ export async function listDownloadServers(opts: {
   url3rb?: string;
   epNum?: number | null;
   animeTitle?: string | null;
+  force?: boolean;
+  onUpdate?: (servers: DownloadServer[]) => void;
 }): Promise<DownloadServer[]> {
-  const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
-  const [primary, anime3rb] = await Promise.all([
-    withTimeout(fetchVideoServers(episodeHref, url4up).catch(() => null), 15_000, null),
-    withTimeout(
-      (url3rb
-        ? fetchAnime3rbServersByUrl(url3rb)
-        : animeTitle && epNum != null
-          ? fetchAnime3rbServers(animeTitle, epNum)
-          : Promise.resolve([] as RawServer[])
-      ).catch(() => [] as RawServer[]),
-      15_000,
-      [] as RawServer[],
-    ),
-  ]);
-  return selectDownloadCandidates([
-    primary?.data.servers || [],
-    anime3rb,
-  ]);
+  const complete = await fetchCompleteVideoServers({
+    episodeUrl: opts.episodeHref,
+    url4up: opts.url4up,
+    url3rb: opts.url3rb,
+    animeTitle: opts.animeTitle,
+    episodeNumber: opts.epNum,
+    force: opts.force,
+    onPartial: (payload) => {
+      const servers = selectDownloadCandidates([payload.data.servers]);
+      if (servers.length) opts.onUpdate?.(servers);
+    },
+  }).catch(() => null);
+  // fetchCompleteVideoServers has already resolved and range-probed every
+  // native candidate. This exposes every progressive mirror that works for
+  // this episode instead of hard-coding the picker to Anime3rb + MP4Upload.
+  return selectDownloadCandidates([complete?.data.servers || []]);
 }
 
 export async function resolveDownloadUrl(opts: {
@@ -1749,16 +1748,37 @@ export async function resolveDownloadUrl(opts: {
   url3rb?: string;
   epNum?: number | null;
   animeTitle?: string | null;
-  server?: { iframeUrl: string; provider: string } | null;
-}): Promise<{ url: string; headers: Record<string, string>; type: "mp4" } | null> {
+  server?: { iframeUrl: string; provider: string; videoUrl?: string } | null;
+}): Promise<{ url: string; headers: Record<string, string>; type: "mp4"; provider: string } | null> {
   const { episodeHref, url4up, url3rb, epNum, animeTitle } = opts;
 
-  if (opts.server?.iframeUrl && isDownloadProvider(opts.server.provider)) {
-    const r = await resolveVideo(opts.server.iframeUrl, opts.server.provider).catch(() => null);
-    const url = r?.success ? r.data?.videoUrl : null;
-    if (url && r!.data!.type !== "hls" && !/\.m3u8(\?|$)/i.test(url)) {
-      return { url, headers: dlHeaders(opts.server.provider), type: "mp4" };
-    }
+  const resolveCandidate = async (server: {
+    iframeUrl: string;
+    provider: string;
+    videoUrl?: string;
+  }) => {
+    const usable = async (url: string) => {
+      if (!url || videoContentType(url, server.provider) !== "progressive" ||
+          !validateMediaUrl(url, server.provider)) return null;
+      const headers = videoPlaybackHeaders(url, server.iframeUrl, server.provider);
+      const reachable = await probeMediaUrl(url, headers);
+      return reachable ? { url, headers, type: "mp4" as const, provider: server.provider } : null;
+    };
+
+    // The picker carries the URL it just validated. If its short-lived token
+    // expired while the dialog was open, refresh the embed and probe once more.
+    const cached = await usable(server.videoUrl || "");
+    if (cached) return cached;
+    const result = await resolveVideo(server.iframeUrl, server.provider, {
+      priority: true,
+      fresh: true,
+    }).catch(() => null);
+    return usable(result?.success ? result.data?.videoUrl || "" : "");
+  };
+
+  if (opts.server?.iframeUrl) {
+    const selected = await resolveCandidate(opts.server);
+    if (selected) return selected;
   }
 
   const complete = await fetchCompleteVideoServers({
@@ -1767,16 +1787,14 @@ export async function resolveDownloadUrl(opts: {
     url3rb,
     animeTitle,
     episodeNumber: epNum,
+    force: true,
   }).catch(() => null);
-  const downloadable = (complete?.data.servers || [])
-    .filter((server) => isDownloadProvider(server.provider) && server.iframeUrl);
+  const downloadable = selectDownloadCandidates([complete?.data.servers || []]);
 
   for (const c of downloadable) {
-    const r = await resolveVideo(c.iframeUrl, c.provider).catch(() => null);
-    const url = r?.success ? r.data?.videoUrl : null;
-    if (url && r!.data!.type !== "hls" && !/\.m3u8(\?|$)/i.test(url)) {
-      return { url, headers: dlHeaders(c.provider), type: "mp4" };
-    }
+    if (!isResolvedDownloadServer(c)) continue;
+    const resolved = await resolveCandidate(c);
+    if (resolved) return resolved;
   }
   return null;
 }

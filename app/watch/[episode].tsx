@@ -33,11 +33,17 @@ import { C } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
 import {
+  bufferAheadSeconds,
   createGenerationGuard,
+  isStableBufferSample,
+  isUnhealthyBufferSample,
   providerFailureMode,
   providerRank,
+  providerSupportsAdaptivePlayback,
   qualityScore,
   sortVideoServers,
+  STREAM_BUFFER_POLICY,
+  updateBufferRiskMs,
   videoContentType,
   videoPlaybackHeaders,
 } from "../../lib/videoProviders";
@@ -211,6 +217,9 @@ export default function WatchScreen() {
   // position (ms) to seek to once the re-resolved source starts playing.
   const retryCountRef = useRef<Record<number, number>>({});
   const pendingSeekRef = useRef(0);
+  // Set only when the app automatically steps Anime3rb down. Manual quality
+  // choices never auto-upgrade behind the user's back.
+  const autoQualityRef = useRef<{ desiredQuality: number; switchedAt: number } | null>(null);
   // Autoplay-next bookkeeping (gated by the Settings preference). goNextRef is
   // filled in after goNextEpisode is defined; autoAdvancedRef de-dupes the
   // single advance per episode once playback crosses the near-end threshold.
@@ -248,6 +257,7 @@ export default function WatchScreen() {
   useEffect(() => {
     autoAdvancedRef.current = false;
     completionMarkedRef.current = false;
+    autoQualityRef.current = null;
     setLocked(false);
     setSelfReady(false); // re-buffer for the new episode → re-arm the party gate
     // Re-arm the server-selection gate for the new episode, unless this is an
@@ -342,11 +352,11 @@ export default function WatchScreen() {
       // throttled vid3rb CDN doesn't drop us straight into another stall (the
       // classic stutter→resume→stutter loop). expo-video conflates the
       // start-buffer and rebuffer-resume thresholds into this one Android knob,
-      // so 8s is the documented analog of ExoPlayer's
-      // bufferForPlaybackAfterRebufferMs. Costs ~3s of extra wait at the
-      // throttled rate on first start; pays for itself within one stall by not
+      // so 4s is a balanced startup/rebuffer threshold for this player.
+      // It starts faster on healthy streams while the adaptive watcher below
+      // now steps down early when the forward cushion is shrinking instead of
       // dropping straight from a stall back into another (the stutter loop).
-      minBufferForPlayback: 8,
+      minBufferForPlayback: 4,
       maxBufferBytes: 0,
       prioritizeTimeOverSizeThreshold: true,
       // iOS: let AVPlayer delay playback to build a stall-proof buffer instead
@@ -959,13 +969,15 @@ export default function WatchScreen() {
     if (next !== -1) setActiveIdx(next);
   }, [servers, activeIdx, picked]);
 
-  const selectServer = useCallback((idx: number) => {
+  const selectServer = useCallback((idx: number, automated = false) => {
+    if (!automated) autoQualityRef.current = null;
     // A failed server gets a fresh chance when the user explicitly taps it —
     // reset to idle so the resolve effect re-runs the extraction.
     retryCountRef.current[idx] = 0;
     setServers((p) => p.map((s, i) =>
       i === idx && s.status === "failed" ? { ...s, status: "idle", videoUrl: null } : s));
     setActiveIdx(idx);
+    setBufferAhead(null);
     setPickerOpen(false);
   }, []);
 
@@ -988,6 +1000,11 @@ export default function WatchScreen() {
         const ra = a.s.server.source === "anime3rb" ? 0 : 1;
         const rb = b.s.server.source === "anime3rb" ? 0 : 1;
         if (ra !== rb) return ra - rb;
+        // Anime3rb remains first (1080p included). Among alternate providers,
+        // surface known HLS/ABR sources before fixed progressive mirrors.
+        const aa = providerSupportsAdaptivePlayback(a.s.server.provider);
+        const ab = providerSupportsAdaptivePlayback(b.s.server.provider);
+        if (aa !== ab) return aa ? -1 : 1;
         const qa = qualityScore(a.s.server.name);
         const qb = qualityScore(b.s.server.name);
         if (qa !== qb) return qb - qa;
@@ -1115,6 +1132,7 @@ export default function WatchScreen() {
   const [locked, setLocked] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [bufferAhead, setBufferAhead] = useState<number | null>(null);
   const [seekValue, setSeekValue] = useState(0);
   const [isSeeking, setIsSeeking] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
@@ -1212,6 +1230,7 @@ export default function WatchScreen() {
           setDuration(d);
           setSeekValue(isSeeking ? seekValue : ct / d);
         }
+        setBufferAhead(bufferAheadSeconds(ct, player.bufferedPosition));
         setIsBuffering(player.status === "loading");
       } catch {}
     };
@@ -1274,40 +1293,83 @@ export default function WatchScreen() {
   isPausedRef.current = isPlayerPaused;
   playerRef.current = player;
 
-  // ── SLOW-CONNECTION QUALITY STEP-DOWN ──
-  // anime3rb exposes each quality as its own server (1080p default), but each
-  // stream is a fixed-bitrate progressive MP4 — on a connection slower than
-  // that bitrate it rebuffers forever and there's no ABR to save it. Watch
-  // cumulative MID-WATCH buffering on an anime3rb server; once ~20s of it
-  // piles up, hop to the next lower quality at the same position instead of
-  // letting the user grind through the stutter loop.
+  // ── BUFFER-HEALTH QUALITY ADAPTATION ──
+  // Anime3rb stays 1080p-first, but its qualities are fixed progressive MP4s.
+  // Step down after seven unhealthy seconds instead of making the user sit
+  // through twenty seconds of visible stalling. If the app stepped down, climb
+  // one tier after two continuous minutes with a healthy 30s+ cushion. Manual
+  // 720p/480p choices stay manual.
   useEffect(() => {
     if (!isPlaying || !player || !picked) return;
     const idx = activeIdx;
     if (serversRef.current[idx]?.server.source !== "anime3rb") return;
-    let stalledMs = 0;
+    let riskMs = 0;
+    let stableMs = 0;
+    let previousAhead: number | null = null;
     const iv = setInterval(() => {
       try {
         if (!focusedRef.current || isPausedRef.current) return;
-        // Mid-watch only — currentTime > 0 means the initial load is behind us.
-        if (!(player.currentTime > 0) || (player.status as string) !== "loading") return;
-        stalledMs += 1000;
-        if (stalledMs < 20000) return;
-        clearInterval(iv);
+        const current = player.currentTime;
+        const status = String(player.status);
+        const ahead = bufferAheadSeconds(current, player.bufferedPosition);
+        const unhealthy = isUnhealthyBufferSample(status, current, ahead, previousAhead);
+        riskMs = updateBufferRiskMs(riskMs, unhealthy);
+        previousAhead = ahead;
+
         const list = serversRef.current;
         const curQ = qualityScore(list[idx]?.server.name || "");
-        // Highest-quality sibling still BELOW the current one (1080→720→480).
-        let nextIdx = -1, nextQ = -1;
+
+        if (riskMs >= STREAM_BUFFER_POLICY.unhealthySwitchMs) {
+          let nextIdx = -1, nextQ = -1;
+          list.forEach((s, i) => {
+            const q = qualityScore(s.server.name);
+            if (i !== idx && s.server.source === "anime3rb" && s.status !== "failed" && q < curQ && q > nextQ) {
+              nextIdx = i; nextQ = q;
+            }
+          });
+          if (nextIdx === -1) { riskMs = 0; return; }
+          clearInterval(iv);
+          const existing = autoQualityRef.current;
+          autoQualityRef.current = {
+            desiredQuality: existing?.desiredQuality ?? curQ,
+            switchedAt: Date.now(),
+          };
+          pendingSeekRef.current = Math.round(current * 1000);
+          void remoteLog("info", "video", "adaptive quality step-down", {
+            from: list[idx]?.server.name,
+            to: list[nextIdx].server.name,
+            bufferAheadSeconds: ahead,
+            status,
+          });
+          selectServer(nextIdx, true);
+          return;
+        }
+
+        const auto = autoQualityRef.current;
+        if (!auto || curQ >= auto.desiredQuality) return;
+        stableMs = isStableBufferSample(status, ahead) ? stableMs + 1_000 : 0;
+        if (stableMs < STREAM_BUFFER_POLICY.recoveryStableMs || Date.now() - auto.switchedAt < STREAM_BUFFER_POLICY.recoveryStableMs) return;
+
+        // Recover one tier at a time to avoid a 480p→1080p oscillation.
+        let nextIdx = -1, nextQ = Number.POSITIVE_INFINITY;
         list.forEach((s, i) => {
           const q = qualityScore(s.server.name);
-          if (i !== idx && s.server.source === "anime3rb" && s.status !== "failed" && q < curQ && q > nextQ) {
+          if (i !== idx && s.server.source === "anime3rb" && s.status !== "failed" && q > curQ && q <= auto.desiredQuality && q < nextQ) {
             nextIdx = i; nextQ = q;
           }
         });
         if (nextIdx === -1) return;
-        console.log(`[quality] ${list[idx]?.server.name} rebuffered ${Math.round(stalledMs / 1000)}s — stepping down to ${list[nextIdx].server.name}`);
-        pendingSeekRef.current = Math.round(player.currentTime * 1000);
-        selectServer(nextIdx);
+        clearInterval(iv);
+        autoQualityRef.current = nextQ >= auto.desiredQuality
+          ? null
+          : { ...auto, switchedAt: Date.now() };
+        pendingSeekRef.current = Math.round(current * 1000);
+        void remoteLog("info", "video", "adaptive quality recovery", {
+          from: list[idx]?.server.name,
+          to: list[nextIdx].server.name,
+          bufferAheadSeconds: ahead,
+        });
+        selectServer(nextIdx, true);
       } catch {}
     }, 1000);
     return () => clearInterval(iv);
@@ -1801,7 +1863,7 @@ export default function WatchScreen() {
                     <Text style={ss.directPillText}>DIRECT</Text>
                   </View>
                   <Text style={ss.serverLabelText} numberOfLines={1}>
-                    {getDisplayName(active.server)}
+                    {getDisplayName(active.server)}{bufferAhead != null ? ` · ${Math.round(bufferAhead)}s buffer` : ""}
                   </Text>
                 </View>
               )}

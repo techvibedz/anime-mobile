@@ -186,6 +186,28 @@ export function slugToTitle(href: string | null | undefined): string {
 
 /* ── Search-variant generation ── */
 
+/** Split source-site bilingual titles into independently searchable aliases.
+ * Witanime commonly emits "English title (Romaji title)"; AniList returns no
+ * candidates for that combined string even though either half resolves. */
+export function titleAliasParts(title: string | null | undefined): string[] {
+  const raw = String(title || "").replace(/\s+/g, " ").trim();
+  if (!raw) return [];
+  const out: string[] = [];
+  const add = (value: string) => {
+    const clean = value.replace(/\s+/g, " ").trim();
+    const key = clean.toLowerCase();
+    if (clean.length > 1 && !out.some((item) => item.toLowerCase() === key)) out.push(clean);
+  };
+  const groups = Array.from(raw.matchAll(/[\(\[]([^\)\]]+)[\)\]]/g), (match) => match[1]);
+  if (groups.length > 0) {
+    add(raw.replace(/[\(\[][^\)\]]+[\)\]]/g, " "));
+    for (const group of groups) add(group);
+  }
+  for (const part of raw.split(/\s+(?:\/|\||·)\s+/)) add(part);
+  add(raw);
+  return out;
+}
+
 // Ordered most-specific → least-specific. The season-preserving latin form
 // comes FIRST so AniList resolves the correct season; cleaner fallbacks follow.
 // When the title carries an Arabic season marker but a latin base (e.g.
@@ -223,7 +245,9 @@ export function buildSearchQueries(titles: (string | null | undefined)[], slugTi
   const push = (arr: string[]) => {
     for (const v of arr) if (!seen.has(v)) { seen.add(v); out.push(v); }
   };
-  const list = titles.filter((t): t is string => !!t && t.trim().length > 0);
+  const list = titles
+    .filter((t): t is string => !!t && t.trim().length > 0)
+    .flatMap((title) => titleAliasParts(title));
   push(relSearchVariants(list[0] || "", slugTitle));
   for (let i = 1; i < list.length; i++) push(relSearchVariants(list[i]));
   return out;

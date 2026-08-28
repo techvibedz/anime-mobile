@@ -71,6 +71,7 @@ export async function clearContentCache(): Promise<number> {
       "@up4_ep_url_v1:",
       "@search_v1:",
       "@search_v2:",
+      "@search_v3:",
       "@listing_v1:",
       "@recent_v1:",
       "@servers_v",

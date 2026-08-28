@@ -41,7 +41,7 @@ import {
   type WitHome,
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
-import { fuzzyScore, wordSearchFallbacks } from "./fuzzy";
+import { fuzzyScore, sourceSearchQueries } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 import { writeCloudHome } from "./homeCloudCache";
 import { loadWitanimeHome } from "./homeSourceSelection";
@@ -77,7 +77,7 @@ const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const UP4_CACHE_PREFIX = "@up4_eps_v2:";
 const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
-const SEARCH_CACHE_PREFIX = "@search_v2:";
+const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -1501,101 +1501,86 @@ async function searchAnimeFresh(
     return added;
   };
 
-  // Kick off the typo-tolerant catalog scan now (local compute over the cached
-  // anime3rb sitemap). Awaited later only if the sources don't surface a strong
-  // match, so the common (correctly-spelled) query pays no extra cost.
-  const fuzzyCatalogP = searchAnime3rbCatalogFuzzy(query, 5).catch(() => [] as { slug: string; score: number }[]);
-
-  // Primary: witanime's static-HTML search via a plain GET — near-instant, no
-  // WebView render. Fall back to the WebView scrape only if the direct fetch
-  // fails (network / CF hiccup). Runs CONCURRENTLY with the other sources (not
-  // ahead of them) so its worst case can't delay anyone else's first paint.
-  const witP = (async () => {
-    let wit = await searchWitanimeDirectList(query).catch(() => null);
-    if (!wit) wit = await scrapeSearch(query).catch(() => null);
+  // Full text, normalized full text, and each meaningful word are queried at
+  // the SAME time. The previous implementation did the word searches only
+  // after a fixed 15-second wait; that made the feature technically present but
+  // practically invisible. Each direct request is capped, so one unhealthy
+  // source cannot keep the search spinner alive.
+  const FAST_SOURCE_MS = 3_000;
+  const plannedQueries = sourceSearchQueries(query);
+  let exactWitFailed = false;
+  let exactUp4Failed = false;
+  const directP = Promise.all(plannedQueries.map(async (sourceQuery) => {
+    const [wit, up4] = await Promise.all([
+      withTimeout(searchWitanimeDirectList(sourceQuery).catch(() => null), FAST_SOURCE_MS, null),
+      withTimeout(searchAnime4upDirectList(sourceQuery).catch(() => null), FAST_SOURCE_MS, null),
+    ]);
+    if (sourceQuery === query) {
+      exactWitFailed = wit === null;
+      exactUp4Failed = up4 === null;
+    }
     if (wit?.results?.length && mergeIn(wit.results)) emit();
-  })();
-
-  // Secondary: anime4up + anime3rb (third source) run in parallel and append to
-  // the visible list. anime4up is tried via a direct static-HTML GET FIRST
-  // (near-instant, no WebView) — its search cards ship in the page HTML, so the
-  // old WebView-only path was the main reason results from "other sources" took
-  // several extra seconds to appear. The WebView scrape stays as the fallback
-  // for the rare empty direct fetch (network / CF hiccup).
-  const up4P = (async () => {
-    let up4 = await searchAnime4upDirectList(query).catch(() => null);
-    if (!up4 || up4.length === 0) {
-      const wv = await scrapeSearchUp4(query).catch(() => null);
-      up4 = wv?.results ?? null;
-    }
     if (up4?.length && mergeIn(up4)) emit();
-  })();
+  }));
 
-  // anime3rb: surface anime that live ONLY on anime3rb — its catalog matcher is
-  // conservative (near-total token coverage + exact season), so a confident
-  // match is fetched for its poster/title and appended if not already present.
-  const a3rbP = (async () => {
-    try {
-      const a3rbUrl =
-        (await searchAnime3rbCatalog(query).catch(() => null)) ||
-        (await searchAnime3rbDirect(query).catch(() => null));
-      if (!a3rbUrl) return;
-      const detail = await scrapeAnime3rbTitlePage(a3rbUrl).catch(() => null);
-      if (detail?.title && mergeIn([{
-        title: detail.title, href: a3rbUrl, image: detail.poster || null,
-        type: null, status: null, synopsis: detail.synopsis || null,
-      }])) emit();
-    } catch {}
-  })();
+  // Start anime3rb in parallel too, but do not make ordinary Witanime/Anime4up
+  // hits wait for its large sitemap or detail page.
+  const fuzzyCatalogP = withTimeout(
+    searchAnime3rbCatalogFuzzy(query, 5).catch(() => [] as { slug: string; score: number }[]),
+    4_500,
+    [] as { slug: string; score: number }[],
+  );
+  const a3rbP = withTimeout((async () => {
+    const url =
+      (await searchAnime3rbCatalog(query).catch(() => null)) ||
+      (await searchAnime3rbDirect(query).catch(() => null));
+    if (!url) return null;
+    const detail = await scrapeAnime3rbTitlePage(url).catch(() => null);
+    return detail?.title ? { url, detail } : null;
+  })(), 4_500, null).then((hit) => {
+    if (hit && mergeIn([{
+      title: hit.detail.title, href: hit.url, image: hit.detail.poster || null,
+      type: null, status: null, synopsis: hit.detail.synopsis || null,
+    }])) emit();
+  }).catch(() => {});
 
-  // Wait for all sources — but cap the wait so the spinner clears promptly
-  // even if a WebView fallback is slow behind a cold queue. Late arrivals still
-  // emit via onPartial (the screen's seq guard keeps stale ones out); they just
-  // won't be in the cached payload, which the next search refreshes anyway.
-  await Promise.race([
-    Promise.all([witP, up4P, a3rbP]),
-    new Promise<void>((r) => setTimeout(r, results.length ? 6000 : 15000)),
-  ]);
+  await directP;
+  if (results.length === 0) await a3rbP;
 
-  // Typo-tolerant recovery: when the sources didn't surface a clearly strong
-  // match (the user likely misspelled the title, dropped a colon, or spaced it
-  // oddly — "narto", "re zero", "full metal"), pull the closest titles from the
-  // anime3rb catalog and add the ones not already present. anime3rb anime are
-  // first-class detail pages, so each is a fully-playable result. Gated on the
-  // miss case + capped at 3 detail fetches so a well-spelled query stays cheap.
-  const hasStrong = results.some((r) => fuzzyScore(query, r.title) >= 0.9);
-  if (!hasStrong) {
+  // A single-word typo may produce no direct source rows. In that true miss
+  // case, fetch the closest anime3rb candidates in parallel (not serially).
+  if (results.length === 0) {
     const top = await fuzzyCatalogP;
-    let fetched = 0;
-    for (const { slug } of top) {
-      if (fetched >= 3) break;
-      const label = slug.replace(/[-_]+/g, " ");
-      // Skip a catalog hit an existing result already represents.
-      if (results.some((r) => fuzzyScore(label, r.title) >= 0.85)) continue;
+    const details = await Promise.all(top.slice(0, 3).map(async ({ slug }) => {
       const url = `https://anime3rb.com/titles/${slug}`;
-      const detail = await scrapeAnime3rbTitlePage(url).catch(() => null);
-      fetched++;
-      if (detail?.title && mergeIn([{
-        title: detail.title, href: url, image: detail.poster || null,
-        type: null, status: null, synopsis: detail.synopsis || null,
-      }])) emit();
+      const detail = await withTimeout(scrapeAnime3rbTitlePage(url).catch(() => null), 3_500, null);
+      return detail?.title ? { url, detail } : null;
+    }));
+    let added = false;
+    for (const hit of details) {
+      if (!hit) continue;
+      added = mergeIn([{
+        title: hit.detail.title, href: hit.url, image: hit.detail.poster || null,
+        type: null, status: null, synopsis: hit.detail.synopsis || null,
+      }]) || added;
     }
+    if (added) emit();
   }
 
-  // Source search treats a multi-word phrase too strictly. If the full phrase
-  // still has no strong match, search up to three meaningful words against the
-  // two fast static sources and merge the wider matches. This is deliberately
-  // bounded and direct-only: it improves recall without multiplying WebViews.
-  if (!results.some((r) => fuzzyScore(query, r.title) >= 0.9)) {
-    const fallbacks = wordSearchFallbacks(query);
-    await Promise.all(fallbacks.flatMap((fallback) => [
-      searchWitanimeDirectList(fallback).then((hit) => {
-        if (hit?.results?.length && mergeIn(hit.results)) emit();
-      }).catch(() => {}),
-      searchAnime4upDirectList(fallback).then((hit) => {
-        if (hit?.length && mergeIn(hit)) emit();
-      }).catch(() => {}),
-    ]));
+  // WebView is now only a network-failure fallback. An empty direct response is
+  // a legitimate exact-search miss and should not repeat the same query through
+  // a much slower renderer.
+  if (results.length === 0 && (exactWitFailed || exactUp4Failed)) {
+    const [wit, up4] = await Promise.all([
+      exactWitFailed
+        ? withTimeout(scrapeSearch(query).catch(() => null), 6_000, null)
+        : Promise.resolve(null),
+      exactUp4Failed
+        ? withTimeout(scrapeSearchUp4(query).catch(() => null), 6_000, null)
+        : Promise.resolve(null),
+    ]);
+    if (wit?.results?.length && mergeIn(wit.results)) emit();
+    if (up4?.results?.length && mergeIn(up4.results)) emit();
   }
 
   // Cross-language bridge: the source sites index each anime under a SINGLE
@@ -1604,7 +1589,7 @@ async function searchAnimeFresh(
   // other names and re-search with the Latin-script ones (sites don't index
   // kanji).
   if (results.length === 0) {
-    const alts = await getAltTitles(query).catch(() => []);
+    const alts = await withTimeout(getAltTitles(query).catch(() => []), 5_000, [] as string[]);
     const tried = new Set<string>([norm(query)]);
     const candidates = alts
       .filter((a) => /[a-z]/i.test(a))
@@ -1615,14 +1600,14 @@ async function searchAnimeFresh(
         return true;
       })
       .slice(0, 2);
-    for (const alt of candidates) {
-      let wAlt = await searchWitanimeDirectList(alt).catch(() => null);
-      if (!wAlt) wAlt = await scrapeSearch(alt).catch(() => null);
-      if (wAlt?.results?.length && mergeIn(wAlt.results)) emit();
-      const upAlt = await scrapeSearchUp4(alt).catch(() => null);
-      if (upAlt?.results?.length && mergeIn(upAlt.results)) emit();
-      if (results.length) break;
-    }
+    await Promise.all(candidates.map(async (alt) => {
+      const [wit, up4] = await Promise.all([
+        withTimeout(searchWitanimeDirectList(alt).catch(() => null), FAST_SOURCE_MS, null),
+        withTimeout(searchAnime4upDirectList(alt).catch(() => null), FAST_SOURCE_MS, null),
+      ]);
+      if (wit?.results?.length && mergeIn(wit.results)) emit();
+      if (up4?.length && mergeIn(up4)) emit();
+    }));
   }
 
   rank();

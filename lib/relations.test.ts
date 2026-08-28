@@ -16,6 +16,7 @@ import {
   canonTitle,
   slugToTitle,
   relSearchVariants,
+  titleAliasParts,
   buildSearchQueries,
   scoreMedia,
   pickBestMedia,
@@ -119,6 +120,23 @@ test("seasonNum understands Arabic season markers", () => {
   assert.equal(seasonNum("جوجوتسو كايسن الموسم الثاني"), 2);
   assert.equal(seasonNum("الجزء 3"), 3);
   assert.equal(seasonNum("الموسم ٢"), 2); // arabic-indic digit
+});
+
+test("bilingual parenthetical titles are searched as separate aliases", () => {
+  assert.deepEqual(
+    titleAliasParts("Link Click Season 3 (Shiguang Dailiren III)"),
+    [
+      "Link Click Season 3",
+      "Shiguang Dailiren III",
+      "Link Click Season 3 (Shiguang Dailiren III)",
+    ],
+  );
+  const queries = buildSearchQueries(
+    ["Link Click Season 3 (Shiguang Dailiren III)"],
+    "link click season 3 shiguang dailiren iii",
+  );
+  assert.equal(queries[0], "link click season 3");
+  assert.ok(queries.includes("shiguang dailiren iii"));
 });
 
 test("seasonNum understands official trailing Roman season numbers", () => {

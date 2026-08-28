@@ -115,7 +115,7 @@ export function fuzzyScore(query: string, title: string): number {
  * strong title match. WordPress source search treats all words as one exact-ish
  * phrase; searching a few meaningful pieces recovers "naruto shuppudin" via
  * "naruto", then fuzzyScore ranks Shippuden above the other Naruto entries. */
-export function wordSearchFallbacks(query: string, limit = 3): string[] {
+export function wordSearchFallbacks(query: string, limit = 4): string[] {
   const tokens = normFuzzy(query).split(" ").filter(Boolean);
   if (tokens.length < 2) return [];
   const noise = new Set([
@@ -129,4 +129,21 @@ export function wordSearchFallbacks(query: string, limit = 3): string[] {
     if (out.length >= limit) break;
   }
   return out;
+}
+
+/** Query plan for source-site search. The complete text and its normalized
+ * spelling are searched alongside each meaningful word, all concurrently.
+ * Ordering matters only for diagnostics; result ranking still uses the full
+ * user query so broad word hits cannot outrank a better complete-title match. */
+export function sourceSearchQueries(query: string, limit = 6): string[] {
+  const out: string[] = [];
+  const add = (value: string) => {
+    const trimmed = value.replace(/\s+/g, " ").trim();
+    const key = trimmed.toLowerCase();
+    if (trimmed && !out.some((item) => item.toLowerCase() === key)) out.push(trimmed);
+  };
+  add(query);
+  add(normFuzzy(query));
+  for (const word of wordSearchFallbacks(query)) add(word);
+  return out.slice(0, limit);
 }

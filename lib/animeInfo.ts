@@ -622,7 +622,7 @@ export async function getAltTitles(query: string): Promise<string[]> {
  * de-dupe, self-exclusion) lives in ./relations so it's unit-testable without
  * the RN runtime. This file only does the network call + caching. */
 
-const REL_CACHE_PREFIX = "@anime_relations_v6:";
+const REL_CACHE_PREFIX = "@anime_relations_v7:";
 
 // POST a GraphQL query to AniList, retrying the transient failures that occur
 // in the wild (429 rate-limit, 5xx). Returns parsed JSON or null.

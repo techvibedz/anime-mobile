@@ -41,7 +41,7 @@ import {
   type WitHome,
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
-import { fuzzyScore } from "./fuzzy";
+import { fuzzyScore, wordSearchFallbacks } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 import { writeCloudHome } from "./homeCloudCache";
 import { loadWitanimeHome } from "./homeSourceSelection";
@@ -77,7 +77,7 @@ const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const UP4_CACHE_PREFIX = "@up4_eps_v2:";
 const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
-const SEARCH_CACHE_PREFIX = "@search_v1:";
+const SEARCH_CACHE_PREFIX = "@search_v2:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -1580,6 +1580,22 @@ async function searchAnimeFresh(
         type: null, status: null, synopsis: detail.synopsis || null,
       }])) emit();
     }
+  }
+
+  // Source search treats a multi-word phrase too strictly. If the full phrase
+  // still has no strong match, search up to three meaningful words against the
+  // two fast static sources and merge the wider matches. This is deliberately
+  // bounded and direct-only: it improves recall without multiplying WebViews.
+  if (!results.some((r) => fuzzyScore(query, r.title) >= 0.9)) {
+    const fallbacks = wordSearchFallbacks(query);
+    await Promise.all(fallbacks.flatMap((fallback) => [
+      searchWitanimeDirectList(fallback).then((hit) => {
+        if (hit?.results?.length && mergeIn(hit.results)) emit();
+      }).catch(() => {}),
+      searchAnime4upDirectList(fallback).then((hit) => {
+        if (hit?.length && mergeIn(hit)) emit();
+      }).catch(() => {}),
+    ]));
   }
 
   // Cross-language bridge: the source sites index each anime under a SINGLE

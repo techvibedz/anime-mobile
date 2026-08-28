@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   RefreshControl,
   Pressable,
@@ -125,6 +125,10 @@ export default function UsersScreen() {
     return out;
   }, [rows, query, filter, sort, onlineIds]);
 
+  const renderUser = useCallback(({ item }: { item: UsageRow }) => (
+    <UserRow item={item} isMe={item.userId === user?.id} online={onlineIds.has(item.userId)} />
+  ), [user?.id, onlineIds]);
+
   if (!admin) return null;
 
   const totalTime = rows.reduce((sum, r) => sum + r.totalSeconds, 0);
@@ -135,192 +139,176 @@ export default function UsersScreen() {
       <Aurora />
       <ScreenHeader title={t.usersTitle} />
 
-      <ScrollView
+      <FlatList
+        data={loaded ? filtered : []}
+        keyExtractor={(item) => item.userId}
+        renderItem={renderUser}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ padding: S.paddingContent, paddingBottom: insets.bottom + 40 }}
+        removeClippedSubviews
+        initialNumToRender={8}
+        maxToRenderPerBatch={6}
+        windowSize={7}
+        updateCellsBatchingPeriod={50}
+        ItemSeparatorComponent={() => <View style={s.separator} />}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} />
         }
-      >
-        {/* Summary */}
-        <View style={s.counterCard}>
-          <LinearGradient
-            colors={[C.accentSoft, "transparent"]}
-            start={{ x: 1, y: 0 }}
-            end={{ x: 0, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={s.counterRow}>
-            <View style={s.counterText}>
-              <Text style={s.counterNum}>{rows.length}</Text>
-              <Text style={s.counterLabel}>{t.usersCount(rows.length)}</Text>
+        ListHeaderComponent={(
+          <>
+            <View style={s.counterCard}>
+              <LinearGradient
+                colors={[C.accentSoft, "transparent"]}
+                start={{ x: 1, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+              <View style={s.counterRow}>
+                <View style={s.counterText}>
+                  <Text style={s.counterNum}>{rows.length}</Text>
+                  <Text style={s.counterLabel}>{t.usersCount(rows.length)}</Text>
+                </View>
+                <View style={s.totalPill}>
+                  <Ionicons name="time-outline" size={13} color={C.accent} />
+                  <Text style={s.totalPillText}>{fmtDuration(totalTime)}</Text>
+                </View>
+              </View>
+              <Text style={s.counterSub}>{t.usersSub}</Text>
             </View>
-            <View style={s.totalPill}>
-              <Ionicons name="time-outline" size={13} color={C.accent} />
-              <Text style={s.totalPillText}>{fmtDuration(totalTime)}</Text>
+
+            <View style={s.controls}>
+              <View style={s.searchBox}>
+                <Ionicons name="search" size={16} color={C.textMuted} />
+                <TextInput
+                  style={s.searchInput}
+                  value={query}
+                  onChangeText={setQuery}
+                  placeholder={t.usersSearchPlaceholder}
+                  placeholderTextColor={C.textMuted}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="search"
+                />
+                {query.length > 0 ? (
+                  <Pressable onPress={() => setQuery("")} hitSlop={8}>
+                    <Ionicons name="close-circle" size={16} color={C.textMuted} />
+                  </Pressable>
+                ) : null}
+              </View>
+
+              <View style={s.chipRow}>
+                <Chip label={t.usersFilterAll} active={filter === "all"} onPress={() => setFilter("all")} />
+                <Chip label={t.usersFilterOnline} icon="ellipse" active={filter === "online"} onPress={() => setFilter("online")} accent={C.success} />
+                <Chip label={t.usersFilterActive} active={filter === "active"} onPress={() => setFilter("active")} />
+                <Chip label={t.usersFilterInactive} active={filter === "inactive"} onPress={() => setFilter("inactive")} />
+              </View>
+
+              <View style={s.chipRow}>
+                <Text style={s.sortLabel}>{t.usersSortBy}</Text>
+                <Chip label={t.usersSortRecent} active={sort === "recent"} onPress={() => setSort("recent")} small />
+                <Chip label={t.usersSortTime} active={sort === "time"} onPress={() => setSort("time")} small />
+                <Chip label={t.usersSortSessions} active={sort === "sessions"} onPress={() => setSort("sessions")} small />
+              </View>
             </View>
-          </View>
-          <Text style={s.counterSub}>{t.usersSub}</Text>
-        </View>
-
-        {/* Search + filters */}
-        <View style={s.controls}>
-          <View style={s.searchBox}>
-            <Ionicons name="search" size={16} color={C.textMuted} />
-            <TextInput
-              style={s.searchInput}
-              value={query}
-              onChangeText={setQuery}
-              placeholder={t.usersSearchPlaceholder}
-              placeholderTextColor={C.textMuted}
-              autoCorrect={false}
-              autoCapitalize="none"
-              returnKeyType="search"
-            />
-            {query.length > 0 ? (
-              <Pressable onPress={() => setQuery("")} hitSlop={8}>
-                <Ionicons name="close-circle" size={16} color={C.textMuted} />
-              </Pressable>
-            ) : null}
-          </View>
-
-          <View style={s.chipRow}>
-            <Chip label={t.usersFilterAll} active={filter === "all"} onPress={() => setFilter("all")} />
-            <Chip label={t.usersFilterOnline} icon="ellipse" active={filter === "online"} onPress={() => setFilter("online")} accent={C.success} />
-            <Chip label={t.usersFilterActive} active={filter === "active"} onPress={() => setFilter("active")} />
-            <Chip label={t.usersFilterInactive} active={filter === "inactive"} onPress={() => setFilter("inactive")} />
-          </View>
-
-          <View style={s.chipRow}>
-            <Text style={s.sortLabel}>{t.usersSortBy}</Text>
-            <Chip label={t.usersSortRecent} active={sort === "recent"} onPress={() => setSort("recent")} small />
-            <Chip label={t.usersSortTime} active={sort === "time"} onPress={() => setSort("time")} small />
-            <Chip label={t.usersSortSessions} active={sort === "sessions"} onPress={() => setSort("sessions")} small />
-          </View>
-        </View>
-
-        {/* List */}
-        {!loaded ? (
-          <View style={s.loadingWrap}>
-            <ActivityIndicator size="large" color={C.accent} />
-          </View>
-        ) : rows.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyIcon}>
-              <Ionicons name="stats-chart-outline" size={30} color={C.textMuted} />
-            </View>
-            <Text style={s.emptyTitle}>{t.usersEmpty}</Text>
-            <Text style={s.emptySub}>{t.usersEmptySub}</Text>
-          </View>
-        ) : filtered.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyIcon}>
-              <Ionicons name="search-outline" size={30} color={C.textMuted} />
-            </View>
-            <Text style={s.emptyTitle}>{t.usersNoMatch}</Text>
-            <Text style={s.emptySub}>{t.usersNoMatchSub}</Text>
-          </View>
-        ) : (
-          <View style={s.list}>
             {filtering ? (
               <Text style={s.resultCount}>{t.usersShowing(filtered.length, rows.length)}</Text>
             ) : null}
-            {filtered.map((u) => {
-              const isMe = u.userId === user?.id;
-              const online = onlineIds.has(u.userId);
-              const initial = (u.name || u.email || "?").trim().charAt(0).toUpperCase();
-              return (
-                <Pressable
-                  key={u.userId}
-                  style={({ pressed }) => [s.row, pressed && s.rowPressed]}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/user/[id]",
-                      params: {
-                        id: u.userId,
-                        name: u.name,
-                        email: u.email,
-                        avatar: u.avatarUrl ?? "",
-                        last: u.lastSeenAt,
-                      },
-                    })
-                  }
-                >
-                  {/* Header: avatar + identity */}
-                  <View style={s.rowHead}>
-                    <Ionicons name="chevron-back" size={18} color={C.textMuted} style={s.rowChevron} />
-                    <View style={s.rowBody}>
-                      <Text style={s.rowName} numberOfLines={1}>
-                        {u.name}{isMe ? ` · ${t.liveUsersYou}` : ""}
-                      </Text>
-                      <Text style={s.rowEmail} numberOfLines={1}>{u.email}</Text>
-                      {online ? (
-                        <View style={s.onlinePill}>
-                          <View style={s.onlinePillDot} />
-                          <Text style={s.onlinePillText}>{t.usersOnlineNow}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    <View style={s.avatarWrap}>
-                      {u.avatarUrl ? (
-                        <Image source={{ uri: u.avatarUrl }} style={s.avatar} contentFit="cover" transition={120} />
-                      ) : (
-                        <View style={[s.avatar, s.avatarFallback]}>
-                          <Text style={s.avatarInitial}>{initial}</Text>
-                        </View>
-                      )}
-                      {online ? <View style={s.onlineDot} /> : null}
-                    </View>
-                  </View>
-
-                  {/* Detail stats — 2×2 grid keeps each value (esp. dates)
-                      in a roomy cell instead of a cramped single row. */}
-                  <View style={s.stats}>
-                    <Stat
-                      icon="time-outline"
-                      label={t.usersTimeSpent}
-                      value={u.totalSeconds > 0 ? fmtDuration(u.totalSeconds) : t.usersNever}
-                      strong
-                    />
-                    <Stat
-                      icon="enter-outline"
-                      label={t.usersLastSeen}
-                      value={timeAgo(u.lastSeenAt)}
-                    />
-                    <Stat
-                      icon="repeat-outline"
-                      label={t.usersSessions}
-                      value={String(u.sessions)}
-                    />
-                    <Stat
-                      icon="calendar-outline"
-                      label={t.usersRegistered}
-                      value={fmtDate(u.createdAt)}
-                    />
-                    <Stat
-                      icon="phone-portrait-outline"
-                      label={t.usersVersion}
-                      value={u.version ? `v${u.version}` : t.usersNever}
-                    />
-                    <Stat
-                      icon="play-outline"
-                      label={t.usersEpisodesStarted}
-                      value={String(u.episodesStarted)}
-                    />
-                    <Stat
-                      icon="checkmark-circle-outline"
-                      label={t.usersEpisodesCompleted}
-                      value={String(u.episodesCompleted)}
-                      strong
-                    />
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
+            <View style={s.listStart} />
+          </>
         )}
-      </ScrollView>
+        ListEmptyComponent={(
+          !loaded ? (
+            <View style={s.loadingWrap}><ActivityIndicator size="large" color={C.accent} /></View>
+          ) : rows.length === 0 ? (
+            <EmptyState icon="stats-chart-outline" title={t.usersEmpty} subtitle={t.usersEmptySub} />
+          ) : (
+            <EmptyState icon="search-outline" title={t.usersNoMatch} subtitle={t.usersNoMatchSub} />
+          )
+        )}
+      />
+    </View>
+  );
+}
+
+const UserRow = memo(function UserRow({
+  item: u,
+  isMe,
+  online,
+}: {
+  item: UsageRow;
+  isMe: boolean;
+  online: boolean;
+}) {
+  const initial = (u.name || u.email || "?").trim().charAt(0).toUpperCase();
+  return (
+    <Pressable
+      style={({ pressed }) => [s.row, pressed && s.rowPressed]}
+      onPress={() => router.push({
+        pathname: "/user/[id]",
+        params: {
+          id: u.userId,
+          name: u.name,
+          email: u.email,
+          avatar: u.avatarUrl ?? "",
+          last: u.lastSeenAt,
+        },
+      })}
+    >
+      <View style={s.rowHead}>
+        <Ionicons name="chevron-back" size={18} color={C.textMuted} style={s.rowChevron} />
+        <View style={s.rowBody}>
+          <Text style={s.rowName} numberOfLines={1}>{u.name}{isMe ? ` · ${t.liveUsersYou}` : ""}</Text>
+          <Text style={s.rowEmail} numberOfLines={1}>{u.email}</Text>
+          {online ? (
+            <View style={s.onlinePill}>
+              <View style={s.onlinePillDot} />
+              <Text style={s.onlinePillText}>{t.usersOnlineNow}</Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={s.avatarWrap}>
+          {u.avatarUrl ? (
+            <Image
+              source={{ uri: u.avatarUrl }}
+              style={s.avatar}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              recyclingKey={u.userId}
+              transition={120}
+            />
+          ) : (
+            <View style={[s.avatar, s.avatarFallback]}><Text style={s.avatarInitial}>{initial}</Text></View>
+          )}
+          {online ? <View style={s.onlineDot} /> : null}
+        </View>
+      </View>
+      <View style={s.stats}>
+        <Stat icon="time-outline" label={t.usersTimeSpent} value={u.totalSeconds > 0 ? fmtDuration(u.totalSeconds) : t.usersNever} strong />
+        <Stat icon="enter-outline" label={t.usersLastSeen} value={timeAgo(u.lastSeenAt)} />
+        <Stat icon="repeat-outline" label={t.usersSessions} value={String(u.sessions)} />
+        <Stat icon="calendar-outline" label={t.usersRegistered} value={fmtDate(u.createdAt)} />
+        <Stat icon="phone-portrait-outline" label={t.usersVersion} value={u.version ? `v${u.version}` : t.usersNever} />
+        <Stat icon="play-outline" label={t.usersEpisodesStarted} value={String(u.episodesStarted)} />
+        <Stat icon="checkmark-circle-outline" label={t.usersEpisodesCompleted} value={String(u.episodesCompleted)} strong />
+      </View>
+    </Pressable>
+  );
+});
+
+function EmptyState({
+  icon,
+  title,
+  subtitle,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <View style={s.emptyWrap}>
+      <View style={s.emptyIcon}><Ionicons name={icon} size={30} color={C.textMuted} /></View>
+      <Text style={s.emptyTitle}>{title}</Text>
+      <Text style={s.emptySub}>{subtitle}</Text>
     </View>
   );
 }
@@ -430,7 +418,8 @@ const s = StyleSheet.create({
 
   resultCount: { color: C.textMuted, fontSize: 12, fontFamily: "Cairo_500Medium", textAlign: "right", marginBottom: 4 },
 
-  list: { marginTop: 18, gap: 10 },
+  listStart: { height: 18 },
+  separator: { height: 10 },
   row: {
     padding: 14, borderRadius: R.lg,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,

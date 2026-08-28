@@ -9,7 +9,7 @@
 // the exact float is an implementation detail, the relative ordering is not.
 
 import assert from "node:assert";
-import { normFuzzy, levenshtein, fuzzyScore } from "./fuzzy";
+import { normFuzzy, levenshtein, fuzzyScore, wordSearchFallbacks } from "./fuzzy";
 
 let passed = 0;
 let failed = 0;
@@ -101,6 +101,12 @@ test("fuzzyScore is low for unrelated titles (naruto vs One Piece)", () => {
 test("fuzzyScore absorbs spacing differences (full metal vs Fullmetal Alchemist)", () => {
   const s = fuzzyScore("full metal", "Fullmetal Alchemist");
   assert.ok(s > 0.7, `got ${s}`);
+});
+
+test("wordSearchFallbacks recovers meaningful pieces of a failed phrase", () => {
+  assert.deepEqual(wordSearchFallbacks("naruto shuppudin"), ["naruto", "shuppudin"]);
+  assert.deepEqual(wordSearchFallbacks("Attack on Titan season 3"), ["attack", "titan"]);
+  assert.deepEqual(wordSearchFallbacks("naruto"), []);
 });
 
 /* ── summary ── */

@@ -121,6 +121,12 @@ test("seasonNum understands Arabic season markers", () => {
   assert.equal(seasonNum("الموسم ٢"), 2); // arabic-indic digit
 });
 
+test("seasonNum understands official trailing Roman season numbers", () => {
+  assert.equal(seasonNum("Shiguang Dailiren III"), 3);
+  assert.equal(seasonNum("Shiguang Dailiren II"), 2);
+  assert.equal(canonTitle("Shiguang Dailiren III"), canonTitle("Shiguang Dailiren Season 3"));
+});
+
 /* ── canonical title (de-dupe / self key) ── */
 
 test("canonTitle keeps seasons distinct but collapses spelling variants", () => {

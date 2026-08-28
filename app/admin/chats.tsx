@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   RefreshControl,
   Pressable,
@@ -57,6 +57,10 @@ export default function AdminChatsScreen() {
     if (admin) load();
   }, [admin, load]);
 
+  const renderChat = useCallback(({ item }: { item: AdminChatSummary }) => (
+    <ChatRow item={item} />
+  ), []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await load();
@@ -80,107 +84,105 @@ export default function AdminChatsScreen() {
     <View style={[s.root, { paddingTop: insets.top }]}>
       <Aurora />
       <ScreenHeader title={t.chatAdminInboxTitle} />
-      <ScrollView
+      <FlatList
+        data={loaded ? rows : []}
+        keyExtractor={(item) => item.id}
+        renderItem={renderChat}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ padding: S.paddingContent, paddingBottom: insets.bottom + 40 }}
+        removeClippedSubviews
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        ItemSeparatorComponent={() => <View style={s.separator} />}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} />
         }
-      >
-        <View style={s.introCard}>
-          <LinearGradient
-            colors={[C.accentSoft, "transparent"]}
-            start={{ x: 1, y: 0 }}
-            end={{ x: 0, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={s.introRow}>
-            <View style={s.introIcon}>
-              <Ionicons name="chatbubbles-outline" size={22} color={C.accent} />
+        ListHeaderComponent={(
+          <>
+            <View style={s.introCard}>
+              <LinearGradient
+                colors={[C.accentSoft, "transparent"]}
+                start={{ x: 1, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={StyleSheet.absoluteFill}
+              />
+              <View style={s.introRow}>
+                <View style={s.introIcon}>
+                  <Ionicons name="chatbubbles-outline" size={22} color={C.accent} />
+                </View>
+                <View style={s.introBody}>
+                  <Text style={s.introCount}>{rows.length}</Text>
+                  <Text style={s.introSub}>{t.chatAdminInboxSub}</Text>
+                </View>
+              </View>
             </View>
-            <View style={s.introBody}>
-              <Text style={s.introCount}>{rows.length}</Text>
-              <Text style={s.introSub}>{t.chatAdminInboxSub}</Text>
-            </View>
-          </View>
-        </View>
-
-        {!loaded ? (
-          <View style={s.loadingWrap}>
-            <ActivityIndicator size="large" color={C.accent} />
-          </View>
-        ) : rows.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyIcon}>
-              <Ionicons name="chatbubble-ellipses-outline" size={30} color={C.textMuted} />
-            </View>
-            <Text style={s.emptyTitle}>{t.chatInboxEmpty}</Text>
-            <Text style={s.emptySub}>{t.chatInboxEmptySub}</Text>
-          </View>
-        ) : (
-          <View style={s.list}>
-            {rows.map((c) => {
-              const closed = c.status === "closed";
-              const initial = (c.userName || c.userEmail || "?").trim().charAt(0).toUpperCase();
-              return (
-                <Pressable
-                  key={c.id}
-                  style={({ pressed }) => [s.row, pressed && s.rowPressed, closed && s.rowClosed]}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/admin/chat/[id]",
-                      params: {
-                        id: c.id,
-                        name: c.userName,
-                        email: c.userEmail,
-                        avatar: c.userAvatar ?? "",
-                      },
-                    })
-                  }
-                >
-                  <Ionicons name="chevron-back" size={18} color={C.textMuted} style={s.rowChevron} />
-                  <View style={s.rowBody}>
-                    <Text style={s.rowName} numberOfLines={1}>
-                      {c.userName || c.userEmail}
-                    </Text>
-                    <Text style={s.rowPreview} numberOfLines={1}>
-                      {c.lastMessageBody || t.chatNoMessages}
-                    </Text>
-                    <View style={s.rowMeta}>
-                      {closed ? (
-                        <View style={[s.statusPill, s.statusPillClosed]}>
-                          <Ionicons name="lock-closed-outline" size={10} color={C.textMuted} />
-                          <Text style={[s.statusText, s.statusTextClosed]}>{t.chatStatusClosed}</Text>
-                        </View>
-                      ) : (
-                        <View style={[s.statusPill, s.statusPillOpen]}>
-                          <View style={s.statusDot} />
-                          <Text style={[s.statusText, s.statusTextOpen]}>{t.chatStatusOpen}</Text>
-                        </View>
-                      )}
-                      {c.lastMessageAt ? (
-                        <Text style={s.rowTime}>{timeAgo(c.lastMessageAt)}</Text>
-                      ) : null}
-                    </View>
-                  </View>
-                  <View style={s.avatarWrap}>
-                    {c.userAvatar ? (
-                      <Image source={{ uri: c.userAvatar }} style={s.avatar} contentFit="cover" transition={120} />
-                    ) : (
-                      <View style={[s.avatar, s.avatarFallback]}>
-                        <Text style={s.avatarInitial}>{initial}</Text>
-                      </View>
-                    )}
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
+            <View style={s.listStart} />
+          </>
         )}
-      </ScrollView>
+        ListEmptyComponent={(
+          !loaded ? (
+            <View style={s.loadingWrap}><ActivityIndicator size="large" color={C.accent} /></View>
+          ) : (
+            <View style={s.emptyWrap}>
+              <View style={s.emptyIcon}><Ionicons name="chatbubble-ellipses-outline" size={30} color={C.textMuted} /></View>
+              <Text style={s.emptyTitle}>{t.chatInboxEmpty}</Text>
+              <Text style={s.emptySub}>{t.chatInboxEmptySub}</Text>
+            </View>
+          )
+        )}
+      />
     </View>
   );
 }
+
+const ChatRow = memo(function ChatRow({ item: c }: { item: AdminChatSummary }) {
+  const closed = c.status === "closed";
+  const initial = (c.userName || c.userEmail || "?").trim().charAt(0).toUpperCase();
+  return (
+    <Pressable
+      style={({ pressed }) => [s.row, pressed && s.rowPressed, closed && s.rowClosed]}
+      onPress={() => router.push({
+        pathname: "/admin/chat/[id]",
+        params: { id: c.id, name: c.userName, email: c.userEmail, avatar: c.userAvatar ?? "" },
+      })}
+    >
+      <Ionicons name="chevron-back" size={18} color={C.textMuted} style={s.rowChevron} />
+      <View style={s.rowBody}>
+        <Text style={s.rowName} numberOfLines={1}>{c.userName || c.userEmail}</Text>
+        <Text style={s.rowPreview} numberOfLines={1}>{c.lastMessageBody || t.chatNoMessages}</Text>
+        <View style={s.rowMeta}>
+          {closed ? (
+            <View style={[s.statusPill, s.statusPillClosed]}>
+              <Ionicons name="lock-closed-outline" size={10} color={C.textMuted} />
+              <Text style={[s.statusText, s.statusTextClosed]}>{t.chatStatusClosed}</Text>
+            </View>
+          ) : (
+            <View style={[s.statusPill, s.statusPillOpen]}>
+              <View style={s.statusDot} />
+              <Text style={[s.statusText, s.statusTextOpen]}>{t.chatStatusOpen}</Text>
+            </View>
+          )}
+          {c.lastMessageAt ? <Text style={s.rowTime}>{timeAgo(c.lastMessageAt)}</Text> : null}
+        </View>
+      </View>
+      <View style={s.avatarWrap}>
+        {c.userAvatar ? (
+          <Image
+            source={{ uri: c.userAvatar }}
+            style={s.avatar}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            recyclingKey={c.id}
+            transition={120}
+          />
+        ) : (
+          <View style={[s.avatar, s.avatarFallback]}><Text style={s.avatarInitial}>{initial}</Text></View>
+        )}
+      </View>
+    </Pressable>
+  );
+});
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
@@ -200,7 +202,8 @@ const s = StyleSheet.create({
   introCount: { color: C.text, fontSize: 34, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
   introSub: { color: C.textSecondary, fontSize: 12.5, marginTop: 4, textAlign: "right", fontFamily: "Cairo_500Medium", lineHeight: 18 },
 
-  list: { marginTop: 16, gap: 10 },
+  listStart: { height: 16 },
+  separator: { height: 10 },
   row: {
     flexDirection: "row", alignItems: "center", padding: 14, borderRadius: R.lg,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,

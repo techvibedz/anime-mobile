@@ -130,6 +130,10 @@ export function seasonNum(s: string | null | undefined): number {
     الاول: 1, "الأول": 1, الثاني: 2, الثالث: 3, الرابع: 4, الخامس: 5, السادس: 6,
   };
   for (const k in words) if (t.indexOf(k) !== -1) return words[k];
+  // A handful of donghua/anime franchises use a bare trailing Roman numeral
+  // as the official season marker (for example "Shiguang Dailiren III").
+  const roman = t.match(/\b(i|ii|iii|iv|v|vi)\s*$/);
+  if (roman) return ({ i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6 } as Record<string, number>)[roman[1]] || 0;
   return 0;
 }
 
@@ -143,6 +147,7 @@ function stripSeasonNoise(latin: string): string {
     .replace(/\b(season|part|cour)\s*[0-9]*\b/g, " ")
     .replace(/\bs[0-9]+\b/g, " ")
     .replace(/\b(first|second|third|fourth|fifth|sixth)\s+season\b/g, " ")
+    .replace(/\b(i|ii|iii|iv|v|vi)\s*$/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

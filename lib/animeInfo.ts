@@ -622,7 +622,7 @@ export async function getAltTitles(query: string): Promise<string[]> {
  * de-dupe, self-exclusion) lives in ./relations so it's unit-testable without
  * the RN runtime. This file only does the network call + caching. */
 
-const REL_CACHE_PREFIX = "@anime_relations_v5:";
+const REL_CACHE_PREFIX = "@anime_relations_v6:";
 
 // POST a GraphQL query to AniList, retrying the transient failures that occur
 // in the wild (429 rate-limit, 5xx). Returns parsed JSON or null.
@@ -688,14 +688,39 @@ async function getMalMatch(title: string): Promise<{ malId: number | null; title
 const relMem = new Map<string, RelatedAnimeEntry[]>();
 const relInflight = new Map<string, Promise<RelatedAnimeEntry[]>>();
 
+async function fetchRelationsByQueries(
+  variants: string[],
+  viewedTitle: string,
+): Promise<RelatedAnimeEntry[]> {
+  for (const query of variants) {
+    const json = await anilistPost(RELATIONS_PAGE_QUERY, { search: query });
+    const medias: AniListMedia[] | undefined = json?.data?.Page?.media;
+    if (!Array.isArray(medias) || medias.length === 0) continue;
+    const best = pickBestMedia(medias, query);
+    if (!best) continue;
+    const out = await collectFranchise(best, viewedTitle, fetchMediaById);
+    if (out.length > 0) return out;
+  }
+  return [];
+}
+
 async function doFetchRelations(title: string, href?: string | null): Promise<RelatedAnimeEntry[]> {
   const slugTitle = slugToTitle(href);
+
+  // Start the Jikan/MAL bridge in parallel, but try AniList's own exact title
+  // and source slug immediately. Jikan can be rate-limited or return 5xx for
+  // minutes; previously that blocked even exact AniList hits such as
+  // "Shiguang Dailiren III", making its known prequel look like no relations.
+  const malPromise = getMalMatch(title)
+    .catch(() => ({ malId: null as number | null, titles: [] as string[] }));
+  const direct = await fetchRelationsByQueries(buildSearchQueries([title], slugTitle), title);
+  if (direct.length > 0) return direct;
 
   // 1) MAL-ID bridge (most reliable). Jikan resolves the title robustly — even
   //    Arabic ones — then AniList is looked up EXACTLY by MAL id, with no fuzzy
   //    AniList title matching that some titles slip through. This is the main
   //    detection improvement; it catches the anime that title search misses.
-  const mal = await getMalMatch(title).catch(() => ({ malId: null as number | null, titles: [] as string[] }));
+  const mal = await malPromise;
   if (mal.malId != null) {
     const json = await anilistPost(RELATIONS_BY_MAL_QUERY, { idMal: mal.malId });
     const media = json?.data?.Media as AniListMedia | undefined;
@@ -716,19 +741,7 @@ async function doFetchRelations(title: string, href?: string | null): Promise<Re
   //    slug AND every MAL alt-title (extra romanisations). Candidates are scored
   //    and low-confidence matches rejected so we never show a random anime's
   //    relations; self-exclusion keeps a Season-2 page from listing itself.
-  const variants = buildSearchQueries([title, ...mal.titles], slugTitle);
-  for (const q of variants) {
-    const json = await anilistPost(RELATIONS_PAGE_QUERY, { search: q });
-    const medias: AniListMedia[] | undefined = json?.data?.Page?.media;
-    if (!Array.isArray(medias) || medias.length === 0) continue;
-    const best = pickBestMedia(medias, q);
-    if (!best) continue;
-    // Walk the franchise chain so ALL seasons appear (AniList only links
-    // adjacent ones per node), not just the next/previous installment.
-    const out = await collectFranchise(best, title, fetchMediaById);
-    if (out.length > 0) return out;
-  }
-  return [];
+  return fetchRelationsByQueries(buildSearchQueries(mal.titles, slugTitle), title);
 }
 
 /** Related anime (sequels, prequels, side stories, spin-offs …) for a title.
@@ -736,7 +749,8 @@ async function doFetchRelations(title: string, href?: string | null): Promise<Re
  * Resolved via AniList and cached for a week. Empty array on any miss. */
 export async function fetchAnimeRelations(title: string, href?: string | null): Promise<RelatedAnimeEntry[]> {
   if (!title || !title.trim()) return [];
-  const key = title.toLowerCase().trim();
+  const slug = slugToTitle(href).toLowerCase();
+  const key = `${title.toLowerCase().trim()}|${slug}`;
   const cached = relMem.get(key);
   if (cached) return cached;
   const pending = relInflight.get(key);

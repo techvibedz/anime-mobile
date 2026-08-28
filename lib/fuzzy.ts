@@ -110,3 +110,23 @@ export function fuzzyScore(query: string, title: string): number {
 
   return Math.max(coverage, compactSim);
 }
+
+/** Broader source queries used only when the complete phrase produced no
+ * strong title match. WordPress source search treats all words as one exact-ish
+ * phrase; searching a few meaningful pieces recovers "naruto shuppudin" via
+ * "naruto", then fuzzyScore ranks Shippuden above the other Naruto entries. */
+export function wordSearchFallbacks(query: string, limit = 3): string[] {
+  const tokens = normFuzzy(query).split(" ").filter(Boolean);
+  if (tokens.length < 2) return [];
+  const noise = new Set([
+    "the", "and", "of", "in", "no", "to", "season", "part", "cour",
+    "anime", "series", "الجزء", "الموسم", "انمي",
+  ]);
+  const out: string[] = [];
+  for (const token of tokens) {
+    if (token.length < 3 || noise.has(token) || out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= limit) break;
+  }
+  return out;
+}

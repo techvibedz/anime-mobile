@@ -1,5 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
+import { favoriteKey, isAnimeDetailUrl, toAnimeUrl } from "./favoritesIdentity";
+
+export { favoriteKey, isAnimeDetailUrl, toAnimeUrl } from "./favoritesIdentity";
 
 const KEY = "anime_favorites";
 
@@ -13,34 +16,17 @@ export interface FavoriteAnime {
   list: FavoriteList;
 }
 
-/**
- * Converts an episode URL to the parent anime URL when possible.
- * witanime episodes: /episode/<slug>-الحلقة-N[-suffix]/ → /anime/<slug>/
- * anime4up episodes: similar pattern
- * Returns null if the URL is an episode that we can't safely convert.
- */
-export function toAnimeUrl(href: string): string | null {
-  if (!href) return null;
-  if (href.includes('/anime/')) return href;
-  if (!href.includes('/episode/')) return href; // unknown structure — assume safe
-  try {
-    const decoded = decodeURIComponent(href);
-    // Strip the -الحلقة-N(-suffix) tail from the slug, then swap /episode/ → /anime/
-    const stripped = decoded.replace(/-?الحلقة[-\s]*\d+[^/]*/, '');
-    const converted = stripped.replace('/episode/', '/anime/');
-    if (converted !== decoded && converted.includes('/anime/')) {
-      // Re-encode the path safely
-      const u = new URL(converted);
-      return u.origin + u.pathname.split('/').map((seg, i) =>
-        i === 0 ? seg : encodeURIComponent(decodeURIComponent(seg))
-      ).join('/');
-    }
-  } catch {}
-  return null;
+type FavoriteListener = () => void;
+const listeners = new Set<FavoriteListener>();
+
+function emitFavoritesChanged() {
+  for (const listener of listeners) listener();
 }
 
-function isAnimeUrl(href: string): boolean {
-  return !!href && href.includes('/anime/') && !href.includes('/episode/');
+/** React screens subscribe so late cloud hydration updates the heart. */
+export function subscribeFavorites(listener: FavoriteListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 async function pushFavoriteToCloud(fav: FavoriteAnime) {
@@ -58,11 +44,11 @@ async function pushFavoriteToCloud(fav: FavoriteAnime) {
   if (error) console.warn("[favorites] cloud sync failed:", error.message);
 }
 
-async function deleteFavoriteFromCloud(href: string) {
+async function deleteFavoritesFromCloud(hrefs: string[]) {
   if (!isSupabaseConfigured) return;
   const user = await getSessionUser();
-  if (!user) return;
-  await supabase.from("favorites").delete().eq("user_id", user.id).eq("href", href);
+  if (!user || hrefs.length === 0) return;
+  await supabase.from("favorites").delete().eq("user_id", user.id).in("href", hrefs);
 }
 
 /** Hydrate local cache from Supabase (called after sign-in). */
@@ -84,15 +70,22 @@ export async function pullFavoritesFromCloud() {
     addedAt: new Date(row.added_at).getTime(),
   }));
   await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  emitFavoritesChanged();
 }
 
 export async function getFavorites(filterList?: FavoriteList): Promise<FavoriteAnime[]> {
   const raw = await AsyncStorage.getItem(KEY);
   const list: FavoriteAnime[] = raw ? JSON.parse(raw) : [];
   // Filter out legacy episode URLs; default `list` to "planned" for migrated entries.
-  const cleaned = list
-    .filter((f) => isAnimeUrl(f.href))
-    .map((f) => ({ ...f, list: (f.list || "planned") as FavoriteList }));
+  const cleaned: FavoriteAnime[] = [];
+  const seen = new Set<string>();
+  for (const favorite of list) {
+    if (!isAnimeDetailUrl(favorite.href)) continue;
+    const key = favoriteKey(favorite.href);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push({ ...favorite, list: (favorite.list || "planned") as FavoriteList });
+  }
   return filterList ? cleaned.filter((f) => f.list === filterList) : cleaned;
 }
 
@@ -101,19 +94,21 @@ export async function addFavorite(
 ): Promise<boolean> {
   // If caller passed an episode URL, attempt to convert it. Refuse if no anime URL available.
   let href = anime.href;
-  if (!isAnimeUrl(href)) {
+  if (!isAnimeDetailUrl(href)) {
     const converted = toAnimeUrl(href);
-    if (!converted || !isAnimeUrl(converted)) return false;
+    if (!converted || !isAnimeDetailUrl(converted)) return false;
     href = converted;
   }
   const targetList: FavoriteList = anime.list || "planned";
   const all = await getFavorites();
-  const existing = all.find((f) => f.href === href);
+  const key = favoriteKey(href);
+  const existing = all.find((f) => favoriteKey(f.href) === key);
   if (existing) {
     if (existing.list !== targetList) {
-      const updated = all.map((f) => f.href === href ? { ...f, list: targetList } : f);
+      const updated = all.map((f) => favoriteKey(f.href) === key ? { ...f, list: targetList } : f);
       await AsyncStorage.setItem(KEY, JSON.stringify(updated));
       pushFavoriteToCloud({ ...existing, list: targetList }).catch(() => {});
+      emitFavoritesChanged();
     }
     return true;
   }
@@ -121,23 +116,28 @@ export async function addFavorite(
   all.unshift(newFav);
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
   pushFavoriteToCloud(newFav).catch(() => {});
+  emitFavoritesChanged();
   return true;
 }
 
 export async function removeFavorite(href: string) {
   const raw = await AsyncStorage.getItem(KEY);
   const list: FavoriteAnime[] = raw ? JSON.parse(raw) : [];
-  const filtered = list.filter((f) => f.href !== href);
+  const key = favoriteKey(href);
+  const removedHrefs = list.filter((f) => favoriteKey(f.href) === key).map((f) => f.href);
+  const filtered = list.filter((f) => favoriteKey(f.href) !== key);
   await AsyncStorage.setItem(KEY, JSON.stringify(filtered));
-  deleteFavoriteFromCloud(href).catch(() => {});
+  deleteFavoritesFromCloud(removedHrefs.length ? removedHrefs : [href]).catch(() => {});
+  emitFavoritesChanged();
 }
 
 /** Returns the list the anime is currently saved to, or null if not saved. */
 export async function favoriteListOf(href: string): Promise<FavoriteList | null> {
   const all = await getFavorites();
-  const animeHref = isAnimeUrl(href) ? href : toAnimeUrl(href);
+  const animeHref = isAnimeDetailUrl(href) ? href : toAnimeUrl(href);
   if (!animeHref) return null;
-  const found = all.find((f) => f.href === animeHref);
+  const key = favoriteKey(animeHref);
+  const found = all.find((f) => favoriteKey(f.href) === key);
   return found ? found.list : null;
 }
 

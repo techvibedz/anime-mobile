@@ -22,7 +22,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, searchAnime } from "../../lib/api";
 import type { AnimeDetail, Episode, SearchResult } from "../../lib/api";
-import { addFavorite, removeFavorite, favoriteListOf } from "../../lib/favorites";
+import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
@@ -91,7 +91,6 @@ export default function AnimeDetailScreen() {
     const url = decodeURIComponent(id);
     let cancelled = false;
     let resolvedTitle: string | null = null;
-    favoriteListOf(url).then(setBookmarkList);
     (async () => {
       try {
         // Primary scrape — return as soon as witanime data is ready so the
@@ -130,6 +129,22 @@ export default function AnimeDetailScreen() {
     })();
     return () => { cancelled = true; };
   }, [id]);
+
+  // Re-check on focus and whenever local/cloud favorites change. Cloud hydration
+  // happens asynchronously after sign-in, so a one-time mount check can race it
+  // and leave an already-favorited anime showing an empty heart.
+  useFocusEffect(useCallback(() => {
+    if (!id) return;
+    let active = true;
+    const refresh = () => {
+      favoriteListOf(decodeURIComponent(id)).then((list) => {
+        if (active) setBookmarkList(list);
+      });
+    };
+    refresh();
+    const unsubscribe = subscribeFavorites(refresh);
+    return () => { active = false; unsubscribe(); };
+  }, [id]));
 
   // Resolve the lightweight MyAnimeList score for the header badge once the
   // title is known. The slower full facts load only when the Info tab opens.
@@ -1062,6 +1077,7 @@ function stripRelatedSeasonNoise(latin: string): string {
     .replace(/\b(season|part|cour)\s*[0-9]*\b/g, " ")
     .replace(/\bs[0-9]+\b/g, " ")
     .replace(/\b(first|second|third|fourth|fifth|sixth)\s+season\b/g, " ")
+    .replace(/\b(i|ii|iii|iv|v|vi)\s*$/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

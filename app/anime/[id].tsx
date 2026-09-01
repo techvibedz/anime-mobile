@@ -14,6 +14,8 @@ import {
   Share,
   Animated,
   Easing,
+  Keyboard,
+  TextInput,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
@@ -54,6 +56,7 @@ const Clipboard = require("react-native/Libraries/Components/Clipboard/Clipboard
 const { width: SW } = Dimensions.get("window");
 const BANNER_H = 360;
 const PAD = S.paddingContent;
+const EP_CARD_WIDTH = (SW - PAD * 2 - 10) / 2;
 
 type TabKey = "episodes" | "related" | "info";
 
@@ -82,6 +85,14 @@ export default function AnimeDetailScreen() {
   const [relationsLoading, setRelationsLoading] = useState(true);
   const [titleCopied, setTitleCopied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const detailScrollRef = useRef<ScrollView>(null);
+  const tabContentYRef = useRef(0);
+  const scrollToEpisodeOffset = useCallback((offset: number) => {
+    detailScrollRef.current?.scrollTo({
+      y: Math.max(0, tabContentYRef.current + offset - 12),
+      animated: true,
+    });
+  }, []);
   const bookmarked = bookmarkList !== null;
   const animeHref = id ? decodeURIComponent(id) : "";
   const isMainSource = /witanime/i.test(animeHref);
@@ -353,6 +364,7 @@ export default function AnimeDetailScreen() {
   return (
     <View style={ss.root}>
       <ScrollView
+        ref={detailScrollRef}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -473,7 +485,10 @@ export default function AnimeDetailScreen() {
         </View>
 
         {/* ── Tab Content ───────────────────── */}
-        <View style={ss.tabContent}>
+        <View
+          style={ss.tabContent}
+          onLayout={(event) => { tabContentYRef.current = event.nativeEvent.layout.y; }}
+        >
           {activeTab === "episodes" && (
             <EpisodesTab
               episodes={data.episodes}
@@ -485,6 +500,7 @@ export default function AnimeDetailScreen() {
               onToggleWatched={handleToggleWatched}
               animeHref={animeHref}
               animeTitle={data.title}
+              onJumpToOffset={scrollToEpisodeOffset}
             />
           )}
           {activeTab === "related" && <RelatedTab items={relations} loading={relationsLoading} />}
@@ -671,6 +687,7 @@ function EpisodesTab({
   onToggleWatched,
   animeHref,
   animeTitle,
+  onJumpToOffset,
 }: {
   episodes: AnimeDetail["episodes"];
   episodes4up: Episode[];
@@ -681,8 +698,15 @@ function EpisodesTab({
   onToggleWatched: (ep: GridEpisode) => void;
   animeHref: string;
   animeTitle: string;
+  onJumpToOffset: (offset: number) => void;
 }) {
   const [sortDesc, setSortDesc] = useState(true); // true = newest first
+  const [episodeQuery, setEpisodeQuery] = useState("");
+  const [jumpError, setJumpError] = useState(false);
+  const [highlightedEpisode, setHighlightedEpisode] = useState<number | null>(null);
+  const gridYRef = useRef(0);
+  const episodeOffsetsRef = useRef(new Map<number, number>());
+  const pendingJumpEpisodeRef = useRef<number | null>(null);
   // Live per-episode download state, keyed by the episode's primary href, so each
   // grid card can show idle / progress / done and trigger an offline save.
   const [downloads, setDownloads] = useState<Record<string, { status: DownloadStatus; progress: number }>>({});
@@ -797,7 +821,12 @@ function EpisodesTab({
 
   // Reset to the cheap first batch when the sort flips so the user sees the top
   // of the NEW order instantly; the expansion effect below re-fills the page.
-  useEffect(() => { setVisibleCount(FIRST); }, [sortDesc]);
+  useEffect(() => {
+    episodeOffsetsRef.current.clear();
+    pendingJumpEpisodeRef.current = null;
+    setHighlightedEpisode(null);
+    setVisibleCount(FIRST);
+  }, [sortDesc]);
 
   // Expand from the cheap first batch to the full page once the screen
   // transition + first paint have settled — so the heavy 80-card build runs
@@ -813,6 +842,44 @@ function EpisodesTab({
 
   const visible = sorted.slice(0, visibleCount);
   const hasMore = visibleCount < sorted.length;
+
+  const scrollToEpisodeNumber = useCallback((episodeNumber: number) => {
+    const offset = episodeOffsetsRef.current.get(episodeNumber);
+    if (offset == null) return false;
+    onJumpToOffset(gridYRef.current + offset);
+    return true;
+  }, [onJumpToOffset]);
+
+  const handleEpisodeLayout = useCallback((episodeNumber: number, offset: number) => {
+    episodeOffsetsRef.current.set(episodeNumber, offset);
+    if (pendingJumpEpisodeRef.current !== episodeNumber) return;
+    pendingJumpEpisodeRef.current = null;
+    requestAnimationFrame(() => scrollToEpisodeNumber(episodeNumber));
+  }, [scrollToEpisodeNumber]);
+
+  const jumpToEpisode = useCallback(() => {
+    const normalized = episodeQuery
+      .trim()
+      .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+      .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
+    const wanted = Number(normalized);
+    const index = Number.isInteger(wanted) && wanted > 0
+      ? sorted.findIndex((episode) => episode.number === wanted)
+      : -1;
+    if (index < 0) {
+      setJumpError(true);
+      setHighlightedEpisode(null);
+      return;
+    }
+    Keyboard.dismiss();
+    setJumpError(false);
+    setHighlightedEpisode(wanted);
+    if (index < visibleCount && scrollToEpisodeNumber(wanted)) {
+      return;
+    }
+    pendingJumpEpisodeRef.current = wanted;
+    startTransition(() => setVisibleCount((count) => Math.max(count, Math.min(sorted.length, index + PAGE))));
+  }, [episodeQuery, sorted, visibleCount, scrollToEpisodeNumber]);
 
   if (mergedEps.length === 0) {
     return (
@@ -853,10 +920,33 @@ function EpisodesTab({
         </View>
       )}
 
+      <View style={ss.episodeJumpRow}>
+        <TextInput
+          value={episodeQuery}
+          onChangeText={(value) => { setEpisodeQuery(value); if (jumpError) setJumpError(false); }}
+          onSubmitEditing={jumpToEpisode}
+          keyboardType="number-pad"
+          returnKeyType="go"
+          placeholder={t.episodeJumpPlaceholder}
+          placeholderTextColor={C.textMuted}
+          selectionColor={C.accent}
+          style={[ss.episodeJumpInput, jumpError && ss.episodeJumpInputError]}
+          accessibilityLabel={t.episodeJumpPlaceholder}
+        />
+        <Pressable onPress={jumpToEpisode} style={ss.episodeJumpButton} accessibilityRole="button">
+          <Ionicons name="locate" size={16} color={C.textOnAccent} />
+          <Text style={ss.episodeJumpButtonText}>{t.goToEpisode}</Text>
+        </Pressable>
+      </View>
+      {jumpError && <Text style={ss.episodeJumpError}>{t.episodeNotFound}</Text>}
+
       <Text style={ss.hint}>{t.tapToToggleWatched}</Text>
 
       {/* Episode grid: 2 columns for thumbnail cards */}
-      <View style={ss.epGrid}>
+      <View
+        style={ss.epGrid}
+        onLayout={(event) => { gridYRef.current = event.nativeEvent.layout.y; }}
+      >
         {visible.map((ep, i) => {
           const primary = ep.href || ep.href4up || ep.href3rb || "";
           // Cheap per-card check: href set membership (any source) OR the
@@ -871,6 +961,8 @@ function EpisodesTab({
               key={`${ep.number}-${i}`}
               ep={ep}
               watched={watched}
+              highlighted={ep.number === highlightedEpisode}
+              onLayout={handleEpisodeLayout}
               isLast={mergedEps.length > 1 && ep.number === lastEpNum}
               poster={poster}
               animeHref={animeHref}
@@ -917,6 +1009,8 @@ type GridEpisode = Episode & { href4up: string | null; href3rb: string | null };
 const EpisodeGridCard = memo(function EpisodeGridCard({
   ep,
   watched,
+  highlighted,
+  onLayout,
   isLast,
   poster,
   animeHref,
@@ -928,6 +1022,8 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
 }: {
   ep: GridEpisode;
   watched: boolean;
+  highlighted: boolean;
+  onLayout: (episodeNumber: number, offset: number) => void;
   isLast: boolean;
   poster: string;
   animeHref: string;
@@ -977,7 +1073,12 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
       }}
       onLongPress={() => onToggleWatched(ep)}
       delayLongPress={300}
-      style={({ pressed }) => [ss.epCard, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+      onLayout={(event) => onLayout(ep.number, event.nativeEvent.layout.y)}
+      style={({ pressed }) => [
+        ss.epCard,
+        highlighted && ss.epCardHighlighted,
+        pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
+      ]}
     >
       <View style={[ss.epCardThumb, watched && ss.epCardThumbWatched]}>
         {ep.screenshot ? (
@@ -1504,9 +1605,34 @@ const ss = StyleSheet.create({
   },
   sourceBadgeText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 
+  episodeJumpRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6,
+  },
+  episodeJumpInput: {
+    flex: 1, minHeight: 42, borderRadius: R.lg, paddingHorizontal: 14,
+    color: C.text, backgroundColor: C.surfaceLight,
+    borderWidth: 1, borderColor: C.border,
+    fontFamily: "Outfit_600SemiBold", fontSize: 14, textAlign: "left",
+  },
+  episodeJumpInputError: { borderColor: C.error },
+  episodeJumpButton: {
+    minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    paddingHorizontal: 14, borderRadius: R.lg, backgroundColor: C.accent,
+  },
+  episodeJumpButtonText: {
+    color: C.textOnAccent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold",
+  },
+  episodeJumpError: {
+    color: C.error, fontSize: 11, marginBottom: 8, textAlign: "right", fontFamily: "Cairo_500Medium",
+  },
+
   // Episodes — grid (2 columns)
   epGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  epCard: { width: (SW - PAD * 2 - 10) / 2 },
+  epCard: { width: EP_CARD_WIDTH, borderRadius: R.lg },
+  epCardHighlighted: {
+    backgroundColor: C.accentSoft, shadowColor: C.accent,
+    shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 10, elevation: 6,
+  },
   epCardThumb: {
     width: "100%", aspectRatio: 16 / 9, borderRadius: R.lg, overflow: "hidden",
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,

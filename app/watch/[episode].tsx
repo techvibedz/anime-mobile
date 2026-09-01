@@ -35,15 +35,11 @@ import { useReducedMotion } from "../../lib/motion";
 import {
   bufferAheadSeconds,
   createGenerationGuard,
-  isStableBufferSample,
-  isUnhealthyBufferSample,
   providerFailureMode,
   providerRank,
   providerSupportsAdaptivePlayback,
   qualityScore,
   sortVideoServers,
-  STREAM_BUFFER_POLICY,
-  updateBufferRiskMs,
   videoContentType,
   videoPlaybackHeaders,
 } from "../../lib/videoProviders";
@@ -168,6 +164,32 @@ const PROGRESS_JS = `
 true;
 `;
 
+function webViewResumeScript(positionMs: number): string {
+  const target = Math.max(0, Math.round(positionMs)) / 1000;
+  if (target <= 0) return "";
+  return `
+  (function(){
+    var target=${target};
+    var attempts=0;
+    var timer=setInterval(function(){
+      attempts++;
+      var sought=false;
+      try{
+        var v=document.querySelector('video');
+        if(v&&isFinite(v.duration)&&v.duration>0){v.currentTime=Math.min(target,Math.max(0,v.duration-1));sought=true;}
+        if(!sought&&typeof jwplayer==='function'){
+          try{var p=jwplayer();if(p&&p.seek&&p.getDuration&&p.getDuration()>0){p.seek(Math.min(target,Math.max(0,p.getDuration()-1)));sought=true;}}catch(e){}
+        }
+        if(!sought&&typeof videojs==='function'){
+          try{var vj=videojs(document.querySelector('.video-js'));if(vj&&vj.currentTime&&vj.duration&&vj.duration()>0){vj.currentTime(Math.min(target,Math.max(0,vj.duration()-1)));sought=true;}}catch(e){}
+        }
+      }catch(e){}
+      if(sought||attempts>=40)clearInterval(timer);
+    },500);
+  })();
+  true;`;
+}
+
 export default function WatchScreen() {
   const { episode, url4up, url3rb, epNum: epNumParam, animeTitle: animeTitleParam, img: imgParam, nextEp: nextEpParam, prevEp: prevEpParam, anime: animeParam, local: localParam, auto: autoParam } = useLocalSearchParams<{
     episode: string; url4up?: string; url3rb?: string; epNum?: string; animeTitle?: string; img?: string; nextEp?: string; prevEp?: string; anime?: string; local?: string; auto?: string;
@@ -217,9 +239,10 @@ export default function WatchScreen() {
   // position (ms) to seek to once the re-resolved source starts playing.
   const retryCountRef = useRef<Record<number, number>>({});
   const pendingSeekRef = useRef(0);
-  // Set only when the app automatically steps Anime3rb down. Manual quality
-  // choices never auto-upgrade behind the user's back.
-  const autoQualityRef = useRef<{ desiredQuality: number; switchedAt: number } | null>(null);
+  // Live position survives source teardown, including native-to-WebView
+  // fallbacks where the old player can disappear before the new one is ready.
+  const playbackPositionMsRef = useRef(0);
+  const [serverStartPositionMs, setServerStartPositionMs] = useState(0);
   // Autoplay-next bookkeeping (gated by the Settings preference). goNextRef is
   // filled in after goNextEpisode is defined; autoAdvancedRef de-dupes the
   // single advance per episode once playback crosses the near-end threshold.
@@ -257,7 +280,10 @@ export default function WatchScreen() {
   useEffect(() => {
     autoAdvancedRef.current = false;
     completionMarkedRef.current = false;
-    autoQualityRef.current = null;
+    pendingSeekRef.current = 0;
+    playbackPositionMsRef.current = 0;
+    setResumeMs(0);
+    setServerStartPositionMs(0);
     setLocked(false);
     setSelfReady(false); // re-buffer for the new episode → re-arm the party gate
     // Re-arm the server-selection gate for the new episode, unless this is an
@@ -395,26 +421,29 @@ export default function WatchScreen() {
     }, [player]),
   );
 
-  // Force play on native player when source changes
+  // Force play on native player when source changes. A server handoff carries
+  // the exact position into the replacement source; retrying the seek while
+  // the new media becomes ready avoids a race where an early seek is ignored.
   useEffect(() => {
     if (!videoUrl || !player) return;
+    const seekToMs = pendingSeekRef.current;
     const tryPlay = () => {
       // Never auto-resume a blurred (backgrounded) screen, or a host-gated room.
       if (!focusedRef.current || holdPlaybackRef.current) return;
       try {
-        // Resume after a self-heal re-resolve (fresh token, same episode).
-        if (pendingSeekRef.current > 0) {
-          player.currentTime = pendingSeekRef.current / 1000;
-          pendingSeekRef.current = 0;
-        }
+        if (seekToMs > 0) player.currentTime = seekToMs / 1000;
         player.play();
       } catch {}
     };
     tryPlay();
     const t1 = setTimeout(tryPlay, 500);
     const t2 = setTimeout(tryPlay, 1500);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [videoUrl, player]);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      if (seekToMs > 0 && pendingSeekRef.current === seekToMs) pendingSeekRef.current = 0;
+    };
+  }, [videoUrl, player, resumeMs, serverStartPositionMs]);
 
   // Self-heal / fallback. Providers with a failed terminal mode never fall back to the embed;
   // others fall to WebView when direct playback can't be recovered.
@@ -449,6 +478,11 @@ export default function WatchScreen() {
 
     const fail = () => {
       if (cancelled) return;
+      const handoffMs = Math.max(lastPosMs, playbackPositionMsRef.current);
+      if (handoffMs > 0) {
+        pendingSeekRef.current = handoffMs;
+        setServerStartPositionMs(handoffMs);
+      }
       setServers((p) => p.map((s, i) =>
         i === idx ? { ...s, status: failStatus(p[idx]?.server.provider), videoUrl: null } : s));
     };
@@ -587,20 +621,30 @@ export default function WatchScreen() {
     ).catch(() => {});
   }, [picked]);
 
-  // Load progress + control auto-hide (orientation handled above).
+  // Load saved progress for every episode route, including in-place next/prev
+  // navigation where this component remains mounted.
+  useEffect(() => {
+    if (!episode) return;
+    let cancelled = false;
+    getProgress(decodeURIComponent(episode)).then((entry) => {
+      if (cancelled || !entry || entry.positionMs <= 0) return;
+      pendingSeekRef.current = entry.positionMs;
+      playbackPositionMsRef.current = entry.positionMs;
+      setServerStartPositionMs(entry.positionMs);
+      setResumeMs(entry.positionMs);
+    });
+    return () => { cancelled = true; };
+  }, [episode]);
+
+  // Control auto-hide + unmount cleanup (orientation handled above).
   useEffect(() => {
     scheduleHide();
-    if (episode) {
-      getProgress(decodeURIComponent(episode)).then((entry) => {
-        if (entry && entry.positionMs > 0) setResumeMs(entry.positionMs);
-      });
-    }
     return () => {
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (progressTimer.current) clearInterval(progressTimer.current);
     };
-  }, []);
+  }, [scheduleHide]);
 
   // Show a (frequency-capped) interstitial when an episode is opened. Opening
   // an episode is a natural break; the 3-min cap in lib/ads.ts keeps fast
@@ -619,6 +663,7 @@ export default function WatchScreen() {
         const pos = player.currentTime * 1000;
         const dur = player.duration * 1000;
         if (pos > 0 && dur > 0) {
+          playbackPositionMsRef.current = Math.round(pos);
           saveProgress({
             episodeHref: decodeURIComponent(episode),
             episodeTitle: title,
@@ -640,12 +685,38 @@ export default function WatchScreen() {
 
   // Save progress (WebView player) — receives position from injected JS
   const lastWebViewPos = useRef<{ pos: number; dur: number }>({ pos: 0, dur: 0 });
+
+  const capturePlaybackPosition = useCallback(() => {
+    let positionMs = playbackPositionMsRef.current;
+    if (isWebView) {
+      positionMs = Math.max(positionMs, lastWebViewPos.current.pos);
+    } else {
+      try {
+        const nativeMs = player.currentTime * 1000;
+        if (Number.isFinite(nativeMs) && nativeMs > 0) positionMs = nativeMs;
+      } catch {}
+    }
+    const rounded = Math.max(0, Math.round(positionMs));
+    if (rounded > 0) playbackPositionMsRef.current = rounded;
+    return rounded;
+  }, [isWebView, player]);
+
+  const prepareServerHandoff = useCallback(() => {
+    const positionMs = capturePlaybackPosition();
+    if (positionMs > 0) {
+      pendingSeekRef.current = positionMs;
+      setServerStartPositionMs(positionMs);
+    }
+    return positionMs;
+  }, [capturePlaybackPosition]);
+
   useEffect(() => {
     if (!isWebView || !episode) return;
     if (progressTimer.current) clearInterval(progressTimer.current);
     progressTimer.current = setInterval(() => {
       const { pos, dur } = lastWebViewPos.current;
       if (pos > 0 && dur > 0) {
+        playbackPositionMsRef.current = Math.round(pos);
         saveProgress({
           episodeHref: decodeURIComponent(episode),
           episodeTitle: title,
@@ -670,6 +741,7 @@ export default function WatchScreen() {
       const msg = JSON.parse(event.nativeEvent.data);
       if (msg.type === "progress" && msg.pos > 0 && msg.dur > 0) {
         lastWebViewPos.current = { pos: msg.pos, dur: msg.dur };
+        playbackPositionMsRef.current = Math.round(msg.pos);
       }
     } catch {}
   }, []);
@@ -966,11 +1038,14 @@ export default function WatchScreen() {
     const state = servers[activeIdx];
     if (state?.status !== "failed") return;
     const next = servers.findIndex((s, i) => i !== activeIdx && (s.status === "idle" || s.status === "playing" || s.status === "webview"));
-    if (next !== -1) setActiveIdx(next);
-  }, [servers, activeIdx, picked]);
+    if (next !== -1) {
+      prepareServerHandoff();
+      setActiveIdx(next);
+    }
+  }, [servers, activeIdx, picked, prepareServerHandoff]);
 
-  const selectServer = useCallback((idx: number, automated = false) => {
-    if (!automated) autoQualityRef.current = null;
+  const selectServer = useCallback((idx: number) => {
+    if (idx !== activeIdx) prepareServerHandoff();
     // A failed server gets a fresh chance when the user explicitly taps it —
     // reset to idle so the resolve effect re-runs the extraction.
     retryCountRef.current[idx] = 0;
@@ -979,7 +1054,7 @@ export default function WatchScreen() {
     setActiveIdx(idx);
     setBufferAhead(null);
     setPickerOpen(false);
-  }, []);
+  }, [activeIdx, prepareServerHandoff]);
 
   // Pick a server from the selection layout → resolve + play it directly.
   const pickServer = useCallback((idx: number) => {
@@ -1000,8 +1075,8 @@ export default function WatchScreen() {
         const ra = a.s.server.source === "anime3rb" ? 0 : 1;
         const rb = b.s.server.source === "anime3rb" ? 0 : 1;
         if (ra !== rb) return ra - rb;
-        // Anime3rb remains first (1080p included). Among alternate providers,
-        // surface known HLS/ABR sources before fixed progressive mirrors.
+        // Anime3rb remains first as one best-quality server. Among alternate
+        // providers, surface known HLS/ABR sources before fixed mirrors.
         const aa = providerSupportsAdaptivePlayback(a.s.server.provider);
         const ab = providerSupportsAdaptivePlayback(b.s.server.provider);
         if (aa !== ab) return aa ? -1 : 1;
@@ -1292,88 +1367,6 @@ export default function WatchScreen() {
   durationRef.current = duration;
   isPausedRef.current = isPlayerPaused;
   playerRef.current = player;
-
-  // ── BUFFER-HEALTH QUALITY ADAPTATION ──
-  // Anime3rb stays 1080p-first, but its qualities are fixed progressive MP4s.
-  // Step down after seven unhealthy seconds instead of making the user sit
-  // through twenty seconds of visible stalling. If the app stepped down, climb
-  // one tier after two continuous minutes with a healthy 30s+ cushion. Manual
-  // 720p/480p choices stay manual.
-  useEffect(() => {
-    if (!isPlaying || !player || !picked) return;
-    const idx = activeIdx;
-    if (serversRef.current[idx]?.server.source !== "anime3rb") return;
-    let riskMs = 0;
-    let stableMs = 0;
-    let previousAhead: number | null = null;
-    const iv = setInterval(() => {
-      try {
-        if (!focusedRef.current || isPausedRef.current) return;
-        const current = player.currentTime;
-        const status = String(player.status);
-        const ahead = bufferAheadSeconds(current, player.bufferedPosition);
-        const unhealthy = isUnhealthyBufferSample(status, current, ahead, previousAhead);
-        riskMs = updateBufferRiskMs(riskMs, unhealthy);
-        previousAhead = ahead;
-
-        const list = serversRef.current;
-        const curQ = qualityScore(list[idx]?.server.name || "");
-
-        if (riskMs >= STREAM_BUFFER_POLICY.unhealthySwitchMs) {
-          let nextIdx = -1, nextQ = -1;
-          list.forEach((s, i) => {
-            const q = qualityScore(s.server.name);
-            if (i !== idx && s.server.source === "anime3rb" && s.status !== "failed" && q < curQ && q > nextQ) {
-              nextIdx = i; nextQ = q;
-            }
-          });
-          if (nextIdx === -1) { riskMs = 0; return; }
-          clearInterval(iv);
-          const existing = autoQualityRef.current;
-          autoQualityRef.current = {
-            desiredQuality: existing?.desiredQuality ?? curQ,
-            switchedAt: Date.now(),
-          };
-          pendingSeekRef.current = Math.round(current * 1000);
-          void remoteLog("info", "video", "adaptive quality step-down", {
-            from: list[idx]?.server.name,
-            to: list[nextIdx].server.name,
-            bufferAheadSeconds: ahead,
-            status,
-          });
-          selectServer(nextIdx, true);
-          return;
-        }
-
-        const auto = autoQualityRef.current;
-        if (!auto || curQ >= auto.desiredQuality) return;
-        stableMs = isStableBufferSample(status, ahead) ? stableMs + 1_000 : 0;
-        if (stableMs < STREAM_BUFFER_POLICY.recoveryStableMs || Date.now() - auto.switchedAt < STREAM_BUFFER_POLICY.recoveryStableMs) return;
-
-        // Recover one tier at a time to avoid a 480p→1080p oscillation.
-        let nextIdx = -1, nextQ = Number.POSITIVE_INFINITY;
-        list.forEach((s, i) => {
-          const q = qualityScore(s.server.name);
-          if (i !== idx && s.server.source === "anime3rb" && s.status !== "failed" && q > curQ && q <= auto.desiredQuality && q < nextQ) {
-            nextIdx = i; nextQ = q;
-          }
-        });
-        if (nextIdx === -1) return;
-        clearInterval(iv);
-        autoQualityRef.current = nextQ >= auto.desiredQuality
-          ? null
-          : { ...auto, switchedAt: Date.now() };
-        pendingSeekRef.current = Math.round(current * 1000);
-        void remoteLog("info", "video", "adaptive quality recovery", {
-          from: list[idx]?.server.name,
-          to: list[nextIdx].server.name,
-          bufferAheadSeconds: ahead,
-        });
-        selectServer(nextIdx, true);
-      } catch {}
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [isPlaying, player, picked, activeIdx, selectServer]);
 
   const seekBarWidthRef = useRef(0);
   const seekBarPageXRef = useRef(0);
@@ -1724,7 +1717,7 @@ export default function WatchScreen() {
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
           originWhitelist={["https://*", "http://*"]}
-          injectedJavaScript={ADBLOCK_JS + PROGRESS_JS}
+          injectedJavaScript={ADBLOCK_JS + webViewResumeScript(serverStartPositionMs) + PROGRESS_JS}
           onMessage={onWebViewProgress}
           startInLoadingState
           renderLoading={() => (

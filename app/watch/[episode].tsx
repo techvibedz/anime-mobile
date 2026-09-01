@@ -1075,8 +1075,8 @@ export default function WatchScreen() {
         const ra = a.s.server.source === "anime3rb" ? 0 : 1;
         const rb = b.s.server.source === "anime3rb" ? 0 : 1;
         if (ra !== rb) return ra - rb;
-        // Anime3rb remains first as one best-quality server. Among alternate
-        // providers, surface known HLS/ABR sources before fixed mirrors.
+        // Anime3rb remains first with its manually selectable quality entries.
+        // Among alternate providers, surface HLS/ABR before fixed mirrors.
         const aa = providerSupportsAdaptivePlayback(a.s.server.provider);
         const ab = providerSupportsAdaptivePlayback(b.s.server.provider);
         if (aa !== ab) return aa ? -1 : 1;

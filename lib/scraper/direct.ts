@@ -1688,13 +1688,21 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
     const h = new URL(playerUrl).hostname.toLowerCase();
     if (!h || h.indexOf(".") < 0) return [];
   } catch { return []; }
-  // Anime3rb is one server in the UI. Warm the player-source cache here so
-  // playback still starts quickly, then let extractVid3rb choose the highest
-  // available free quality internally. Individual 1080p/720p/480p entries made
-  // quality look like separate servers and allowed accidental manual/automatic
-  // quality switching while an episode was playing.
-  await listVid3rbResolutions(playerUrl);
-  return [{ id: "a3rb", name: "Anime3rb", iframeUrl: playerUrl, provider: "vid3rb" }];
+  // Expose each free quality as its own native server ("Anime3rb 1080p",
+  // "Anime3rb 720p", …), highest first so the user can choose manually. The
+  // quality is encoded in a `#vid3rb=<res>` fragment; extractVid3rb resolves
+  // that exact stream at play time. The watch screen deliberately does not
+  // switch between these entries automatically.
+  const resolutions = await listVid3rbResolutions(playerUrl);
+  if (resolutions.length === 0) {
+    return [{ id: "a3rb", name: "Anime3rb", iframeUrl: playerUrl, provider: "vid3rb" }];
+  }
+  return resolutions.map((res) => ({
+    id: `a3rb_${res}`,
+    name: `Anime3rb ${res}p`,
+    iframeUrl: `${playerUrl}#vid3rb=${res}`,
+    provider: "vid3rb",
+  }));
 }
 
 // anime3rb's first-party video host (video.vid3rb.com). The /player/<uuid>
@@ -2039,8 +2047,8 @@ function getCachedVid3rbSources(playerUrl: string): { src: string; res: number }
 }
 
 // List the available free resolutions for an anime3rb episode (e.g. [1080, 720,
-// 480]) from its player page. The server builder uses this only to warm the
-// parsed-source cache; extractVid3rb then selects the highest stream internally.
+// 480]) from its player page. Used to expose each quality as a manual server
+// choice while also warming the parsed-source cache for fast playback.
 // Returns [] on any fetch/parse miss so the caller can degrade gracefully.
 export async function listVid3rbResolutions(playerUrl: string): Promise<number[]> {
   const html = await fetchAnime3rbHtml(playerUrl, "video_sources");

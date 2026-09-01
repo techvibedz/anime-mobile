@@ -114,6 +114,7 @@ export const ar = {
   caughtUpBadge: "آخر حلقة",
   latestEpBadge: "الأحدث",
   titleCopied: "تم نسخ العنوان",
+  viewPoster: "عرض صورة الأنمي بالحجم الكامل",
   shareAnime: (title: string) => `شاهد "${title}" على بانتوفة`,
 
   // Next-episode countdown

@@ -84,6 +84,7 @@ export default function AnimeDetailScreen() {
   const [relations, setRelations] = useState<RelatedAnimeEntry[]>([]);
   const [relationsLoading, setRelationsLoading] = useState(true);
   const [titleCopied, setTitleCopied] = useState(false);
+  const [posterOpen, setPosterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const detailScrollRef = useRef<ScrollView>(null);
   const tabContentYRef = useRef(0);
@@ -398,13 +399,23 @@ export default function AnimeDetailScreen() {
         <Rise style={ss.hero}>
           <View style={ss.heroRow}>
             {data.poster ? (
-              <Image
-                source={{ uri: posterUrl(data.poster, 240) }}
-                style={ss.heroPoster}
-                contentFit="cover"
-                cachePolicy="memory-disk"
-                transition={200}
-              />
+              <Pressable
+                onPress={() => setPosterOpen(true)}
+                style={({ pressed }) => [ss.heroPosterPressable, pressed && { opacity: 0.86 }]}
+                accessibilityRole="imagebutton"
+                accessibilityLabel={t.viewPoster}
+              >
+                <Image
+                  source={{ uri: posterUrl(data.poster, 240) }}
+                  style={ss.heroPoster}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={200}
+                />
+                <View style={ss.posterExpandBadge} pointerEvents="none">
+                  <Ionicons name="expand-outline" size={13} color={C.white} />
+                </View>
+              </Pressable>
             ) : (
               <View style={[ss.heroPoster, ss.heroPosterFallback]}>
                 <Ionicons name="image-outline" size={26} color={C.textMuted} />
@@ -537,6 +548,46 @@ export default function AnimeDetailScreen() {
       {/* ── Add-to-list picker (slide-up sheet) ───────────────── */}
       {pickerOpen && (
         <ListPickerSheet title={data.title} onPick={saveToList} onClose={() => setPickerOpen(false)} />
+      )}
+
+      {/* Full-resolution poster viewer. The hardware back button and the
+          visible top button both close the modal without leaving this anime. */}
+      {data.poster && (
+        <Modal
+          visible={posterOpen}
+          animationType="fade"
+          presentationStyle="fullScreen"
+          statusBarTranslucent
+          onRequestClose={() => setPosterOpen(false)}
+        >
+          <View style={ss.posterViewer}>
+            <ActivityIndicator style={ss.posterViewerLoader} size="large" color={C.accent} />
+            <Image
+              source={{ uri: posterUrl(data.poster, SW, 1200) }}
+              style={ss.posterViewerImage}
+              contentFit="contain"
+              cachePolicy="memory-disk"
+              transition={250}
+            />
+            <LinearGradient
+              colors={["rgba(0,0,0,0.78)", "rgba(0,0,0,0.22)", "transparent"]}
+              style={ss.posterViewerTopGradient}
+              pointerEvents="none"
+            />
+            <Pressable
+              onPress={() => setPosterOpen(false)}
+              style={[ss.posterViewerBack, { top: insets.top + 10 }]}
+              accessibilityRole="button"
+              accessibilityLabel={t.back}
+            >
+              <Ionicons name="chevron-back" size={21} color={C.white} />
+              <Text style={ss.posterViewerBackText}>{t.back}</Text>
+            </Pressable>
+            <Text style={[ss.posterViewerTitle, { bottom: insets.bottom + 18 }]} numberOfLines={2}>
+              {data.title}
+            </Text>
+          </View>
+        </Modal>
       )}
     </View>
   );
@@ -1486,7 +1537,34 @@ const ss = StyleSheet.create({
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderLight,
     ...ELEVATION_CARD,
   },
+  heroPosterPressable: { position: "relative", borderRadius: R.lg },
+  posterExpandBadge: {
+    position: "absolute", right: 7, bottom: 7,
+    width: 26, height: 26, borderRadius: R.circle,
+    alignItems: "center", justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.72)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.24)",
+  },
   heroPosterFallback: { alignItems: "center", justifyContent: "center" },
+
+  // Full-screen poster viewer
+  posterViewer: { flex: 1, backgroundColor: C.player, alignItems: "center", justifyContent: "center" },
+  posterViewerLoader: { position: "absolute" },
+  posterViewerImage: { width: "100%", height: "100%" },
+  posterViewerTopGradient: { position: "absolute", top: 0, left: 0, right: 0, height: 130 },
+  posterViewerBack: {
+    position: "absolute", left: 16, zIndex: 2,
+    minHeight: 42, flexDirection: "row", alignItems: "center", gap: 5,
+    paddingHorizontal: 13, borderRadius: R.pill,
+    backgroundColor: "rgba(0,0,0,0.62)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
+  },
+  posterViewerBackText: { color: C.white, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  posterViewerTitle: {
+    position: "absolute", left: 24, right: 24,
+    color: C.white, fontSize: 17, fontWeight: "700", textAlign: "center",
+    fontFamily: "Cairo_700Bold", textShadowColor: "rgba(0,0,0,0.9)", textShadowRadius: 8,
+  },
   // marginRight (physical) spaces the text from the poster in the row-reverse
   // layout without using `gap` (RN 0.81 gap + row-reverse Yoga bug).
   heroText: { flex: 1, marginRight: 14, alignItems: "flex-end", paddingBottom: 4 },

@@ -267,6 +267,7 @@ export default function AnimeDetailScreen() {
     const primary = ep.href || ep.href4up || ep.href3rb;
     if (!data || !primary) return;
     await toggleWatched(primary, {
+      hrefs: [ep.href, ep.href4up, ep.href3rb],
       episodeTitle: ep.title || `${t.episode} ${ep.number}`,
       animeTitle: data.title,
       animeHref,

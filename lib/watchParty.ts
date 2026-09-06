@@ -71,6 +71,7 @@ let myReady = false;
 let lastNavTarget: string | null = null;
 const memberListeners = new Set<(m: PartyMember[]) => void>();
 const stateListeners = new Set<(s: PartyState) => void>();
+const controlListeners = new Set<(p: { episode: string; playing: boolean }) => void>();
 const roomListeners = new Set<(r: { code: string; role: PartyRole } | null) => void>();
 const connListeners = new Set<(s: PartyConnStatus) => void>();
 
@@ -150,8 +151,24 @@ async function openChannel(): Promise<void> {
     .on("presence", { event: "sync" }, emitMembers)
     .on("presence", { event: "join" }, emitMembers)
     .on("presence", { event: "leave" }, emitMembers)
+    .on("broadcast", { event: "control" }, ({ payload }) => {
+      if (room?.role !== "host" || !payload || typeof payload.episode !== "string" || typeof payload.playing !== "boolean") return;
+      for (const cb of controlListeners) cb(payload);
+    })
     .on("broadcast", { event: "sync" }, ({ payload }) => {
-      lastState = payload as PartyState;
+      if (!payload || typeof payload.episode !== "string" || typeof payload.playing !== "boolean" ||
+          !Number.isFinite(payload.positionMs) || payload.positionMs < 0 || !Number.isFinite(payload.at) ||
+          !payload.params || Object.values(payload.params).some((v) => typeof v !== "string")) return;
+      lastState = { ...payload, params: { ...payload.params,
+        url4up: payload.params.url4up || payload.params.up4 || "",
+        up4: payload.params.up4 || payload.params.url4up || "",
+        url3rb: payload.params.url3rb || payload.params.a3rb || "",
+        a3rb: payload.params.a3rb || payload.params.url3rb || "",
+        animeTitle: payload.params.animeTitle || payload.params.title || "",
+        title: payload.params.title || payload.params.animeTitle || "",
+        epNum: payload.params.epNum || payload.params.ep || "",
+        ep: payload.params.ep || payload.params.epNum || "",
+      } } as PartyState;
       for (const cb of stateListeners) cb(lastState);
     })
     .subscribe(async (status) => {
@@ -392,8 +409,13 @@ export function useWatchPartySync(opts: {
   // optional `playingOverride` lets a caller send the post-action play state
   // before React's paused state has re-rendered into optsRef.
   const pulse = useCallback((playingOverride?: boolean) => {
+    if (role === "client") {
+      if (channel && typeof playingOverride === "boolean") void channel.send({ type: "broadcast", event: "control", payload: { episode: optsRef.current.episode, playing: playingOverride } });
+      return;
+    }
     if (role !== "host") return;
     const o = optsRef.current;
+    if (typeof playingOverride === "boolean") o.paused = !playingOverride;
     if (!o.episode) return;
     let pos = 0;
     try { pos = Math.round((o.player?.currentTime ?? 0) * 1000); } catch {}
@@ -405,6 +427,19 @@ export function useWatchPartySync(opts: {
       at: Date.now(),
     });
   }, [role]);
+
+  useEffect(() => {
+    if (role !== "host") return;
+    const onControl = (p: { episode: string; playing: boolean }) => {
+      const o = optsRef.current;
+      if (p.episode !== o.episode || !released) return;
+      o.paused = !p.playing;
+      o.applyPaused(!p.playing);
+      pulse(p.playing);
+    };
+    controlListeners.add(onControl);
+    return () => { controlListeners.delete(onControl); };
+  }, [role, released, pulse]);
 
   // HOST presses Start: release the gate once and begin playback for everyone.
   // Re-checks allReady so a stale tap can't start over a still-buffering viewer

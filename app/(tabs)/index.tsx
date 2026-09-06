@@ -32,6 +32,9 @@ import { GlassFill } from "../../components/GlassFill";
 import { SourceRail } from "../../components/SourceRail";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
+import { reconcileCompletionFromEpisodes } from "../../lib/completion";
+import { extractEpisodeNumber } from "../../lib/notifications";
+import { subscribeHistory } from "../../lib/history";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { PosterCard } from "../../components/PosterCard";
 import { StateView } from "../../components/StateView";
@@ -372,6 +375,19 @@ export default function HomeScreen() {
     return () => sub.remove();
   }, []);
 
+  // Reconcile directly from the visible feed, including cache and cloud hydration.
+  useFocusEffect(useCallback(() => {
+    const refreshBadges = () => {
+      const episodes = sections.filter((s) => s.type === "episode").flatMap((s) => s.items as EpisodeItem[]);
+      void reconcileCompletionFromEpisodes(episodes.map((ep) => ({
+        animeHref: ep.animeHref || toAnimeUrl(ep.href), animeTitle: ep.animeTitle,
+        epNum: episodeNumberFromUrl(ep.href) ?? extractEpisodeNumber(ep.title),
+      }))).catch(() => {});
+    };
+    refreshBadges();
+    return subscribeHistory(refreshBadges);
+  }, [sections]));
+
   // Refresh history + unread badge when the tab regains focus
   useFocusEffect(useCallback(() => {
     getContinueWatching().then(setHistory);
@@ -677,6 +693,9 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
 /* ── Episode Card (wide cinematic) ───────────── */
 
 const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item: EpisodeItem; onPress: (item: EpisodeItem) => void }) {
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const sized = posterUrl(item.image, EP_W);
+  const uri = failedUri === sized ? item.image : sized;
   return (
     <Pressable
       onPress={() => onPress(item)}
@@ -684,7 +703,7 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
     >
       <View style={ss.epCard}>
         {item.image ? (
-          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
+          <Image source={{ uri }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={0} priority="high" onError={() => { if (sized !== item.image) setFailedUri(sized ?? null); }} />
         ) : (
           <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
             <Ionicons name="film-outline" size={24} color={C.textMuted} />

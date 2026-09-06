@@ -1225,11 +1225,12 @@ export default function WatchScreen() {
   // through verbatim (raw param strings) so host↔client round-trip is exact.
   const partyNavParams = useMemo<Record<string, string>>(() => ({
     url4up: url4up ?? "",
+    url3rb: url3rb ?? "",
     anime: animeParam ?? "",
     img: imgParam ?? "",
     animeTitle: animeTitleParam ?? "",
     epNum: epNumParam ?? "",
-  }), [url4up, animeParam, imgParam, animeTitleParam, epNumParam]);
+  }), [url4up, url3rb, animeParam, imgParam, animeTitleParam, epNumParam]);
   // Apply the host's play/pause without the client guard (the guard blocks the
   // user's OWN controls, not the host-driven sync).
   const applyPartyPaused = useCallback((paused: boolean) => {
@@ -1336,7 +1337,7 @@ export default function WatchScreen() {
   }, [speedIdx, player, videoUrl]);
 
   const togglePlayPause = useCallback(() => {
-    if (partyClientRef.current) return; // host controls playback in a party
+    if (partyClientRef.current) { partyPulseRef.current(isPlayerPaused); return; }
     // Party host: can't start the episode until the whole room is ready.
     if (holdPlaybackRef.current && isPlayerPaused) return;
     if (!player) return;

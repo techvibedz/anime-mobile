@@ -66,7 +66,7 @@ export interface AppNotification {
 
 /* ── Episode number parsing (Arabic + Western numerals) ── */
 
-function extractEpisodeNumber(title: string): number | null {
+export function extractEpisodeNumber(title: string): number | null {
   if (!title) return null;
   // Arabic-indic numerals after الحلقة
   const arMatch = title.match(/الحلقة[\s\-_]*([٠-٩]+)/);

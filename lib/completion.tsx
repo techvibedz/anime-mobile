@@ -179,35 +179,28 @@ export async function countCompletedAnime(): Promise<number> {
   return Object.values(map).filter((r) => r.finished).length;
 }
 
-/**
- * Reconcile tracked completion records against a freshly-fetched list of
- * recently-updated episodes (the home feed). Completion is otherwise only
- * recomputed on the detail page, so a "caught up" / "finished" badge goes stale
- * the moment a new episode drops — it keeps claiming the user is up to date
- * until they reopen that anime. Here we catch the new episode at the source.
- *
- * For each tracked anime that the feed shows a HIGHER episode number for than we
- * recorded, we bump `lastEpNum` and recompute `caughtUp` from the watch history
- * (did the user already watch that newest episode?). `finished` drops to false:
- * a series appearing in the "recently updated" feed with a new episode isn't
- * actually over — the detail page re-establishes `finished` via AniList on the
- * next visit. We never UPGRADE a badge here (that needs the detail page's full
- * episode list); we only clear one that a new episode has invalidated.
- */
+/** Recompute home badges from available episodes and local history, even when
+ * the episode number has not changed or the detail page was never opened. */
 export async function reconcileCompletionFromEpisodes(
   items: { animeHref?: string | null; animeTitle?: string | null; epNum: number | null }[],
 ): Promise<void> {
   if (!items || items.length === 0) return;
   const map = await getCompletionMap();
-  if (Object.keys(map).length === 0) return;
   const lookup = buildLookup(map);
 
   // Highest episode number now available per matched record (by record key).
   const newestByKey = new Map<string, number>();
   for (const it of items) {
     if (it.epNum == null || it.epNum <= 0) continue;
-    const rec = lookup.get({ hrefs: [it.animeHref], titles: [it.animeTitle] });
-    if (!rec) continue;
+    let rec = lookup.get({ hrefs: [it.animeHref], titles: [it.animeTitle] });
+    if (!rec) {
+      const key = normAnimeKey(it.animeHref || "") || animeTitleKey(it.animeTitle);
+      if (!key) continue;
+      rec = map[key] ?? { key, hrefs: uniq([it.animeHref]), titles: uniq([it.animeTitle]), lastEpNum: 0, caughtUp: false, finished: false, updatedAt: 0 };
+      map[key] = rec;
+      for (const href of rec.hrefs) lookup.byHref.set(normAnimeKey(href), rec);
+      for (const title of rec.titles) lookup.byTitle.set(animeTitleKey(title), rec);
+    }
     const cur = newestByKey.get(rec.key) || 0;
     if (it.epNum > cur) newestByKey.set(rec.key, it.epNum);
   }
@@ -217,7 +210,7 @@ export async function reconcileCompletionFromEpisodes(
   let sets: CompletedSets | null = null; // history loaded lazily, only if needed
   for (const [key, newest] of newestByKey) {
     const rec = map[key];
-    if (!rec || newest <= rec.lastEpNum) continue; // nothing newer than recorded
+    if (!rec || newest < rec.lastEpNum) continue;
 
     if (!sets) sets = await getCompletedSets();
     let watchedNewest = false;
@@ -226,12 +219,13 @@ export async function reconcileCompletionFromEpisodes(
       if (nums && nums.has(newest)) { watchedNewest = true; break; }
     }
 
-    if (rec.lastEpNum === newest && rec.caughtUp === watchedNewest && !rec.finished) continue;
+    const finished = rec.finished && watchedNewest && newest === rec.lastEpNum;
+    if (rec.lastEpNum === newest && rec.caughtUp === watchedNewest && rec.finished === finished) continue;
     map[key] = {
       ...rec,
       lastEpNum: newest,
       caughtUp: watchedNewest,
-      finished: false,
+      finished,
       updatedAt: Date.now(),
     };
     changed = true;

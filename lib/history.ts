@@ -4,6 +4,16 @@ import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 const KEY = "watch_history";
 const MAX_ITEMS = 200;
 
+const historyListeners = new Set<() => void>();
+export function subscribeHistory(cb: () => void): () => void {
+  historyListeners.add(cb);
+  return () => { historyListeners.delete(cb); };
+}
+async function saveHistory(list: WatchEntry[]) {
+  await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  for (const cb of historyListeners) cb();
+}
+
 export interface WatchEntry {
   episodeHref: string;
   episodeTitle: string;
@@ -87,7 +97,7 @@ export async function pullHistoryFromCloud() {
     completed: !!row.completed,
     dismissed: !!row.dismissed,
   }));
-  await AsyncStorage.setItem(KEY, JSON.stringify(local));
+  await saveHistory(local);
 }
 
 export async function getHistory(): Promise<WatchEntry[]> {
@@ -124,7 +134,7 @@ export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
     if (list.length > MAX_ITEMS) list.length = MAX_ITEMS;
   }
   list.sort((a, b) => b.updatedAt - a.updatedAt);
-  await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  await saveHistory(list);
   pushToCloud(merged).catch(() => {});
 }
 
@@ -157,7 +167,7 @@ export async function getProgress(episodeHref: string): Promise<WatchEntry | nul
 
 export async function removeFromHistory(episodeHref: string) {
   const list = await getHistory();
-  await AsyncStorage.setItem(KEY, JSON.stringify(list.filter((e) => e.episodeHref !== episodeHref)));
+  await saveHistory(list.filter((e) => e.episodeHref !== episodeHref));
   deleteFromCloud(episodeHref).catch(() => {});
 }
 
@@ -173,7 +183,7 @@ export async function dismissFromContinue(episodeHref: string) {
   if (idx < 0) return;
   const next: WatchEntry = { ...list[idx], dismissed: true };
   list[idx] = next;
-  await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  await saveHistory(list);
   pushToCloud(next).catch(() => {});
 }
 
@@ -190,7 +200,7 @@ export function progressPercent(entry: WatchEntry): number {
 
 export function isCompleted(entry: WatchEntry | null | undefined): boolean {
   if (!entry) return false;
-  if (entry.completed === true) return true;
+  if (typeof entry.completed === "boolean") return entry.completed;
   return autoCompleted(entry);
 }
 
@@ -359,22 +369,23 @@ export function isEpisodeWatched(
  */
 export async function toggleWatched(
   episodeHref: string,
-  meta: { episodeTitle: string; animeTitle: string; animeHref: string; image?: string; url4up?: string; epNum?: number | null },
+  meta: { episodeTitle: string; animeTitle: string; animeHref: string; image?: string; url4up?: string; epNum?: number | null; hrefs?: (string | null | undefined)[] },
 ): Promise<boolean> {
   const list = await getHistory();
-  const idx = list.findIndex((e) => e.episodeHref === episodeHref);
-  if (idx >= 0) {
-    const cur = list[idx];
-    const next: WatchEntry = {
-      ...cur,
-      completed: !isCompleted(cur),
-      epNum: cur.epNum ?? (meta.epNum ?? undefined),
-      updatedAt: Date.now(),
-    };
-    list[idx] = next;
-    await AsyncStorage.setItem(KEY, JSON.stringify(list));
-    pushToCloud(next).catch(() => {});
-    return next.completed === true;
+  const hrefs = new Set([episodeHref, ...(meta.hrefs ?? [])].filter(Boolean).map(normHref));
+  const titleKey = animeTitleKey(meta.animeTitle);
+  const matches = list.filter((e) => hrefs.has(normHref(e.episodeHref)) ||
+    (meta.epNum != null && !!titleKey && animeTitleKey(e.animeTitle) === titleKey && deriveEpNum(e) === meta.epNum));
+  if (matches.length) {
+    const completed = !matches.some(isCompleted);
+    for (const entry of matches) {
+      entry.completed = completed;
+      entry.epNum ??= meta.epNum ?? undefined;
+      entry.updatedAt = Date.now();
+    }
+    await saveHistory(list);
+    void Promise.all(matches.map((entry) => pushToCloud(entry).catch(() => {})));
+    return completed;
   }
   // No existing entry — create one marked as watched.
   const newEntry: WatchEntry = {
@@ -392,7 +403,7 @@ export async function toggleWatched(
   };
   list.unshift(newEntry);
   if (list.length > MAX_ITEMS) list.length = MAX_ITEMS;
-  await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  await saveHistory(list);
   pushToCloud(newEntry).catch(() => {});
   return true;
 }

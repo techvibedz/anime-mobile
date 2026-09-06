@@ -33,7 +33,6 @@ import { SourceRail } from "../../components/SourceRail";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
 import { reconcileCompletionFromEpisodes } from "../../lib/completion";
-import { extractEpisodeNumber } from "../../lib/notifications";
 import { subscribeHistory } from "../../lib/history";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { PosterCard } from "../../components/PosterCard";

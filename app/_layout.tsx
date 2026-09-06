@@ -80,8 +80,8 @@ function AuthGate() {
   useEffect(() => {
     if (user) {
       pullFavoritesFromCloud().catch(() => {});
-      pullHistoryFromCloud().catch(() => {});
-      pullCompletionFromCloud().catch(() => {});
+      // History emits the final badge refresh after cloud completion has settled.
+      pullCompletionFromCloud().catch(() => {}).then(() => pullHistoryFromCloud()).catch(() => {});
     }
   }, [user?.id]);
 

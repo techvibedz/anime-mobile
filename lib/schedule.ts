@@ -1,14 +1,12 @@
 // Weekly anime airing calendar.
 //
-// Same data source as the per-anime countdown (lib/airing.ts): AniList's
-// GraphQL API. Where `airing.ts` resolves the next episode for ONE title, this
-// pulls the whole `airingSchedules` feed for the coming 7 days and buckets it by
-// local calendar day — "what new episode airs each day this week".
+// Same data source as the per-anime countdown (lib/airing.ts): the public
+// AnimeSchedule.net timetable. This pulls the coming seven days and buckets
+// them by local calendar day — "what new episode airs each day this week".
 //
 // The source sites (witanime/anime4up/anime3rb) expose no air-time data at all,
-// so AniList is the only way to build a real schedule. The feed is global; we
-// drop adult entries and keep everything else (a viewer can tap through to
-// search our own sources for the Arabic sub/dub).
+// so an external timetable is required. We keep Japanese/raw entries (a viewer
+// can tap through to search our own sources for the Arabic sub/dub).
 //
 // Cached per local day so the bucketing stays correct across a date rollover,
 // with a short TTL so newly-scheduled episodes roll in. Because each item
@@ -20,9 +18,10 @@ import {
   searchAnime4upDirect,
   searchAnime3rbCatalog,
 } from "./scraper/direct";
+import { fetchAnimeScheduleTimetable } from "./animeSchedule";
 
 export interface ScheduleItem {
-  /** AniList media id — used as a stable list key and for de-duping. */
+  /** Stable source id — used as a list key and for de-duping. */
   id: number;
   /** Best display title (romaji preferred — most recognizable + searchable). */
   title: string;
@@ -32,7 +31,7 @@ export interface ScheduleItem {
   /** Unix timestamp (seconds) when it airs. */
   airingAt: number;
   format: string | null;
-  /** AniList average score (0–100) or null. */
+  /** Source score (0–100) or null. */
   score: number | null;
 }
 
@@ -44,29 +43,8 @@ export interface ScheduleDay {
   items: ScheduleItem[];
 }
 
-const ANILIST_URL = "https://graphql.anilist.co";
 const CACHE_PREFIX = "@anime_schedule_v1:";
 const TTL = 3 * 60 * 60 * 1000; // 3h
-const MAX_PAGES = 8; // 8 × 50 = 400 entries — far more than a week ever holds.
-
-const QUERY = `query ($start: Int, $end: Int, $page: Int) {
-  Page(page: $page, perPage: 50) {
-    pageInfo { hasNextPage }
-    airingSchedules(airingAt_greater: $start, airingAt_lesser: $end, sort: TIME) {
-      airingAt
-      episode
-      media {
-        id
-        title { romaji english native }
-        coverImage { large medium }
-        format
-        averageScore
-        isAdult
-        countryOfOrigin
-      }
-    }
-  }
-}`;
 
 type Cached = { ts: number; data: ScheduleDay[] };
 
@@ -96,58 +74,16 @@ function todayKey(): string {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
-function pickTitle(t: any): string {
-  return (t?.romaji || t?.english || t?.native || "").trim();
-}
-
-async function fetchPage(start: number, end: number, page: number): Promise<{ items: any[]; hasNext: boolean }> {
-  const res = await fetch(ANILIST_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ query: QUERY, variables: { start, end, page } }),
-  });
-  if (!res.ok) return { items: [], hasNext: false };
-  const json = await res.json();
-  const p = json?.data?.Page;
-  return { items: p?.airingSchedules || [], hasNext: !!p?.pageInfo?.hasNextPage };
-}
-
 async function doFetch(): Promise<ScheduleDay[]> {
   const { days, windowStart, windowEnd } = buildDays();
-  // airingAt_greater is exclusive, so step back a second to keep a midnight airing.
-  const start = windowStart - 1;
-  const seen = new Set<string>(); // de-dupe per (media, day)
-
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const { items, hasNext } = await fetchPage(start, windowEnd, page).catch(() => ({ items: [], hasNext: false }));
-    for (const s of items) {
-      const m = s?.media;
-      if (!m || m.isAdult) continue;
-      // Drop non-Japanese productions (Chinese/Korean donghua like "Soul Land")
-      // — the Arabic source sites don't carry them, so they'd never resolve.
-      if (m.countryOfOrigin && m.countryOfOrigin !== "JP") continue;
-      const title = pickTitle(m.title);
-      if (!title) continue;
-      const airingAt: number = s.airingAt;
-      // Bucket by LOCAL calendar day (robust across DST, unlike /86400 math).
-      const d = new Date(airingAt * 1000);
-      const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000;
-      const day = days.find((x) => x.dayStart === midnight);
-      if (!day) continue;
-      const dedupe = `${m.id}#${day.dayStart}`;
-      if (seen.has(dedupe)) continue;
-      seen.add(dedupe);
-      day.items.push({
-        id: m.id,
-        title,
-        image: m.coverImage?.large || m.coverImage?.medium || null,
-        episode: typeof s.episode === "number" ? s.episode : 0,
-        airingAt,
-        format: m.format || null,
-        score: typeof m.averageScore === "number" ? m.averageScore : null,
-      });
-    }
-    if (!hasNext) break;
+  const items = await fetchAnimeScheduleTimetable();
+  for (const item of items) {
+    if (item.airingAt < windowStart || item.airingAt >= windowEnd) continue;
+    // Bucket by LOCAL calendar day (robust across DST, unlike /86400 math).
+    const d = new Date(item.airingAt * 1000);
+    const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000;
+    const day = days.find((x) => x.dayStart === midnight);
+    if (day) day.items.push({ ...item, score: null });
   }
 
   // Keep each day chronological (the global TIME sort already does this, but a
@@ -184,7 +120,7 @@ export async function fetchWeeklySchedule(force = false): Promise<ScheduleDay[]>
       const data = await doFetch();
       const hasAny = data.some((d) => d.items.length > 0);
       // Only persist a non-empty week; an all-empty result is likely a transient
-      // AniList hiccup and shouldn't be frozen for the whole TTL.
+      // A timetable hiccup shouldn't be frozen for the whole TTL.
       if (hasAny) {
         try {
           await AsyncStorage.setItem(key, JSON.stringify({ ts: Date.now(), data } as Cached));
@@ -202,7 +138,7 @@ export async function fetchWeeklySchedule(force = false): Promise<ScheduleDay[]>
 }
 
 /* ── Source availability ─────────────────────────
- * The schedule comes from AniList's global feed, but the app can only PLAY what
+ * The schedule comes from a global timetable, but the app can only PLAY what
  * its own sources carry. Verify each title against anime4up + anime3rb (the two
  * romaji-friendly sources, both plain-GET / no WebView) and hide anything that
  * resolves on neither. Results are cached in memory + on disk for a week so a

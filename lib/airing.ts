@@ -1,21 +1,20 @@
 // Next-episode countdown for the anime detail page.
 //
-// witanime's scrape tells us nothing about *when* the next episode airs, and
-// Jikan (MyAnimeList) only exposes a fuzzy "broadcast: Sundays at 17:00 (JST)"
-// string — no concrete timestamp to count down to. AniList's GraphQL API, on the
-// other hand, hands back `nextAiringEpisode { airingAt, episode }` as an exact
-// unix timestamp, which is all we need to render a live ticking countdown.
+// The streaming sources do not expose exact future air times. Reuse the weekly
+// AnimeSchedule.net timetable that powers the schedule screen; AniList remains
+// a fallback for delayed episodes beyond that seven-day window.
 //
 // One POST per title, deduped in-flight and cached. Because the payload is an
 // absolute `airingAt` timestamp (not a relative "X seconds left"), a slightly
 // stale cache is still correct — the countdown is always recomputed from the
 // timestamp on the device clock. We still cap the cache at 6h so that once an
 // episode airs the next one rolls in promptly. A null result (anime finished or
-// not on AniList) is cached briefly so finished series don't re-hit the network
+// not on the timetable) is cached briefly so finished series don't re-hit the network
 // on every visit.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getAltTitles } from "./animeInfo";
+import { fetchWeeklySchedule, type ScheduleItem } from "./schedule";
 
 export interface NextAiring {
   /** Episode number that is about to air. */
@@ -24,7 +23,8 @@ export interface NextAiring {
   airingAt: number;
 }
 
-const CACHE_PREFIX = "@anime_airing_v1:";
+// v2 drops outage-era null entries written while AniList was disabled.
+const CACHE_PREFIX = "@anime_airing_v2:";
 const HIT_TTL = 6 * 60 * 60 * 1000;  // 6h for "currently airing" hits
 const MISS_TTL = 24 * 60 * 60 * 1000; // 24h for "no upcoming episode" misses
 
@@ -162,6 +162,37 @@ function pickFinished(candidates: any[], queries: string[], lastKnownEp?: number
 async function doFetch(title: string): Promise<NextAiring | null> {
   const base = baseTitle(title);
   const queries = new Set([norm(title), norm(base)].filter(Boolean));
+  const scheduled = (await fetchWeeklySchedule()).flatMap((day) => day.items);
+
+  const pickScheduled = (items: ScheduleItem[]): NextAiring | null => {
+    const ranked = items
+      .map((item) => ({ item, score: titleScore({ title: { romaji: item.title } }, [...queries]) }))
+      .filter((entry) => entry.score >= 500 && entry.item.airingAt * 1000 > Date.now())
+      .sort((a, b) => b.score - a.score || a.item.airingAt - b.item.airingAt);
+    const item = ranked[0]?.item;
+    return item ? { episode: item.episode, airingAt: item.airingAt } : null;
+  };
+
+  let pick = pickScheduled(scheduled);
+  if (pick) return pick;
+
+  // Cross-language/romanisation bridge for source titles that do not directly
+  // match the timetable's display name.
+  try {
+    const alts = await getAltTitles(base || title);
+    for (const alt of alts.slice(0, 4)) {
+      queries.add(norm(alt));
+      queries.add(norm(baseTitle(alt)));
+    }
+    pick = pickScheduled(scheduled);
+    if (pick) return pick;
+  } catch {}
+  return doFetchAniList(title);
+}
+
+async function doFetchAniList(title: string): Promise<NextAiring | null> {
+  const base = baseTitle(title);
+  const queries = new Set([norm(title), norm(base)].filter(Boolean));
 
   // First try the title as-is (precise when it already matches AniList).
   let pick = pickAiring(await searchCandidates(title), [...queries]);
@@ -217,7 +248,7 @@ async function doFetchFinished(title: string, lastKnownEp?: number | null): Prom
 
 /**
  * Resolve the next airing episode for `title`, or null when the anime isn't
- * currently airing (finished, between seasons, or not on AniList). Cached in
+ * currently airing (finished, between seasons, or not on the timetable). Cached in
  * memory + on disk so re-opening a page never re-hits the network.
  */
 export async function fetchNextAiring(title: string): Promise<NextAiring | null> {

@@ -1,6 +1,6 @@
 // Weekly airing calendar — "what new episode airs each day this week".
 //
-// Data comes from AniList (lib/schedule). A horizontal 7-day rail picks the day;
+// Data comes from AnimeSchedule.net (lib/schedule). A horizontal 7-day rail picks the day;
 // below it a list shows each anime airing that day with its episode number and
 // local air time. Tapping an item jumps to the Discover tab pre-searched for the
 // title, so the viewer can open it on our own sources.

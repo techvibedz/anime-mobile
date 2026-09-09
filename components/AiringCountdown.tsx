@@ -1,6 +1,6 @@
 // Live "next episode in …" countdown for the anime detail header.
 //
-// Fetches the next airing time once (AniList, cached — see lib/airing) and then
+// Fetches the next airing time once (cached — see lib/airing) and then
 // ticks locally every second, so it paints the moment the page's data arrives
 // and never re-hits the network. Renders nothing for finished/non-airing anime,
 // so it's safe to drop in unconditionally without reserving layout.

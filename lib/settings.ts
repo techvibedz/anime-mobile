@@ -77,6 +77,7 @@ export async function clearContentCache(): Promise<number> {
       "@servers_v",
       "@xsource_v1",
       "@anime_airing_v1:",
+      "@anime_airing_v2:",
     ];
     const toRemove = keys.filter((k) => cachePrefixes.some((p) => k.startsWith(p)));
     if (toRemove.length) await AsyncStorage.multiRemove(toRemove);

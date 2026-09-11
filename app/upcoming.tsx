@@ -12,7 +12,7 @@ import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { fetchUpcomingAnime, type CatalogAnime } from "../lib/seasons";
+import { fetchUpcomingAnime, sortUpcomingAnime, type CatalogAnime } from "../lib/seasons";
 import { CatalogCard, type CatalogCardData } from "../components/CatalogCard";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
@@ -31,7 +31,7 @@ const DAY = 24 * 60 * 60;
 
 function badgeFor(item: CatalogAnime): string {
   if (!item.startAt) return t.upcomingSoon;
-  const days = Math.round((item.startAt - Date.now() / 1000) / DAY);
+  const days = Math.ceil((item.startAt - Date.now() / 1000) / DAY);
   if (days <= 0) return t.upcomingSoon;
   return t.upcomingInDays(days);
 }
@@ -46,36 +46,15 @@ function makeOpener(items: CatalogAnime[]) {
   const byId = new Map(items.map((i) => [i.id, i]));
   return (c: CatalogCardData) => {
     const it = byId.get(c.id);
-    if ((it?.id ?? c.id) < 0) {
-      router.push(`/(tabs)/search?q=${encodeURIComponent(it?.title || c.title)}`);
-      return;
-    }
     router.push({
       pathname: `/title/${c.id}`,
       params: {
         title: encodeURIComponent(it?.title || c.title),
         img: it?.image ? encodeURIComponent(it.image) : "",
+        kitsu: it?.kitsuId ? String(it.kitsuId) : "",
       },
     });
   };
-}
-
-// Most-popular first, or soonest-airing first. Within each mode the secondary
-// key keeps the order stable and sensible (popular ties → by date; soon ties →
-// by popularity; titles with no announced date sink in "soonest").
-function sortItems(items: CatalogAnime[], mode: SortMode): CatalogAnime[] {
-  const arr = items.slice();
-  if (mode === "popular") {
-    arr.sort((a, b) => b.popularity - a.popularity || (a.startAt ?? Infinity) - (b.startAt ?? Infinity));
-  } else {
-    arr.sort((a, b) => {
-      if (a.startAt && b.startAt) return a.startAt - b.startAt || b.popularity - a.popularity;
-      if (a.startAt) return -1;
-      if (b.startAt) return 1;
-      return b.popularity - a.popularity;
-    });
-  }
-  return arr;
 }
 
 export default function UpcomingScreen() {
@@ -100,7 +79,7 @@ export default function UpcomingScreen() {
 
   const onRefresh = useCallback(() => { setRefreshing(true); load(); }, [load]);
 
-  const sorted = useMemo(() => (items ? sortItems(items, sort) : []), [items, sort]);
+  const sorted = useMemo(() => (items ? sortUpcomingAnime(items, sort) : []), [items, sort]);
 
   const openItem = useCallback(
     (c: CatalogCardData) => makeOpener(items ?? [])(c),

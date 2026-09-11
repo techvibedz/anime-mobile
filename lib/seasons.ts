@@ -39,6 +39,8 @@ export interface CatalogAnime {
   startAt: number | null;
   /** AniList popularity (number of users with the title on a list). */
   popularity: number;
+  /** Kitsu id when the fallback catalogue supplied this title. */
+  kitsuId?: number;
   /** Resolved source anime URL (filled in by lib/popular's verification) so a
    *  card can open the real detail page directly instead of via search. */
   sourceHref?: string;
@@ -52,7 +54,7 @@ export interface SeasonOption {
 }
 
 const ANILIST_URL = "https://graphql.anilist.co";
-const KITSU_UPCOMING_URL = "https://kitsu.io/api/edge/anime?filter%5Bstatus%5D=upcoming&page%5Blimit%5D=20&sort=-userCount&include=mappings&fields%5Banime%5D=canonicalTitle,titles,posterImage,subtype,averageRating,episodeCount,status,startDate,userCount,ageRating,mappings&fields%5Bmappings%5D=externalSite,externalId";
+const KITSU_UPCOMING_URL = "https://kitsu.io/api/edge/anime?filter%5Bstatus%5D=upcoming&page%5Blimit%5D=20&sort=-userCount&include=mappings&fields%5Banime%5D=canonicalTitle,titles,posterImage,coverImage,subtype,averageRating,episodeCount,status,startDate,userCount,ageRating,mappings&fields%5Bmappings%5D=externalSite,externalId";
 // v2: added `popularity` to the cached shape (powers the Upcoming filter).
 const CACHE_PREFIX = "@anime_catalog_v2:";
 const TTL = 6 * 60 * 60 * 1000; // 6h
@@ -113,6 +115,7 @@ const SEASON_ORDER: Season[] = ["WINTER", "SPRING", "SUMMER", "FALL"];
 
 export interface AniRelation {
   id: number;
+  kitsuId?: number;
   title: string;
   image: string | null;
   format: string | null;
@@ -179,24 +182,32 @@ function stripHtml(s: string | null | undefined): string {
     .trim();
 }
 
+function startDateToUnix(value: any): number | null {
+  const parts = typeof value === "string" ? value.split("-").map(Number) : [];
+  const year = parts[0] || Number(value?.year);
+  const month = parts[1] || Number(value?.month) || 1;
+  const day = parts[2] || Number(value?.day) || 1;
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return Math.floor(Date.UTC(year, month - 1, day) / 1000);
+}
+
 const detailCache = new Map<number, AniListDetail>();
 
-export async function fetchAniListDetail(id: number): Promise<AniListDetail | null> {
-  if (!id) return null;
+export async function fetchAniListDetail(id: number, kitsuId?: number): Promise<AniListDetail | null> {
+  if (!id && !kitsuId) return null;
   const cached = detailCache.get(id);
   if (cached) return cached;
-  const res = await fetch(ANILIST_URL, {
+  const res = id > 0 ? await fetch(ANILIST_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ query: DETAIL_QUERY, variables: { id } }),
-  }).catch(() => null);
-  if (!res || !res.ok) return null;
+  }).catch(() => null) : null;
+  if (!res?.ok) return fetchKitsuDetail(kitsuId || -id, id);
   const json = await res.json().catch(() => null);
   const m = json?.data?.Media;
-  if (!m) return null;
+  if (!m) return fetchKitsuDetail(kitsuId || -id, id);
 
-  const sd = m.startDate;
-  const startAt = sd && sd.year ? Math.floor(new Date(sd.year, (sd.month || 1) - 1, sd.day || 1).getTime() / 1000) : null;
+  const startAt = startDateToUnix(m.startDate);
   const relations: AniRelation[] = (m.relations?.edges || [])
     .filter((e: any) => e?.node && e.node.type === "ANIME" && !e.node.isAdult)
     .map((e: any) => ({
@@ -233,6 +244,57 @@ export async function fetchAniListDetail(id: number): Promise<AniListDetail | nu
   return detail;
 }
 
+async function fetchKitsuDetail(kitsuId: number, id: number): Promise<AniListDetail | null> {
+  if (!kitsuId) return null;
+  const url = `https://kitsu.io/api/edge/anime/${kitsuId}?include=categories,animeProductions.producer,mediaRelationships.destination`;
+  const res = await fetch(url, { headers: { Accept: "application/vnd.api+json" } }).catch(() => null);
+  if (!res?.ok) return null;
+  const json = await res.json().catch(() => null);
+  const a = json?.data?.attributes;
+  if (!a || a.nsfw || a.ageRating === "R18") return null;
+  const included: any[] = Array.isArray(json.included) ? json.included : [];
+  const resources = new Map(included.map((r: any) => [`${r.type}:${r.id}`, r]));
+  const relations: AniRelation[] = included
+    .filter((r: any) => r.type === "mediaRelationships")
+    .map((r: any) => ({ role: r.attributes?.role, ref: r.relationships?.destination?.data }))
+    .filter((r: any) => r.ref?.type === "anime")
+    .map((r: any) => ({ role: r.role, anime: resources.get(`anime:${r.ref.id}`) }))
+    .filter((r: any) => r.anime?.attributes && !r.anime.attributes.nsfw)
+    .map((r: any) => ({
+      id: -Number(r.anime.id),
+      kitsuId: Number(r.anime.id),
+      title: r.anime.attributes.titles?.en_jp || r.anime.attributes.canonicalTitle || "",
+      image: r.anime.attributes.posterImage?.large || r.anime.attributes.posterImage?.medium || null,
+      format: r.anime.attributes.subtype ? String(r.anime.attributes.subtype).toUpperCase() : null,
+      relation: r.role ? String(r.role).toUpperCase() : null,
+    }))
+    .filter((r: AniRelation) => r.title && Number.isFinite(r.id));
+  const score = Number(a.averageRating);
+  const detail: AniListDetail = {
+    id: id || -kitsuId,
+    title: a.titles?.en_jp || a.canonicalTitle || "",
+    titleEnglish: a.titles?.en || null,
+    description: stripHtml(a.synopsis || a.description),
+    banner: a.coverImage?.large || a.coverImage?.original || null,
+    cover: a.posterImage?.large || a.posterImage?.original || null,
+    genres: included.filter((r: any) => r.type === "categories" && !r.attributes?.nsfw).map((r: any) => r.attributes?.title).filter(Boolean),
+    score: Number.isFinite(score) && score > 0 ? score : null,
+    episodes: typeof a.episodeCount === "number" ? a.episodeCount : null,
+    duration: typeof a.episodeLength === "number" ? a.episodeLength : null,
+    format: a.subtype ? String(a.subtype).toUpperCase() : null,
+    status: a.status === "current" ? "RELEASING" : a.status === "finished" ? "FINISHED" : "NOT_YET_RELEASED",
+    season: null,
+    seasonYear: a.startDate ? Number(String(a.startDate).slice(0, 4)) || null : null,
+    startAt: startDateToUnix(a.startDate),
+    studios: included.filter((r: any) => r.type === "producers").map((r: any) => r.attributes?.name).filter(Boolean),
+    trailerYoutube: a.youtubeVideoId || null,
+    externalLinks: a.slug ? [{ site: "Kitsu", url: `https://kitsu.io/anime/${a.slug}` }] : [],
+    relations,
+  };
+  detailCache.set(id, detail);
+  return detail;
+}
+
 function pickTitle(t: any): string {
   return (t?.romaji || t?.english || t?.native || "").trim();
 }
@@ -247,11 +309,6 @@ function isAcceptable(m: any): boolean {
 }
 
 function toCatalogAnime(m: any): CatalogAnime {
-  const sd = m.startDate;
-  const startAt =
-    sd && sd.year
-      ? Math.floor(new Date(sd.year, (sd.month || 1) - 1, sd.day || 1).getTime() / 1000)
-      : null;
   return {
     id: m.id,
     title: pickTitle(m.title),
@@ -261,7 +318,7 @@ function toCatalogAnime(m: any): CatalogAnime {
     episodes: typeof m.episodes === "number" ? m.episodes : null,
     genres: Array.isArray(m.genres) ? m.genres : [],
     status: m.status || null,
-    startAt,
+    startAt: startDateToUnix(m.startDate),
     popularity: typeof m.popularity === "number" ? m.popularity : 0,
   };
 }
@@ -327,39 +384,43 @@ async function collect(query: string, baseVars: Record<string, unknown>, maxPage
 }
 
 async function fetchKitsuUpcoming(): Promise<CatalogAnime[]> {
-  const res = await fetch(KITSU_UPCOMING_URL, { headers: { Accept: "application/vnd.api+json" } });
-  if (!res.ok) return [];
-  const json = await res.json();
-  const mappings = new Map(
-    (json?.included || [])
-      .filter((m: any) => m?.type === "mappings")
-      .map((m: any) => [String(m.id), m.attributes]),
-  );
   const seen = new Set<number>();
   const out: CatalogAnime[] = [];
-  for (const item of json?.data || []) {
-    const a = item?.attributes;
-    if (!a?.canonicalTitle || a.ageRating === "R18") continue;
-    const mapping = (item.relationships?.mappings?.data || [])
-      .map((m: any) => mappings.get(String(m.id)))
-      .find((m: any) => m?.externalSite === "anilist/anime");
-    const id = Number(mapping?.externalId) || -Number(item.id);
-    if (!Number.isFinite(id) || seen.has(id)) continue;
-    seen.add(id);
-    const startMs = a.startDate ? Date.parse(`${a.startDate}T00:00:00Z`) : NaN;
-    const score = Number(a.averageRating);
-    out.push({
-      id,
-      title: a.titles?.en_jp || a.canonicalTitle,
-      image: a.posterImage?.large || a.posterImage?.medium || null,
-      format: a.subtype ? String(a.subtype).toUpperCase() : null,
-      score: Number.isFinite(score) && score > 0 ? score : null,
-      episodes: typeof a.episodeCount === "number" ? a.episodeCount : null,
-      genres: [],
-      status: "NOT_YET_RELEASED",
-      startAt: Number.isFinite(startMs) ? Math.floor(startMs / 1000) : null,
-      popularity: typeof a.userCount === "number" ? a.userCount : 0,
-    });
+  let url: string | null = KITSU_UPCOMING_URL;
+  for (let page = 0; page < MAX_PAGES && url; page++) {
+    const res: Response | null = await fetch(url, { headers: { Accept: "application/vnd.api+json" } }).catch(() => null);
+    if (!res?.ok) break;
+    const json: any = await res.json().catch(() => null);
+    if (!json) break;
+    const mappings = new Map(
+      (json.included || []).filter((m: any) => m?.type === "mappings").map((m: any) => [String(m.id), m.attributes]),
+    );
+    for (const item of json.data || []) {
+      const a = item?.attributes;
+      if (!a?.canonicalTitle || a.nsfw || a.ageRating === "R18") continue;
+      const mapping = (item.relationships?.mappings?.data || [])
+        .map((m: any) => mappings.get(String(m.id)))
+        .find((m: any) => m?.externalSite === "anilist/anime");
+      const kitsuId = Number(item.id);
+      const id = Number(mapping?.externalId) || -kitsuId;
+      if (!Number.isFinite(id) || !Number.isFinite(kitsuId) || seen.has(id)) continue;
+      seen.add(id);
+      const score = Number(a.averageRating);
+      out.push({
+        id,
+        kitsuId,
+        title: a.titles?.en_jp || a.canonicalTitle,
+        image: a.posterImage?.large || a.posterImage?.original || a.posterImage?.medium || a.coverImage?.large || null,
+        format: a.subtype ? String(a.subtype).toUpperCase() : null,
+        score: Number.isFinite(score) && score > 0 ? score : null,
+        episodes: typeof a.episodeCount === "number" ? a.episodeCount : null,
+        genres: [],
+        status: "NOT_YET_RELEASED",
+        startAt: startDateToUnix(a.startDate),
+        popularity: typeof a.userCount === "number" ? a.userCount : 0,
+      });
+    }
+    url = json.links?.next || null;
   }
   return out;
 }
@@ -370,10 +431,16 @@ async function fetchKitsuUpcoming(): Promise<CatalogAnime[]> {
  * the list is returned in its native popularity ranking here.
  */
 export async function fetchUpcomingAnime(): Promise<CatalogAnime[]> {
-  return loadCatalog("upcoming", async () => {
+  return loadCatalog("upcoming-v2", async () => {
     const items = await collect(UPCOMING_QUERY, {});
     return items.length > 0 ? items : fetchKitsuUpcoming();
   });
+}
+
+export function sortUpcomingAnime(items: CatalogAnime[], mode: "popular" | "soon"): CatalogAnime[] {
+  return items.slice().sort((a, b) => mode === "popular"
+    ? b.popularity - a.popularity || (a.startAt ?? Infinity) - (b.startAt ?? Infinity)
+    : (a.startAt ?? Infinity) - (b.startAt ?? Infinity) || b.popularity - a.popularity);
 }
 
 /** Full popularity-ranked catalogue for one season. */

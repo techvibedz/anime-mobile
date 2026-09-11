@@ -36,12 +36,12 @@ const STATUS_AR: Record<string, string> = {
 function fmtDate(startAt: number | null): string | null {
   if (!startAt) return null;
   const d = new Date(startAt * 1000);
-  return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+  return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
 }
 
 export default function TitleDetailScreen() {
-  const { id, title: titleParam, img, banner: bannerParam } = useLocalSearchParams<{
-    id: string; title?: string; img?: string; banner?: string;
+  const { id, title: titleParam, img, banner: bannerParam, kitsu } = useLocalSearchParams<{
+    id: string; title?: string; img?: string; banner?: string; kitsu?: string;
   }>();
   const insets = useSafeAreaInsets();
   const [data, setData] = useState<AniListDetail | null>(null);
@@ -52,6 +52,7 @@ export default function TitleDetailScreen() {
   const [synopsisAr, setSynopsisAr] = useState<string | null>(null);
 
   const anilistId = id ? parseInt(id, 10) : 0;
+  const kitsuId = kitsu ? parseInt(kitsu, 10) : 0;
   const fallbackTitle = titleParam ? decodeURIComponent(titleParam) : "";
   const fallbackImg = img ? decodeURIComponent(img) : "";
   const fallbackBanner = bannerParam ? decodeURIComponent(bannerParam) : "";
@@ -59,11 +60,12 @@ export default function TitleDetailScreen() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchAniListDetail(anilistId)
+    setData(null);
+    fetchAniListDetail(anilistId, kitsuId)
       .then((d) => { if (!cancelled) setData(d); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [anilistId]);
+  }, [anilistId, kitsuId]);
 
   // Translate the (English) AniList synopsis to Arabic once it's loaded.
   useEffect(() => {
@@ -230,7 +232,7 @@ export default function TitleDetailScreen() {
                   <Pressable
                     key={r.id}
                     style={ss.relCard}
-                    onPress={() => router.push({ pathname: `/title/${r.id}`, params: { title: encodeURIComponent(r.title), img: r.image ? encodeURIComponent(r.image) : "" } })}
+                    onPress={() => router.push({ pathname: `/title/${r.id}`, params: { title: encodeURIComponent(r.title), img: r.image ? encodeURIComponent(r.image) : "", kitsu: r.kitsuId ? String(r.kitsuId) : "" } })}
                   >
                     <View style={ss.relImgWrap}>
                       {r.image ? (

@@ -54,7 +54,7 @@ export interface SeasonOption {
 }
 
 const ANILIST_URL = "https://graphql.anilist.co";
-const KITSU_UPCOMING_URL = "https://kitsu.io/api/edge/anime?filter%5Bstatus%5D=upcoming&page%5Blimit%5D=20&sort=-userCount&include=mappings&fields%5Banime%5D=canonicalTitle,titles,posterImage,coverImage,subtype,averageRating,episodeCount,status,startDate,userCount,ageRating,mappings&fields%5Bmappings%5D=externalSite,externalId";
+const KITSU_UPCOMING_URL = "https://kitsu.io/api/edge/anime?filter%5Bstatus%5D=upcoming%2Cunreleased&page%5Blimit%5D=20&sort=-userCount&include=mappings&fields%5Banime%5D=canonicalTitle,titles,posterImage,coverImage,subtype,averageRating,episodeCount,status,startDate,userCount,ageRating,mappings&fields%5Bmappings%5D=externalSite,externalId";
 // v2: added `popularity` to the cached shape (powers the Upcoming filter).
 const CACHE_PREFIX = "@anime_catalog_v2:";
 const TTL = 6 * 60 * 60 * 1000; // 6h
@@ -79,15 +79,6 @@ const SEASON_QUERY = `query ($season: MediaSeason, $year: Int, $page: Int) {
   Page(page: $page, perPage: 50) {
     pageInfo { hasNextPage }
     media(season: $season, seasonYear: $year, type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
-      ${SEASON_FIELDS}
-    }
-  }
-}`;
-
-const UPCOMING_QUERY = `query ($page: Int) {
-  Page(page: $page, perPage: 50) {
-    pageInfo { hasNextPage }
-    media(type: ANIME, status: NOT_YET_RELEASED, sort: POPULARITY_DESC, isAdult: false) {
       ${SEASON_FIELDS}
     }
   }
@@ -383,58 +374,51 @@ async function collect(query: string, baseVars: Record<string, unknown>, maxPage
   return out;
 }
 
-async function fetchKitsuUpcoming(): Promise<CatalogAnime[]> {
+async function fetchKitsuUpcomingPage(page: number): Promise<CatalogAnime[]> {
   const seen = new Set<number>();
   const out: CatalogAnime[] = [];
-  let url: string | null = KITSU_UPCOMING_URL;
-  for (let page = 0; page < MAX_PAGES && url; page++) {
-    const res: Response | null = await fetch(url, { headers: { Accept: "application/vnd.api+json" } }).catch(() => null);
-    if (!res?.ok) break;
-    const json: any = await res.json().catch(() => null);
-    if (!json) break;
-    const mappings = new Map(
-      (json.included || []).filter((m: any) => m?.type === "mappings").map((m: any) => [String(m.id), m.attributes]),
-    );
-    for (const item of json.data || []) {
-      const a = item?.attributes;
-      if (!a?.canonicalTitle || a.nsfw || a.ageRating === "R18") continue;
-      const mapping = (item.relationships?.mappings?.data || [])
-        .map((m: any) => mappings.get(String(m.id)))
-        .find((m: any) => m?.externalSite === "anilist/anime");
-      const kitsuId = Number(item.id);
-      const id = Number(mapping?.externalId) || -kitsuId;
-      if (!Number.isFinite(id) || !Number.isFinite(kitsuId) || seen.has(id)) continue;
-      seen.add(id);
-      const score = Number(a.averageRating);
-      out.push({
-        id,
-        kitsuId,
-        title: a.titles?.en_jp || a.canonicalTitle,
-        image: a.posterImage?.large || a.posterImage?.original || a.posterImage?.medium || a.coverImage?.large || null,
-        format: a.subtype ? String(a.subtype).toUpperCase() : null,
-        score: Number.isFinite(score) && score > 0 ? score : null,
-        episodes: typeof a.episodeCount === "number" ? a.episodeCount : null,
-        genres: [],
-        status: "NOT_YET_RELEASED",
-        startAt: startDateToUnix(a.startDate),
-        popularity: typeof a.userCount === "number" ? a.userCount : 0,
-      });
-    }
-    url = json.links?.next || null;
+  // Kitsu treats offset=20 as page one; page two starts at offset=40.
+  const offset = page === 1 ? 0 : page * 20;
+  const url = `${KITSU_UPCOMING_URL}&page%5Boffset%5D=${offset}`;
+  const res = await fetch(url, { headers: { Accept: "application/vnd.api+json" } }).catch(() => null);
+  if (!res?.ok) return out;
+  const json: any = await res.json().catch(() => null);
+  const mappings = new Map(
+    (json?.included || []).filter((m: any) => m?.type === "mappings").map((m: any) => [String(m.id), m.attributes]),
+  );
+  for (const item of json?.data || []) {
+    const a = item?.attributes;
+    if (!a?.canonicalTitle || a.nsfw || a.ageRating === "R18") continue;
+    const mapping = (item.relationships?.mappings?.data || [])
+      .map((m: any) => mappings.get(String(m.id)))
+      .find((m: any) => m?.externalSite === "anilist/anime");
+    const kitsuId = Number(item.id);
+    const id = Number(mapping?.externalId) || -kitsuId;
+    if (!Number.isFinite(id) || !Number.isFinite(kitsuId) || seen.has(id)) continue;
+    seen.add(id);
+    const score = Number(a.averageRating);
+    out.push({
+      id,
+      kitsuId,
+      title: a.titles?.en_jp || a.canonicalTitle,
+      image: a.posterImage?.large || a.posterImage?.original || a.posterImage?.medium || a.coverImage?.large || null,
+      format: a.subtype ? String(a.subtype).toUpperCase() : null,
+      score: Number.isFinite(score) && score > 0 ? score : null,
+      episodes: typeof a.episodeCount === "number" ? a.episodeCount : null,
+      genres: [],
+      status: "NOT_YET_RELEASED",
+      startAt: startDateToUnix(a.startDate),
+      popularity: typeof a.userCount === "number" ? a.userCount : 0,
+    });
   }
   return out;
 }
 
-/**
- * Upcoming (not-yet-released) JP anime in AniList popularity order. The screen
- * applies the active filter (most-popular vs soonest-airing) on top of this, so
- * the list is returned in its native popularity ranking here.
- */
-export async function fetchUpcomingAnime(): Promise<CatalogAnime[]> {
-  return loadCatalog("upcoming-v2", async () => {
-    const items = await collect(UPCOMING_QUERY, {});
-    return items.length > 0 ? items : fetchKitsuUpcoming();
-  });
+/** One page of announced, not-yet-released anime in popularity order. */
+export async function fetchUpcomingAnimePage(page: number): Promise<{ items: CatalogAnime[]; hasNext: boolean }> {
+  const safePage = Math.max(1, Math.floor(page));
+  const items = await loadCatalog(`upcoming-v3-${safePage}`, () => fetchKitsuUpcomingPage(safePage));
+  return { items, hasNext: items.length > 0 };
 }
 
 export function sortUpcomingAnime(items: CatalogAnime[], mode: "popular" | "soon"): CatalogAnime[] {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { fetchAniListDetail, fetchUpcomingAnime, sortUpcomingAnime } from "./seasons";
+import { fetchAniListDetail, fetchUpcomingAnimePage, sortUpcomingAnime } from "./seasons";
 
 AsyncStorage.getItem = async () => null;
 AsyncStorage.setItem = async () => {};
@@ -39,6 +39,10 @@ globalThis.fetch = (async (input) => {
       { id: "32978", type: "mediaRelationships", attributes: { role: "prequel" }, relationships: { destination: { data: { type: "anime", id: "42951" } } } },
     ],
   }), { status: 200, headers: { "Content-Type": "application/vnd.api+json" } });
+  if (url.includes("page%5Boffset%5D=40")) return new Response(JSON.stringify({ data: [], included: [] }), {
+    status: 200,
+    headers: { "Content-Type": "application/vnd.api+json" },
+  });
   return new Response(JSON.stringify({
     data: [{
       id: "45666",
@@ -67,8 +71,10 @@ globalThis.fetch = (async (input) => {
 
 async function main() {
   try {
-    const items = await fetchUpcomingAnime();
-    assert.equal(calls.length, 2);
+    const firstPage = await fetchUpcomingAnimePage(1);
+    const items = firstPage.items;
+    assert.equal(calls.length, 1);
+    assert.equal(firstPage.hasNext, true);
     assert.equal(items.length, 1);
     assert.deepEqual(items[0], {
       id: 143103,
@@ -99,6 +105,9 @@ async function main() {
       ], "soon").map((item) => item.id),
       [143103, 2, 3],
     );
+    const lastPage = await fetchUpcomingAnimePage(2);
+    assert.equal(lastPage.hasNext, false);
+    assert.deepEqual(lastPage.items, []);
     const detail = await fetchAniListDetail(143103, 45666);
     assert.equal(calls.length, 4);
     assert.equal(detail?.description, "A detailed synopsis.");

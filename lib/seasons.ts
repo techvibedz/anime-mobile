@@ -52,6 +52,7 @@ export interface SeasonOption {
 }
 
 const ANILIST_URL = "https://graphql.anilist.co";
+const KITSU_UPCOMING_URL = "https://kitsu.io/api/edge/anime?filter%5Bstatus%5D=upcoming&page%5Blimit%5D=20&sort=-userCount&include=mappings&fields%5Banime%5D=canonicalTitle,titles,posterImage,subtype,averageRating,episodeCount,status,startDate,userCount,ageRating,mappings&fields%5Bmappings%5D=externalSite,externalId";
 // v2: added `popularity` to the cached shape (powers the Upcoming filter).
 const CACHE_PREFIX = "@anime_catalog_v2:";
 const TTL = 6 * 60 * 60 * 1000; // 6h
@@ -325,13 +326,54 @@ async function collect(query: string, baseVars: Record<string, unknown>, maxPage
   return out;
 }
 
+async function fetchKitsuUpcoming(): Promise<CatalogAnime[]> {
+  const res = await fetch(KITSU_UPCOMING_URL, { headers: { Accept: "application/vnd.api+json" } });
+  if (!res.ok) return [];
+  const json = await res.json();
+  const mappings = new Map(
+    (json?.included || [])
+      .filter((m: any) => m?.type === "mappings")
+      .map((m: any) => [String(m.id), m.attributes]),
+  );
+  const seen = new Set<number>();
+  const out: CatalogAnime[] = [];
+  for (const item of json?.data || []) {
+    const a = item?.attributes;
+    if (!a?.canonicalTitle || a.ageRating === "R18") continue;
+    const mapping = (item.relationships?.mappings?.data || [])
+      .map((m: any) => mappings.get(String(m.id)))
+      .find((m: any) => m?.externalSite === "anilist/anime");
+    const id = Number(mapping?.externalId) || -Number(item.id);
+    if (!Number.isFinite(id) || seen.has(id)) continue;
+    seen.add(id);
+    const startMs = a.startDate ? Date.parse(`${a.startDate}T00:00:00Z`) : NaN;
+    const score = Number(a.averageRating);
+    out.push({
+      id,
+      title: a.titles?.en_jp || a.canonicalTitle,
+      image: a.posterImage?.large || a.posterImage?.medium || null,
+      format: a.subtype ? String(a.subtype).toUpperCase() : null,
+      score: Number.isFinite(score) && score > 0 ? score : null,
+      episodes: typeof a.episodeCount === "number" ? a.episodeCount : null,
+      genres: [],
+      status: "NOT_YET_RELEASED",
+      startAt: Number.isFinite(startMs) ? Math.floor(startMs / 1000) : null,
+      popularity: typeof a.userCount === "number" ? a.userCount : 0,
+    });
+  }
+  return out;
+}
+
 /**
  * Upcoming (not-yet-released) JP anime in AniList popularity order. The screen
  * applies the active filter (most-popular vs soonest-airing) on top of this, so
  * the list is returned in its native popularity ranking here.
  */
 export async function fetchUpcomingAnime(): Promise<CatalogAnime[]> {
-  return loadCatalog("upcoming", () => collect(UPCOMING_QUERY, {}));
+  return loadCatalog("upcoming", async () => {
+    const items = await collect(UPCOMING_QUERY, {});
+    return items.length > 0 ? items : fetchKitsuUpcoming();
+  });
 }
 
 /** Full popularity-ranked catalogue for one season. */

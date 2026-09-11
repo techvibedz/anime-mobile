@@ -46,6 +46,10 @@ function makeOpener(items: CatalogAnime[]) {
   const byId = new Map(items.map((i) => [i.id, i]));
   return (c: CatalogCardData) => {
     const it = byId.get(c.id);
+    if ((it?.id ?? c.id) < 0) {
+      router.push(`/(tabs)/search?q=${encodeURIComponent(it?.title || c.title)}`);
+      return;
+    }
     router.push({
       pathname: `/title/${c.id}`,
       params: {

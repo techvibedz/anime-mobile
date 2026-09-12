@@ -14,7 +14,7 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
   const reducedMotion = useReducedMotion();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const scale = useRef(new Animated.Value(0.94)).current;
-  const artworkWidth = Math.max(0, Math.min(260, screenWidth - 72, (screenHeight - 160) * 1.5));
+  const artworkWidth = Math.max(0, Math.min(190, screenWidth - 96, (screenHeight - 192) * 1.5));
 
   useEffect(() => {
     if (!visible) return;
@@ -50,7 +50,7 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="إغلاق"
-            hitSlop={8}
+            hitSlop={12}
             onPress={onClose}
             style={({ pressed }) => [s.closeTarget, pressed && s.pressed]}
           />
@@ -59,7 +59,7 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
             accessibilityRole="button"
             accessibilityLabel="شاهد الإعلان"
             accessibilityHint="يشغّل اختبار زر الإعلان"
-            hitSlop={6}
+            hitSlop={12}
             onPress={onWatchAd}
             style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
           />

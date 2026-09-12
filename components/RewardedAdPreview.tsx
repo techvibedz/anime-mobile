@@ -1,7 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef } from "react";
-import { Animated, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import {
+  Animated,
+  I18nManager,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useReducedMotion } from "../lib/motion";
@@ -12,11 +21,17 @@ type Props = {
   onWatchAd: () => void;
 };
 
+const decorations = require("../assets/rewarded-ad-decorations.png");
+
 export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
   const reducedMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const scale = useRef(new Animated.Value(0.94)).current;
+  const cardWidth = Math.min(400, width - 20);
+  const side = I18nManager.isRTL
+    ? { end: "30%" as const, start: "14%" as const }
+    : { start: "30%" as const, end: "14%" as const };
 
   useEffect(() => {
     if (!visible) return;
@@ -37,61 +52,82 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
     <View pointerEvents="box-none" style={[s.host, { top: insets.top + 12 }]}>
       <Animated.View
         testID="rewarded-ad-preview"
-        style={[s.card, { width: Math.min(380, width - 28), transform: [{ scale }] }]}
+        style={[s.card, { width: cardWidth, height: cardWidth * (2 / 3), transform: [{ scale }] }]}
       >
+        <LinearGradient colors={["#17101F", "#050509", "#0C0711"]} style={StyleSheet.absoluteFill} />
         <LinearGradient
           pointerEvents="none"
-          colors={["rgba(145,32,214,0.32)", "rgba(8,7,13,0)"]}
+          colors={["rgba(147,31,212,0.42)", "rgba(62,8,92,0)"]}
           style={s.glow}
         />
-        <View pointerEvents="none" style={[s.slash, s.slashTop]} />
-        <View pointerEvents="none" style={[s.slash, s.slashBottom]} />
 
-        <View style={s.topRow}>
-          <LinearGradient colors={["#8D24C8", "#3B0C65"]} style={s.label}>
-            <Text style={s.labelText}>إعلان مطلوب</Text>
-          </LinearGradient>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="إغلاق"
-            hitSlop={10}
-            onPress={onClose}
-            style={({ pressed }) => [s.closeButton, pressed && s.pressed]}
-          >
-            <Ionicons name="close" size={25} color="#FFFFFF" />
-          </Pressable>
+        <View pointerEvents="none" style={s.innerFrame} />
+        <View pointerEvents="none" style={[s.corner, s.cornerTopLeft]} />
+        <View pointerEvents="none" style={[s.corner, s.cornerBottomRight]} />
+        <View pointerEvents="none" style={[s.rail, s.railTop]} />
+        <View pointerEvents="none" style={[s.rail, s.railBottom]} />
+
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <Image source={decorations} resizeMode="stretch" style={StyleSheet.absoluteFill} />
         </View>
 
-        <LinearGradient colors={["#A52CDE", "#51108E"]} style={s.iconWrap}>
-          <Ionicons name="tv-outline" size={42} color="#FFFFFF" />
-          <View style={s.playDot}>
-            <Ionicons name="play" size={14} color="#FFFFFF" />
-          </View>
+        <LinearGradient colors={["#5A147D", "#260A3F", "#641A86"]} style={[s.label, side]}>
+          <View pointerEvents="none" style={s.labelHighlight} />
+          <Text numberOfLines={1} style={s.labelText}>إعلان مطلوب</Text>
         </LinearGradient>
 
-        <Text style={s.headline}>
-          شاهد <Text style={s.headlineAccent}>إعلاناً</Text>
-        </Text>
-        <Text style={s.subtitle}>لمواصلة مشاهدة الأنمي والمحتوى المميز</Text>
-
-        <View style={s.durationPill}>
-          <Ionicons name="sparkles" size={16} color="#E96BFF" />
-          <Text style={s.durationText}>لن يستغرق الأمر سوى 15 - 30 ثانية</Text>
-        </View>
-
         <Pressable
-          testID="rewarded-ad-watch"
           accessibilityRole="button"
-          accessibilityLabel="شاهد الإعلان"
-          accessibilityHint="يشغّل اختبار زر الإعلان"
-          onPress={onWatchAd}
-          style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
+          accessibilityLabel="إغلاق"
+          hitSlop={10}
+          onPress={onClose}
+          style={({ pressed }) => [
+            s.closeButton,
+            I18nManager.isRTL ? s.closeRTL : s.closeLTR,
+            pressed && s.pressed,
+          ]}
         >
-          <LinearGradient colors={["#B034E8", "#6612AE"]} style={s.watchButton}>
-            <Ionicons name="videocam-outline" size={24} color="#FFFFFF" />
-            <Text style={s.watchText}>شاهد الإعلان</Text>
-          </LinearGradient>
+          <View pointerEvents="none" style={s.closeInner}>
+            <Ionicons name="close" size={25} color="#FFFFFF" />
+          </View>
         </Pressable>
+
+        <View style={[s.content, side]}>
+          <LinearGradient colors={["#8F28D1", "#37105D"]} style={s.iconWrap}>
+            <Ionicons name="tv-outline" size={27} color="#FFFFFF" />
+            <View style={s.playDot}>
+              <Ionicons name="play" size={9} color="#FFFFFF" />
+            </View>
+          </LinearGradient>
+
+          <Text numberOfLines={1} style={s.headline}>
+            شاهد <Text style={s.headlineAccent}>إعلاناً</Text>
+          </Text>
+          <Text numberOfLines={1} adjustsFontSizeToFit style={s.subtitle}>
+            لمواصلة مشاهدة الأنمي والمحتوى المميز
+          </Text>
+
+          <View style={s.durationPill}>
+            <Ionicons name="sparkles" size={11} color="#E96BFF" />
+            <Text numberOfLines={1} adjustsFontSizeToFit style={s.durationText}>
+              لن يستغرق الأمر سوى 15 - 30 ثانية
+            </Text>
+          </View>
+
+          <Pressable
+            testID="rewarded-ad-watch"
+            accessibilityRole="button"
+            accessibilityLabel="شاهد الإعلان"
+            accessibilityHint="يشغّل اختبار زر الإعلان"
+            onPress={onWatchAd}
+            style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
+          >
+            <LinearGradient colors={["#8F28C8", "#421064", "#7A1BA3"]} style={s.watchButton}>
+              <Ionicons name="film-outline" size={21} color="#FFFFFF" />
+              <Text numberOfLines={1} style={s.watchText}>شاهد الإعلان</Text>
+            </LinearGradient>
+          </Pressable>
+        </View>
       </Animated.View>
     </View>
   );
@@ -108,14 +144,10 @@ const s = StyleSheet.create({
   },
   card: {
     overflow: "hidden",
-    alignItems: "center",
-    paddingHorizontal: 22,
-    paddingTop: 16,
-    paddingBottom: 22,
     borderWidth: 1,
-    borderColor: "#9E35D7",
-    borderRadius: 22,
-    backgroundColor: "#08070D",
+    borderColor: "#A934DB",
+    borderRadius: 18,
+    backgroundColor: "#050509",
     shadowColor: "#B62CFF",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.42,
@@ -123,117 +155,185 @@ const s = StyleSheet.create({
   },
   glow: {
     position: "absolute",
-    top: -85,
-    width: 300,
-    height: 210,
-    borderRadius: 150,
+    top: -90,
+    left: "23%",
+    width: "66%",
+    height: 190,
+    borderRadius: 100,
   },
-  slash: {
+  innerFrame: {
+    ...StyleSheet.absoluteFillObject,
+    margin: 5,
+    borderWidth: 1,
+    borderColor: "rgba(194,67,242,0.48)",
+    borderRadius: 13,
+  },
+  corner: {
     position: "absolute",
-    width: 74,
+    width: 58,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#CF4DFF",
+    backgroundColor: "#D449FF",
   },
-  slashTop: { left: -18, top: 18, transform: [{ rotate: "-28deg" }] },
-  slashBottom: { right: -18, bottom: 18, transform: [{ rotate: "-28deg" }] },
-  topRow: {
-    width: "100%",
-    minHeight: 48,
+  cornerTopLeft: { left: -14, top: 15, transform: [{ rotate: "-29deg" }] },
+  cornerBottomRight: { right: -14, bottom: 15, transform: [{ rotate: "-29deg" }] },
+  rail: {
+    position: "absolute",
+    height: 2,
+    backgroundColor: "rgba(207,74,255,0.68)",
+  },
+  railTop: { top: 6, left: "12%", right: "26%" },
+  railBottom: { bottom: 6, left: "28%", right: "12%" },
+  label: {
+    position: "absolute",
+    top: 15,
+    height: 47,
+    zIndex: 3,
     alignItems: "center",
     justifyContent: "center",
-  },
-  label: {
-    minWidth: 190,
-    alignItems: "center",
-    paddingHorizontal: 24,
-    paddingVertical: 8,
     borderWidth: 1,
     borderColor: "#C855F0",
-    borderRadius: 10,
+    borderRadius: 5,
+    transform: [{ skewX: "-4deg" }],
+  },
+  labelHighlight: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    top: 4,
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.38)",
   },
   labelText: {
     color: "#FFFFFF",
     fontSize: 22,
+    lineHeight: 32,
     fontFamily: "Cairo_700Bold",
+    textShadowColor: "#1C031F",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 3,
+    transform: [{ skewX: "4deg" }],
+    writingDirection: "rtl",
   },
   closeButton: {
     position: "absolute",
-    right: -7,
-    top: -3,
-    width: 46,
-    height: 46,
+    top: 10,
+    zIndex: 10,
+    width: 43,
+    height: 43,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#C64EF1",
+    borderRadius: 22,
+    backgroundColor: "#08060D",
+  },
+  closeRTL: { start: 7 },
+  closeLTR: { end: 7 },
+  closeInner: {
+    width: 33,
+    height: 33,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#A63DDA",
-    borderRadius: 23,
-    backgroundColor: "#191020",
+    borderColor: "rgba(121,29,164,0.8)",
+    borderRadius: 17,
+    backgroundColor: "#16101C",
+  },
+  content: {
+    position: "absolute",
+    top: 67,
+    bottom: 10,
+    zIndex: 4,
+    alignItems: "center",
   },
   iconWrap: {
-    width: 82,
-    height: 70,
-    marginTop: 18,
+    width: 49,
+    height: 42,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
     borderColor: "#D96BFF",
-    borderRadius: 18,
+    borderRadius: 12,
   },
   playDot: {
     position: "absolute",
-    width: 28,
-    height: 28,
+    width: 19,
+    height: 19,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 14,
-    backgroundColor: "rgba(14,7,23,0.84)",
+    borderRadius: 10,
+    backgroundColor: "rgba(14,7,23,0.9)",
   },
   headline: {
-    marginTop: 13,
+    marginTop: 1,
     color: "#FFFFFF",
-    fontSize: 29,
+    fontSize: 22,
+    lineHeight: 31,
     fontFamily: "Cairo_700Bold",
     textAlign: "center",
+    writingDirection: "rtl",
   },
-  headlineAccent: { color: "#E34BFF" },
+  headlineAccent: { color: "#D947F7" },
   subtitle: {
-    marginTop: -3,
-    color: "#D8D0DE",
-    fontSize: 14,
+    width: "100%",
+    marginTop: -4,
+    color: "#EEE8F1",
+    fontSize: 10.5,
+    lineHeight: 17,
     fontFamily: "Cairo_500Medium",
     textAlign: "center",
+    writingDirection: "rtl",
   },
   durationPill: {
     width: "100%",
-    minHeight: 45,
-    marginTop: 16,
+    height: 27,
+    marginTop: 2,
+    paddingHorizontal: 8,
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    borderWidth: 1,
+    borderColor: "#A432CD",
+    borderRadius: 4,
+    backgroundColor: "rgba(31,10,40,0.88)",
+  },
+  durationText: {
+    flexShrink: 1,
+    color: "#D850F4",
+    fontSize: 10,
+    lineHeight: 17,
+    fontFamily: "Cairo_600SemiBold",
+    textAlign: "center",
+    writingDirection: "rtl",
+  },
+  watchTarget: {
+    width: "88%",
+    height: 43,
+    marginTop: 5,
+    borderRadius: 7,
+  },
+  watchButton: {
+    flex: 1,
+    paddingHorizontal: 12,
     flexDirection: "row-reverse",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
     borderWidth: 1,
-    borderColor: "rgba(198,63,239,0.55)",
-    borderRadius: 12,
-    backgroundColor: "rgba(123,33,161,0.16)",
+    borderColor: "#E067FF",
+    borderRadius: 7,
   },
-  durationText: {
-    color: "#E3C7EB",
-    fontSize: 13,
-    fontFamily: "Cairo_600SemiBold",
-    textAlign: "center",
+  watchText: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    lineHeight: 29,
+    fontFamily: "Cairo_700Bold",
+    textShadowColor: "rgba(24,0,35,0.8)",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 3,
+    writingDirection: "rtl",
   },
-  watchTarget: { width: "100%", marginTop: 14, borderRadius: 13 },
-  watchButton: {
-    minHeight: 54,
-    flexDirection: "row-reverse",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    borderWidth: 1,
-    borderColor: "#CF5BF4",
-    borderRadius: 13,
-  },
-  watchText: { color: "#FFFFFF", fontSize: 18, fontFamily: "Cairo_700Bold" },
-  pressed: { opacity: 0.78 },
+  pressed: { opacity: 0.72, transform: [{ scale: 0.98 }] },
 });

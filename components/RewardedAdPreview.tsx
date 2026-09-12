@@ -1,6 +1,7 @@
 // HERO: the supplied cyberpunk anime panel remains the notification itself.
 import { useEffect, useRef } from "react";
-import { Animated, Image, Modal, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { Animated, Image, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useReducedMotion } from "../lib/motion";
 
@@ -12,6 +13,7 @@ type Props = {
 
 export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
   const reducedMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const scale = useRef(new Animated.Value(0.94)).current;
   const artworkWidth = Math.max(0, Math.min(190, screenWidth - 96, (screenHeight - 192) * 1.5));
@@ -29,53 +31,48 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
     }).start();
   }, [reducedMotion, scale, visible]);
 
+  if (!visible) return null;
+
   return (
-    <Modal
-      transparent
-      statusBarTranslucent
-      visible={visible}
-      animationType={reducedMotion ? "none" : "fade"}
-      onRequestClose={onClose}
-    >
-      <View style={s.backdrop}>
-        <Animated.View
-          testID="rewarded-ad-preview"
-          style={[s.artwork, { width: artworkWidth, transform: [{ scale }] }]}
-        >
-          <Image
-            source={require("../assets/rewarded-ad-preview.png")}
-            resizeMode="contain"
-            style={StyleSheet.absoluteFillObject}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="إغلاق"
-            hitSlop={12}
-            onPress={onClose}
-            style={({ pressed }) => [s.closeTarget, pressed && s.pressed]}
-          />
-          <Pressable
-            testID="rewarded-ad-watch"
-            accessibilityRole="button"
-            accessibilityLabel="شاهد الإعلان"
-            accessibilityHint="يشغّل اختبار زر الإعلان"
-            hitSlop={12}
-            onPress={onWatchAd}
-            style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
-          />
-        </Animated.View>
-      </View>
-    </Modal>
+    <View pointerEvents="box-none" style={[s.host, { top: insets.top + 12 }]}>
+      <Animated.View
+        testID="rewarded-ad-preview"
+        style={[s.artwork, { width: artworkWidth, transform: [{ scale }] }]}
+      >
+        <Image
+          source={require("../assets/rewarded-ad-preview.png")}
+          resizeMode="contain"
+          style={StyleSheet.absoluteFillObject}
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="إغلاق"
+          hitSlop={12}
+          onPress={onClose}
+          style={({ pressed }) => [s.closeTarget, pressed && s.pressed]}
+        />
+        <Pressable
+          testID="rewarded-ad-watch"
+          accessibilityRole="button"
+          accessibilityLabel="شاهد الإعلان"
+          accessibilityHint="يشغّل اختبار زر الإعلان"
+          hitSlop={12}
+          onPress={onWatchAd}
+          style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
+        />
+      </Animated.View>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
-  backdrop: {
-    flex: 1,
+  host: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    elevation: 100,
     alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 0,
-    paddingVertical: 24,
   },
   artwork: {
     aspectRatio: 1.5,

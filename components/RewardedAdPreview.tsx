@@ -69,13 +69,13 @@ const s = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 10,
+    paddingHorizontal: 0,
     paddingVertical: 24,
     backgroundColor: "rgba(3,2,8,0.82)",
   },
   artwork: {
-    width: "100%",
-    maxWidth: 400,
+    width: "86%",
+    maxWidth: 320,
     aspectRatio: 1.5,
   },
   closeTarget: {

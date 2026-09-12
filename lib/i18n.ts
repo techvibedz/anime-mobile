@@ -500,6 +500,10 @@ export const ar = {
   adminCheckOtaDesc: "يحمّل آخر تحديث JS ويعيد تشغيل التطبيق",
   adminOtaApplied: "تم تحميل تحديث OTA — ستتم إعادة التشغيل الآن",
   adminOtaNone: "لا توجد تحديثات OTA جديدة",
+  adminRewardedAdPreview: "معاينة إعلان المكافأة",
+  adminRewardedAdPreviewDesc: "اعرض نافذة «إعلان مطلوب» واختبر زر مشاهدة الإعلان",
+  adminRewardedAdTestTitle: "إعلان تجريبي",
+  adminRewardedAdTestSuccess: "يعمل زر مشاهدة الإعلان بنجاح.",
 
   // Admin↔user chat (المحادثات)
   chatMenuUser: "رسائل المشرف",        // sidebar entry shown to regular users

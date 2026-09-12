@@ -41,6 +41,7 @@ import { isAdmin } from "../lib/presence";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, SectionLabel } from "../components/ScreenChrome";
+import { RewardedAdPreview } from "../components/RewardedAdPreview";
 
 const HISTORY_KEY = "watch_history";
 
@@ -59,6 +60,7 @@ export default function SettingsScreen() {
   const [checking, setChecking] = useState(false);
   const [testing, setTesting] = useState(false);
   const [adminChecking, setAdminChecking] = useState(false);
+  const [showRewardedAdPreview, setShowRewardedAdPreview] = useState(false);
   // Hook must run unconditionally; admin gating happens in render.
   const { isUpdatePending } = Updates.useUpdates();
 
@@ -308,6 +310,14 @@ export default function SettingsScreen() {
                 onPress={onAdminCheckOta}
                 right={adminChecking ? <ActivityIndicator size="small" color={C.accent} /> : undefined}
               />
+              <Divider />
+              <ActionRow
+                icon="videocam-outline"
+                tint="#D946EF"
+                title={t.adminRewardedAdPreview}
+                desc={t.adminRewardedAdPreviewDesc}
+                onPress={() => setShowRewardedAdPreview(true)}
+              />
             </View>
           </>
         )}
@@ -322,6 +332,11 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
       </ScrollView>
+      <RewardedAdPreview
+        visible={admin && showRewardedAdPreview}
+        onClose={() => setShowRewardedAdPreview(false)}
+        onWatchAd={() => Alert.alert(t.adminRewardedAdTestTitle, t.adminRewardedAdTestSuccess)}
+      />
     </View>
   );
 }

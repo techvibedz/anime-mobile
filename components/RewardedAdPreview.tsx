@@ -1,6 +1,6 @@
 // HERO: the supplied cyberpunk anime panel remains the notification itself.
 import { useEffect, useRef } from "react";
-import { Animated, Image, Modal, Pressable, StyleSheet, View } from "react-native";
+import { Animated, Image, Modal, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 
 import { useReducedMotion } from "../lib/motion";
 
@@ -12,7 +12,9 @@ type Props = {
 
 export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
   const reducedMotion = useReducedMotion();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const scale = useRef(new Animated.Value(0.94)).current;
+  const artworkWidth = Math.max(0, Math.min(260, screenWidth - 72, (screenHeight - 160) * 1.5));
 
   useEffect(() => {
     if (!visible) return;
@@ -36,7 +38,10 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
       onRequestClose={onClose}
     >
       <View style={s.backdrop}>
-        <Animated.View testID="rewarded-ad-preview" style={[s.artwork, { transform: [{ scale }] }]}>
+        <Animated.View
+          testID="rewarded-ad-preview"
+          style={[s.artwork, { width: artworkWidth, transform: [{ scale }] }]}
+        >
           <Image
             source={require("../assets/rewarded-ad-preview.png")}
             resizeMode="contain"
@@ -74,8 +79,6 @@ const s = StyleSheet.create({
     backgroundColor: "rgba(3,2,8,0.82)",
   },
   artwork: {
-    width: "86%",
-    maxWidth: 320,
     aspectRatio: 1.5,
   },
   closeTarget: {

@@ -34,8 +34,9 @@ test("no seek when within tolerance", () => {
 test("compensates for elapsed time while playing", () => {
   const s = base();
   const now = s.at + 1500; // 1.5s later
-  // Client advanced ~1.5s too → expected 11500, local 11400 → 100ms drift.
-  const r = computeSync(s, 11_400, now);
+  // Compensation is capped below the correction window so clock skew cannot
+  // create a seek storm: expected 10100, local 10050 → 50ms drift.
+  const r = computeSync(s, 10_050, now);
   assert.strictEqual(r.shouldSeekTo, null);
 });
 
@@ -43,7 +44,7 @@ test("compensates for elapsed time while playing", () => {
 test("seeks when drift exceeds tolerance", () => {
   const s = base();
   const now = s.at + 1000;
-  const expected = s.positionMs + 1000; // 11000
+  const expected = s.positionMs + 100; // transit compensation cap
   const r = computeSync(s, expected + DRIFT_TOLERANCE_MS + 500, now);
   assert.strictEqual(r.shouldSeekTo, expected);
 });
@@ -62,16 +63,20 @@ test("paused host: no elapsed compensation, follows pause", () => {
 test("clamped compensation: skewed client clock does not seek", () => {
   const s = base(); // host at 10000, playing
   const now = s.at + 60_000; // client clock 60s ahead
-  const r = computeSync(s, 10_500, now); // client actually in sync (~0.5s off)
+  const r = computeSync(s, 10_150, now); // client actually in sync (~0.05s off)
   assert.strictEqual(r.shouldSeekTo, null);
 });
 
-// Late-but-legit delivery (sub-second) is still compensated.
-test("compensates sub-second transit delay", () => {
+// Late delivery is capped, then corrected once the remaining drift is visible.
+test("caps transit compensation and corrects visible drift", () => {
   const s = base();
   const now = s.at + 900;
   const r = computeSync(s, 10_000 + 900 + DRIFT_TOLERANCE_MS + 500, now);
-  assert.strictEqual(r.shouldSeekTo, 10_900);
+  assert.strictEqual(r.shouldSeekTo, 10_100);
+});
+
+test("visual drift window stays below a quarter second", () => {
+  assert.ok(DRIFT_TOLERANCE_MS <= 250);
 });
 
 // Room codes avoid ambiguous glyphs and are the right length.

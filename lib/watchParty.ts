@@ -4,7 +4,7 @@
 //   • Presence  → who's in the room (avatar row in the overlay/lobby).
 //   • Broadcast → the host's player state (episode, position, play/pause).
 //
-// The host broadcasts its state on a fixed 1.5s heartbeat; clients reconcile
+// The host broadcasts its state on a fixed 0.5s heartbeat; clients reconcile
 // each beat against their local player (see computeSync). That single periodic
 // message covers play, pause AND seek with no per-event wiring — the laziest
 // correct sync. The drift tolerance (DRIFT_TOLERANCE_MS) is the "buffer window"
@@ -39,7 +39,7 @@ export interface PartyMember {
   ready: boolean;
 }
 
-const HEARTBEAT_MS = 1500;
+const HEARTBEAT_MS = 500;
 const DETACH_LEAVE_MS = 2000; // grace so an episode-hop remount keeps the room
 // A failed subscribe (bad network on join, Realtime hiccup) used to be
 // invisible: the joiner sat in the lobby on a spinner forever. Retry a fresh
@@ -95,8 +95,8 @@ function computeMembers(): PartyMember[] {
       isHost: !!p.is_host,
       // Only an EXPLICIT `false` (a member that supports the gate and is still
       // buffering) holds the room. A member that doesn't report readiness at all
-      // (undefined) — the desktop sibling app, or an older mobile build that
-      // predates this flag — counts as ready so it can never deadlock the host.
+      // (undefined) — an older app build that predates this flag — counts as
+      // ready so it can never deadlock the host.
       ready: p.ready !== false,
     });
   }
@@ -350,7 +350,7 @@ export function useWatchPartySync(opts: {
   // Client: true until the host's first PLAYING broadcast for this episode.
   // Drives the "waiting for the host to start" overlay + suppresses the
   // player's self-heal watchdog while the hold is INTENTIONAL.
-  const [waitingForHost, setWaitingForHost] = useState(false);
+  const [waitingForHost, setWaitingForHost] = useState(() => getRoom()?.role === "client");
 
   const optsRef = useRef(opts);
   optsRef.current = opts;
@@ -363,7 +363,7 @@ export function useWatchPartySync(opts: {
   useEffect(() => subscribeMembers(setMembers), []);
 
   // Mirror this device's readiness into presence so the host's gate can see it.
-  useEffect(() => { void setReady(!!opts.selfReady); }, [opts.selfReady]);
+  useEffect(() => { void setReady(!!opts.selfReady); }, [opts.selfReady, role, code]);
 
   // New episode → re-arm the gate (everyone re-buffers, so wait again).
   useEffect(() => {
@@ -401,7 +401,7 @@ export function useWatchPartySync(opts: {
   // Suppress the watch screen's autonomous auto-play while the host is gated, so
   // the source resolving (which buffers + flips the player ready) can't start the
   // video before the host releases the room.
-  const holdPlayback = role === "host" && !released;
+  const holdPlayback = (role === "host" && !released) || (role === "client" && waitingForHost);
 
   // Build + broadcast the current player state RIGHT NOW (host only). Called from
   // every host control (play/pause/seek/skip/start) so viewers move in lock-step

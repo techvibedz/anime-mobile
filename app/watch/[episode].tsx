@@ -1260,6 +1260,8 @@ export default function WatchScreen() {
     if (party.role === "host" && party.holdPlayback) setPartyPanelOpen(true);
   }, [party.role, party.holdPlayback]);
 
+  useEffect(() => { setSelfReady(false); }, [episode]);
+
   // Report readiness to the room: flip selfReady once the current source has
   // buffered its start (native: duration/readyToPlay; embeds buffer internally,
   // so they count as ready once shown). A hard cap prevents an undetectable
@@ -1271,19 +1273,13 @@ export default function WatchScreen() {
     const cap = setTimeout(() => setSelfReady(true), 25000);
     const iv = setInterval(() => {
       try {
-        // Ready = a playable source is RESOLVED (direct URL or embed). Buffer-
-        // based readiness (duration/readyToPlay) was unreliable: a gated or
-        // host-paused player never reports a duration, so members stayed
-        // "buffering" forever and the gate never released. Source-resolved is
-        // reliable for every role, and a slow connection (slow to resolve) still
-        // makes the host wait.
-        if (active?.status === "playing" || active?.status === "webview" || player.duration > 0) {
+        if (player.status === "readyToPlay" || player.duration > 0) {
           setSelfReady(true);
         }
       } catch {}
     }, 500);
     return () => { clearTimeout(cap); clearInterval(iv); };
-  }, [party.code, selfReady, isWebView, player, episode, active?.status]);
+  }, [party.code, selfReady, isWebView, player, episode]);
   const startParty = useCallback(() => {
     if (!user) return;
     createRoom(user).catch(() => {});

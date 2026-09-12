@@ -24,9 +24,18 @@ function device(file, channels) {
     const ch = {
       name, on(type, filter, cb) { handlers.push({ type, event: filter.event, cb }); return ch; },
       subscribe(cb) { channels.push(ch); cb('SUBSCRIBED'); return ch; },
-      async track() {}, async untrack() {}, presenceState() { return {}; },
+      async track(payload) { ch.tracked = payload; for (const peer of channels) if (peer.name === name) peer.deliverPresence('sync'); },
+      async untrack() { ch.tracked = null; },
+      presenceState() {
+        const state = {};
+        for (const peer of channels) {
+          if (peer.name === name && peer.tracked) state[peer.tracked.user_id] = [peer.tracked];
+        }
+        return state;
+      },
       send(message) { for (const other of channels) if (other !== ch && other.name === name) other.deliver(message.event, message.payload); return Promise.resolve('ok'); },
       deliver(event, payload) { handlers.filter(h => h.type === 'broadcast' && h.event === event).forEach(h => h.cb({ payload })); },
+      deliverPresence(event) { handlers.filter(h => h.type === 'presence' && h.event === event).forEach(h => h.cb()); },
     }; return ch;
   }, async removeChannel(ch) { channels.splice(channels.indexOf(ch), 1); } };
   const navigate = () => {};
@@ -47,9 +56,9 @@ function device(file, channels) {
   const api = load(file);
   const video = { currentTime: 42, paused: true, play() { video.paused = false; return Promise.resolve(); }, pause() { video.paused = true; }, addEventListener() {}, removeEventListener() {} };
   const opts = mobile ? {
-    player: video, episode: 'https://anime3rb.com/episode/test/12', navParams: { url4up: 'alternate', epNum: '12' }, paused: true, selfReady: true,
+    player: video, episode: 'https://anime3rb.com/episode/test/12', navParams: { url4up: 'alternate', epNum: '12' }, paused: true, selfReady: false,
     applyPaused(paused) { opts.paused = paused; video.paused = paused; },
-  } : { videoRef: { current: video }, episode: 'https://anime3rb.com/episode/test/12', navParams: { up4: 'alternate', ep: '12' }, onPaused() {} };
+  } : { videoRef: { current: video }, episode: 'https://anime3rb.com/episode/test/12', navParams: { up4: 'alternate', ep: '12' }, onPaused() {}, selfReady: false };
   return { api, video, opts, beat() { timers.forEach(fn => fn()); }, render() { cursor = 0; effects = []; const hook = api.useWatchPartySync(opts); effects.forEach(fn => fn()); return hook; } };
 }
 
@@ -60,6 +69,17 @@ async function scenario(hostFile, clientFile) {
   await client.api.joinRoom(code, { id: 'viewer' });
   let h = host.render();
   client.render();
+  h = host.render();
+  assert.equal(h.allReady, false, 'host waits until every viewer is ready');
+  h.start();
+  assert.equal(host.video.paused, true, 'start gate holds playback');
+  host.opts.selfReady = true;
+  client.opts.selfReady = true;
+  host.render();
+  client.render();
+  h = host.render();
+  assert.equal(h.viewerCount, 1);
+  assert.equal(h.allReady, true, 'cross-platform readiness is shared through presence');
   if (h.start) { h.start(); h = host.render(); } else host.video.paused = false;
   host.beat();
   assert.equal(client.video.paused, false);

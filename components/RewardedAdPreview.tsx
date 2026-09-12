@@ -17,6 +17,7 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const scale = useRef(new Animated.Value(0.94)).current;
   const artworkWidth = Math.max(0, Math.min(190, screenWidth - 96, (screenHeight - 192) * 1.5));
+  const artworkHeight = artworkWidth / 1.5;
 
   useEffect(() => {
     if (!visible) return;
@@ -37,12 +38,12 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
     <View pointerEvents="box-none" style={[s.host, { top: insets.top + 12 }]}>
       <Animated.View
         testID="rewarded-ad-preview"
-        style={[s.artwork, { width: artworkWidth, transform: [{ scale }] }]}
+        style={[s.artwork, { width: artworkWidth, height: artworkHeight, transform: [{ scale }] }]}
       >
         <Image
           source={require("../assets/rewarded-ad-preview.png")}
           resizeMode="contain"
-          style={StyleSheet.absoluteFillObject}
+          style={s.image}
         />
         <Pressable
           accessibilityRole="button"
@@ -75,7 +76,11 @@ const s = StyleSheet.create({
     alignItems: "center",
   },
   artwork: {
-    aspectRatio: 1.5,
+    overflow: "hidden",
+  },
+  image: {
+    width: "100%",
+    height: "100%",
   },
   closeTarget: {
     position: "absolute",

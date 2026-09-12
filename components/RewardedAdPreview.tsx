@@ -76,7 +76,6 @@ const s = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 0,
     paddingVertical: 24,
-    backgroundColor: "rgba(3,2,8,0.82)",
   },
   artwork: {
     aspectRatio: 1.5,

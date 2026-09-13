@@ -1,10 +1,19 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef } from "react";
-import { Animated, Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import {
+  Animated,
+  Image,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AR, S } from "../lib/theme";
+import { AR, C, S } from "../lib/theme";
 import { useReducedMotion } from "../lib/motion";
 
 type Props = {
@@ -15,42 +24,93 @@ type Props = {
 
 const DESIGN_WIDTH = 384;
 const DESIGN_HEIGHT = 256;
-const decorations = require("../assets/rewarded-ad-decorations.png");
+const STAGE_HEIGHT = 318;
+
+const avatar = require("../assets/rewarded-ad-avatar.png");
+const katana = require("../assets/rewarded-ad-katana.png");
+const shuriken = require("../assets/rewarded-ad-shuriken.png");
 
 export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
   const reducedMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
-  const scale = useRef(new Animated.Value(0.96)).current;
+  const entrance = useRef(new Animated.Value(0)).current;
   const cardWidth = Math.max(
     0,
-    Math.min(460, width - 16, (height - insets.top - insets.bottom - 24) * 1.5),
+    Math.min(
+      430,
+      width - 40,
+      (height - insets.top - insets.bottom - 48) * (DESIGN_WIDTH / STAGE_HEIGHT),
+    ),
   );
-  const cardHeight = cardWidth / 1.5;
+  const cardHeight = cardWidth * (DESIGN_HEIGHT / DESIGN_WIDTH);
   const artScale = cardWidth / DESIGN_WIDTH;
 
   useEffect(() => {
     if (!visible) return;
-    scale.setValue(reducedMotion ? 1 : 0.96);
+    entrance.setValue(reducedMotion ? 1 : 0);
     if (reducedMotion) return;
-    Animated.spring(scale, {
+    Animated.spring(entrance, {
       toValue: 1,
-      damping: 18,
-      stiffness: 220,
-      mass: 0.7,
+      damping: 20,
+      stiffness: 210,
+      mass: 0.72,
       useNativeDriver: true,
     }).start();
-  }, [reducedMotion, scale, visible]);
-
-  if (!visible) return null;
+  }, [entrance, reducedMotion, visible]);
 
   return (
-    <View pointerEvents="box-none" style={[s.host, { top: insets.top + S.sm }]}>
-      <Animated.View
-        testID="rewarded-ad-preview"
-        style={[s.shell, { width: cardWidth, height: cardHeight, transform: [{ scale }] }]}
+    <Modal
+      animationType={reducedMotion ? "none" : "fade"}
+      navigationBarTranslucent
+      onRequestClose={onClose}
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      transparent
+      visible={visible}
+    >
+      <View
+        accessibilityViewIsModal
+        onAccessibilityEscape={onClose}
+        style={[s.modalRoot, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}
       >
-        <View style={s.clippedCard}>
+        <Pressable
+          accessibilityLabel="إغلاق نافذة الإعلان"
+          accessibilityRole="button"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <LinearGradient
+          pointerEvents="none"
+          colors={["rgba(3,3,7,0.84)", "rgba(9,5,14,0.76)", "rgba(3,3,7,0.9)"]}
+          style={StyleSheet.absoluteFill}
+        />
+
+        <Animated.View
+          testID="rewarded-ad-preview"
+          style={[
+            s.stage,
+            {
+              width: cardWidth,
+              height: cardHeight,
+              opacity: entrance,
+              transform: [
+                {
+                  translateY: entrance.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [12, 0],
+                  }),
+                },
+                {
+                  scale: entrance.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.96, 1],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
           <View
             style={[
               s.artboard,
@@ -61,298 +121,317 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
               },
             ]}
           >
-            <LinearGradient colors={["#160A20", "#050509", "#0D0712"]} style={StyleSheet.absoluteFill} />
             <LinearGradient
-              pointerEvents="none"
-              colors={["rgba(124,25,177,0.5)", "rgba(19,5,28,0)"]}
-              style={s.headerGlow}
-            />
+              colors={["#D85BFF", "#64118E", "#B52BE6", "#481060"]}
+              end={{ x: 1, y: 1 }}
+              start={{ x: 0, y: 0 }}
+              style={s.frameBorder}
+            >
+              <View style={s.frame}>
+                <LinearGradient
+                  colors={["#16091F", "#050508", "#09060E"]}
+                  end={{ x: 1, y: 1 }}
+                  start={{ x: 0, y: 0 }}
+                  style={StyleSheet.absoluteFill}
+                />
+                <LinearGradient
+                  pointerEvents="none"
+                  colors={["rgba(150,35,200,0.36)", "rgba(22,7,31,0)"]}
+                  end={{ x: 0.5, y: 1 }}
+                  start={{ x: 0.5, y: 0 }}
+                  style={s.headerGlow}
+                />
 
-            <View pointerEvents="none" style={s.innerFrame} />
-            <View pointerEvents="none" style={[s.cornerStroke, s.cornerTopLeft]} />
-            <View pointerEvents="none" style={[s.cornerStroke, s.cornerBottomRight]} />
-            <View pointerEvents="none" style={s.topRail} />
-            <View pointerEvents="none" style={s.bottomRail} />
-            <View pointerEvents="none" style={s.leftRail} />
-            <View pointerEvents="none" style={s.rightRail} />
+                <View pointerEvents="none" style={s.innerFrame} />
+                <View pointerEvents="none" style={[s.edgeLine, s.edgeTop]} />
+                <View pointerEvents="none" style={[s.edgeLine, s.edgeBottom]} />
+                <View pointerEvents="none" style={[s.cornerCut, s.cornerTopLeft]} />
+                <View pointerEvents="none" style={[s.cornerCut, s.cornerBottomRight]} />
 
-            <LinearGradient colors={["#6F1B96", "#2B0A43", "#621484"]} style={s.titlePlate}>
-              <View pointerEvents="none" style={s.titlePlateHighlight} />
+                <LinearGradient
+                  colors={["#8E28B9", "#3A0C50", "#701C91"]}
+                  end={{ x: 1, y: 0.5 }}
+                  start={{ x: 0, y: 0.5 }}
+                  style={s.titleBorder}
+                >
+                  <LinearGradient
+                    colors={["#6E198E", "#280938", "#5B1275"]}
+                    end={{ x: 1, y: 1 }}
+                    start={{ x: 0, y: 0 }}
+                    style={s.titleSurface}
+                  >
+                    <View pointerEvents="none" style={s.titleShine} />
+                    <Text maxFontSizeMultiplier={1.1} numberOfLines={1} style={s.titleText}>
+                      إعلان مطلوب
+                    </Text>
+                  </LinearGradient>
+                </LinearGradient>
+
+                <LinearGradient
+                  colors={["#B84DE0", "#7313A6", "#39104F"]}
+                  end={{ x: 1, y: 1 }}
+                  start={{ x: 0, y: 0 }}
+                  style={s.mediaBorder}
+                >
+                  <LinearGradient
+                    colors={["#7C20AA", "#2B0A43"]}
+                    style={s.mediaSurface}
+                  >
+                    <Ionicons name="tv-outline" size={27} color="#FFFFFF" />
+                    <View pointerEvents="none" style={s.playBadge}>
+                      <Ionicons name="play" size={10} color="#FFFFFF" style={s.playIcon} />
+                    </View>
+                  </LinearGradient>
+                </LinearGradient>
+
+                <View pointerEvents="none" style={s.copyScrim} />
+                <Text maxFontSizeMultiplier={1.1} numberOfLines={1} style={s.headline}>
+                  شاهد <Text style={s.headlineAccent}>إعلاناً</Text>
+                </Text>
+                <Text
+                  adjustsFontSizeToFit
+                  maxFontSizeMultiplier={1.1}
+                  minimumFontScale={0.9}
+                  numberOfLines={1}
+                  style={s.subtitle}
+                >
+                  لمواصلة مشاهدة الأنمي والمحتوى المميز
+                </Text>
+
+                <View style={s.duration}>
+                  <Ionicons name="sparkles" size={12} color="#E967FA" style={s.durationIcon} />
+                  <Text
+                    adjustsFontSizeToFit
+                    maxFontSizeMultiplier={1.1}
+                    minimumFontScale={0.86}
+                    numberOfLines={1}
+                    style={s.durationText}
+                  >
+                    لن يستغرق الأمر سوى 15 - 30 ثانية
+                  </Text>
+                </View>
+
+                <Pressable
+                  testID="rewarded-ad-watch"
+                  accessibilityRole="button"
+                  accessibilityLabel="شاهد الإعلان"
+                  accessibilityHint="يشغّل اختبار زر الإعلان"
+                  onPress={onWatchAd}
+                  style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
+                >
+                  <LinearGradient
+                    colors={["#E469FF", "#8E1FC3", "#5B0E80"]}
+                    end={{ x: 1, y: 1 }}
+                    start={{ x: 0, y: 0 }}
+                    style={s.watchBorder}
+                  >
+                    <LinearGradient
+                      colors={["#A32FD0", "#691194", "#8D20B8"]}
+                      end={{ x: 1, y: 1 }}
+                      start={{ x: 0, y: 0 }}
+                      style={s.watchSurface}
+                    >
+                      <View pointerEvents="none" style={s.watchShine} />
+                      <Ionicons
+                        name="film-outline"
+                        size={22}
+                        color="#FFFFFF"
+                        style={s.watchIcon}
+                      />
+                      <Text maxFontSizeMultiplier={1.1} numberOfLines={1} style={s.watchText}>
+                        شاهد الإعلان
+                      </Text>
+                    </LinearGradient>
+                  </LinearGradient>
+                </Pressable>
+              </View>
             </LinearGradient>
 
-            <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-              <Image source={decorations} resizeMode="stretch" style={StyleSheet.absoluteFill} />
+            <View pointerEvents="none" style={s.artworkLayer}>
+              <Image resizeMode="contain" source={avatar} style={s.avatar} />
+              <Image resizeMode="contain" source={shuriken} style={s.shuriken} />
+              <Image resizeMode="contain" source={katana} style={s.katana} />
             </View>
-
-            <Text maxFontSizeMultiplier={1.1} numberOfLines={1} style={s.titleText}>
-              إعلان مطلوب
-            </Text>
 
             <Pressable
               testID="rewarded-ad-close"
               accessibilityRole="button"
               accessibilityLabel="إغلاق"
-              hitSlop={4}
               onPress={onClose}
-              android_ripple={{ color: "rgba(255,255,255,0.14)", borderless: true }}
-              style={({ pressed }) => [s.closeButton, pressed && s.pressed]}
+              style={({ pressed }) => [s.closeTarget, pressed && s.pressed]}
             >
-              <View pointerEvents="none" style={s.closeInner}>
-                <Ionicons name="close" size={27} color="#FFFFFF" />
-              </View>
-            </Pressable>
-
-            <LinearGradient colors={["#8F27CC", "#3A0D5E"]} style={s.mediaIcon}>
-              <Ionicons name="tv-outline" size={27} color="#FFFFFF" />
-              <View pointerEvents="none" style={s.playDot}>
-                <Ionicons name="play" size={9} color="#FFFFFF" style={s.playIcon} />
-              </View>
-            </LinearGradient>
-
-            <Text maxFontSizeMultiplier={1.1} numberOfLines={1} style={s.headline}>
-              شاهد <Text style={s.headlineAccent}>إعلاناً</Text>
-            </Text>
-
-            <Text
-              adjustsFontSizeToFit
-              maxFontSizeMultiplier={1.1}
-              minimumFontScale={0.86}
-              numberOfLines={1}
-              style={s.subtitle}
-            >
-              لمواصلة مشاهدة الأنمي والمحتوى المميز
-            </Text>
-
-            <View style={s.duration}>
-              <Ionicons name="sparkles" size={11} color="#E564F7" />
-              <Text
-                adjustsFontSizeToFit
-                maxFontSizeMultiplier={1.1}
-                minimumFontScale={0.84}
-                numberOfLines={1}
-                style={s.durationText}
+              <LinearGradient
+                colors={["#EC78FF", "#8D1DBA", "#3A0B50"]}
+                end={{ x: 1, y: 1 }}
+                start={{ x: 0, y: 0 }}
+                style={s.closeBorder}
               >
-                لن يستغرق الأمر سوى 15 - 30 ثانية
-              </Text>
-            </View>
-
-            <Pressable
-              testID="rewarded-ad-watch"
-              accessibilityRole="button"
-              accessibilityLabel="شاهد الإعلان"
-              accessibilityHint="يشغّل اختبار زر الإعلان"
-              hitSlop={2}
-              onPress={onWatchAd}
-              android_ripple={{ color: "rgba(255,255,255,0.16)" }}
-              style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
-            >
-              <LinearGradient colors={["#9B2BD5", "#541078", "#801DAA"]} style={s.watchButton}>
-                <Ionicons name="film-outline" size={22} color="#FFFFFF" />
-                <Text maxFontSizeMultiplier={1.1} numberOfLines={1} style={s.watchText}>
-                  شاهد الإعلان
-                </Text>
+                <View style={s.closeSurface}>
+                  <Ionicons name="close" size={28} color="#FFFFFF" />
+                </View>
               </LinearGradient>
             </Pressable>
           </View>
-        </View>
-      </Animated.View>
-    </View>
+        </Animated.View>
+      </View>
+    </Modal>
   );
 }
 
 const s = StyleSheet.create({
-  host: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    zIndex: 100,
-    elevation: 100,
-    alignItems: "center",
-  },
-  shell: {
-    shadowColor: "#A82CDD",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.38,
-    shadowRadius: 18,
-    elevation: 18,
-  },
-  clippedCard: {
+  modalRoot: {
     flex: 1,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "#A635D2",
-    borderRadius: 12,
-    backgroundColor: "#050509",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stage: {
+    overflow: "visible",
   },
   artboard: {
     position: "absolute",
     width: DESIGN_WIDTH,
     height: DESIGN_HEIGHT,
     direction: "ltr",
+    overflow: "visible",
+  },
+  frameBorder: {
+    width: DESIGN_WIDTH,
+    height: DESIGN_HEIGHT,
+    padding: 2,
+    borderRadius: 18,
+    shadowColor: "#AF32DA",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.38,
+    shadowRadius: 22,
+    elevation: 20,
+  },
+  frame: {
+    flex: 1,
+    overflow: "hidden",
+    borderRadius: 16,
+    backgroundColor: C.bgDeep,
   },
   headerGlow: {
     position: "absolute",
-    left: 78,
+    left: 72,
     top: -70,
-    width: 235,
-    height: 165,
+    width: 250,
+    height: 175,
     borderRadius: 100,
   },
   innerFrame: {
     ...StyleSheet.absoluteFillObject,
     margin: 5,
     borderWidth: 1,
-    borderColor: "rgba(189,63,231,0.55)",
-    borderRadius: 8,
+    borderColor: "rgba(202,81,240,0.4)",
+    borderRadius: 11,
   },
-  cornerStroke: {
+  edgeLine: {
     position: "absolute",
-    width: 56,
+    height: 2,
+    backgroundColor: "rgba(218,87,255,0.76)",
+  },
+  edgeTop: { left: 44, right: 76, top: 5 },
+  edgeBottom: { left: 98, right: 42, bottom: 5 },
+  cornerCut: {
+    position: "absolute",
+    width: 54,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#D74CFF",
+    backgroundColor: "#DB55FF",
   },
-  cornerTopLeft: { left: -14, top: 14, transform: [{ rotate: "-29deg" }] },
-  cornerBottomRight: { right: -14, bottom: 14, transform: [{ rotate: "-29deg" }] },
-  topRail: {
+  cornerTopLeft: { left: -15, top: 15, transform: [{ rotate: "-30deg" }] },
+  cornerBottomRight: { right: -15, bottom: 15, transform: [{ rotate: "-30deg" }] },
+  titleBorder: {
     position: "absolute",
-    top: 5,
-    left: 48,
-    width: 236,
-    height: 2,
-    backgroundColor: "rgba(204,71,246,0.62)",
-  },
-  bottomRail: {
-    position: "absolute",
-    left: 116,
-    bottom: 5,
-    width: 218,
-    height: 2,
-    backgroundColor: "rgba(204,71,246,0.62)",
-  },
-  leftRail: {
-    position: "absolute",
-    left: 5,
-    top: 78,
-    width: 2,
-    height: 112,
-    backgroundColor: "rgba(174,50,216,0.4)",
-  },
-  rightRail: {
-    position: "absolute",
-    right: 5,
-    top: 66,
-    width: 2,
-    height: 112,
-    backgroundColor: "rgba(174,50,216,0.4)",
-  },
-  titlePlate: {
-    position: "absolute",
-    left: 102,
-    top: 20,
-    width: 194,
-    height: 47,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#C553EA",
-    borderRadius: 5,
+    left: 90,
+    top: 18,
+    width: 216,
+    height: 51,
+    padding: 1,
+    borderRadius: 8,
     transform: [{ skewX: "-4deg" }],
   },
-  titlePlateHighlight: {
+  titleSurface: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 7,
+  },
+  titleShine: {
     position: "absolute",
-    left: 8,
-    right: 8,
+    left: 12,
+    right: 12,
     top: 4,
     height: 1,
-    backgroundColor: "rgba(255,255,255,0.35)",
+    backgroundColor: "rgba(255,255,255,0.38)",
   },
   titleText: {
-    position: "absolute",
-    left: 102,
-    top: 25,
-    zIndex: 4,
-    width: 194,
     color: "#FFFFFF",
-    fontSize: 22,
+    fontSize: 23,
     lineHeight: 34,
     fontFamily: AR.bold,
     textAlign: "center",
     writingDirection: "rtl",
-    textShadowColor: "#1B021F",
+    textShadowColor: "#19021F",
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 3,
+    transform: [{ skewX: "4deg" }],
   },
-  closeButton: {
-    position: "absolute",
-    left: 333,
-    top: 14,
-    zIndex: 8,
-    width: S.touchTarget,
-    height: S.touchTarget,
-    overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#CB54EF",
-    borderRadius: 22,
-    backgroundColor: "#08060D",
-  },
-  closeInner: {
-    width: 34,
-    height: 34,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(120,31,157,0.85)",
-    borderRadius: 17,
-    backgroundColor: "#17101D",
-  },
-  mediaIcon: {
+  mediaBorder: {
     position: "absolute",
     left: 169,
-    top: 74,
-    zIndex: 4,
-    width: 48,
-    height: 42,
+    top: 75,
+    width: 50,
+    height: 44,
+    padding: 1,
+    borderRadius: 13,
+  },
+  mediaSurface: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#D766F5",
-    borderRadius: 11,
+    borderRadius: 12,
   },
-  playDot: {
+  playBadge: {
     position: "absolute",
-    width: 19,
-    height: 19,
+    width: 20,
+    height: 20,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 10,
-    backgroundColor: "rgba(12,5,18,0.92)",
+    backgroundColor: "rgba(9,4,14,0.9)",
   },
   playIcon: { marginLeft: 1 },
+  copyScrim: {
+    position: "absolute",
+    left: 78,
+    top: 116,
+    width: 232,
+    height: 86,
+    borderRadius: 42,
+    backgroundColor: "rgba(3,3,7,0.24)",
+  },
   headline: {
     position: "absolute",
-    left: 105,
-    top: 115,
-    zIndex: 4,
-    width: 176,
+    left: 103,
+    top: 116,
+    width: 182,
     color: "#FFFFFF",
-    fontSize: 22,
-    lineHeight: 33,
+    fontSize: 23,
+    lineHeight: 34,
     fontFamily: AR.bold,
     textAlign: "center",
     writingDirection: "rtl",
   },
-  headlineAccent: { color: "#DF4CF5" },
+  headlineAccent: { color: "#E754F7" },
   subtitle: {
     position: "absolute",
-    left: 91,
-    top: 148,
-    zIndex: 4,
-    width: 204,
-    color: "#F0EAF2",
-    fontSize: 10.5,
+    left: 86,
+    top: 150,
+    width: 216,
+    color: "#F6F1F8",
+    fontSize: 11,
     lineHeight: 18,
     fontFamily: AR.medium,
     textAlign: "center",
@@ -360,60 +439,126 @@ const s = StyleSheet.create({
   },
   duration: {
     position: "absolute",
-    left: 104,
-    top: 169,
-    zIndex: 4,
-    width: 178,
-    height: 28,
-    paddingHorizontal: 8,
-    flexDirection: "row",
-    alignItems: "center",
+    left: 99,
+    top: 171,
+    width: 190,
+    height: 29,
     justifyContent: "center",
-    columnGap: 5,
     borderWidth: 1,
-    borderColor: "#A333C8",
-    borderRadius: 4,
-    backgroundColor: "rgba(29,8,37,0.94)",
+    borderColor: "rgba(201,69,230,0.74)",
+    borderRadius: 7,
+    backgroundColor: "rgba(37,9,45,0.92)",
+  },
+  durationIcon: {
+    position: "absolute",
+    left: 10,
+    top: 8,
   },
   durationText: {
-    flexShrink: 1,
-    color: "#E15AF3",
-    fontSize: 10,
-    lineHeight: 17,
+    paddingHorizontal: 23,
+    color: "#EB6AFA",
+    fontSize: 10.5,
+    lineHeight: 18,
     fontFamily: AR.semibold,
     textAlign: "center",
     writingDirection: "rtl",
   },
   watchTarget: {
     position: "absolute",
-    left: 112,
-    top: 202,
-    zIndex: 5,
-    width: 162,
-    height: S.touchTarget,
+    left: 96,
+    top: 205,
+    width: 196,
+    height: 46,
     overflow: "hidden",
-    borderRadius: 7,
+    borderRadius: 10,
   },
-  watchButton: {
+  watchBorder: {
     flex: 1,
-    paddingHorizontal: 12,
-    flexDirection: "row",
+    padding: 1,
+    borderRadius: 10,
+  },
+  watchSurface: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    columnGap: 8,
-    borderWidth: 1,
-    borderColor: "#E06BFA",
-    borderRadius: 7,
+    borderRadius: 9,
+  },
+  watchShine: {
+    position: "absolute",
+    left: 13,
+    right: 13,
+    top: 4,
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.44)",
+  },
+  watchIcon: {
+    position: "absolute",
+    left: 18,
+    top: 11,
   },
   watchText: {
     color: "#FFFFFF",
-    fontSize: 17,
-    lineHeight: 29,
+    fontSize: 18,
+    lineHeight: 30,
     fontFamily: AR.bold,
+    textAlign: "center",
     writingDirection: "rtl",
-    textShadowColor: "rgba(24,0,35,0.82)",
+    textShadowColor: "rgba(26,0,34,0.86)",
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 3,
   },
-  pressed: { opacity: 0.76, transform: [{ scale: 0.96 }] },
+  artworkLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 7,
+    overflow: "visible",
+  },
+  avatar: {
+    position: "absolute",
+    left: -21,
+    top: -49,
+    zIndex: 7,
+    width: 157,
+    height: 151,
+  },
+  shuriken: {
+    position: "absolute",
+    left: -12,
+    bottom: -13,
+    zIndex: 7,
+    width: 86,
+    height: 67,
+  },
+  katana: {
+    position: "absolute",
+    right: -15,
+    bottom: -12,
+    zIndex: 7,
+    width: 78,
+    height: 140,
+  },
+  closeTarget: {
+    position: "absolute",
+    right: -6,
+    top: -12,
+    zIndex: 12,
+    width: S.touchTarget,
+    height: S.touchTarget,
+    borderRadius: 22,
+  },
+  closeBorder: {
+    flex: 1,
+    padding: 2,
+    borderRadius: 22,
+  },
+  closeSurface: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 20,
+    backgroundColor: "#09060D",
+  },
+  pressed: {
+    opacity: 0.76,
+    transform: [{ scale: 0.96 }],
+  },
 });

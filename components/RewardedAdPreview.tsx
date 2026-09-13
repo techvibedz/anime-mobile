@@ -26,6 +26,7 @@ const DESIGN_WIDTH = 384;
 const DESIGN_HEIGHT = 256;
 const STAGE_HEIGHT = 318;
 
+const background = require("../assets/rewarded-ad-background-v2.png");
 const avatar = require("../assets/rewarded-ad-avatar.png");
 const katana = require("../assets/rewarded-ad-katana.png");
 const shuriken = require("../assets/rewarded-ad-shuriken.png");
@@ -134,6 +135,9 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
                   start={{ x: 0, y: 0 }}
                   style={StyleSheet.absoluteFill}
                 />
+                <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+                  <Image resizeMode="stretch" source={background} style={s.backgroundArtwork} />
+                </View>
                 <LinearGradient
                   pointerEvents="none"
                   colors={["rgba(150,35,200,0.36)", "rgba(22,7,31,0)"]}
@@ -149,13 +153,13 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
                 <View pointerEvents="none" style={[s.cornerCut, s.cornerBottomRight]} />
 
                 <LinearGradient
-                  colors={["#8E28B9", "#3A0C50", "#701C91"]}
+                  colors={["rgba(232,91,255,0.72)", "rgba(58,12,80,0.42)", "rgba(175,43,220,0.64)"]}
                   end={{ x: 1, y: 0.5 }}
                   start={{ x: 0, y: 0.5 }}
                   style={s.titleBorder}
                 >
                   <LinearGradient
-                    colors={["#6E198E", "#280938", "#5B1275"]}
+                    colors={["rgba(110,25,142,0.46)", "rgba(18,4,25,0.38)", "rgba(91,18,117,0.42)"]}
                     end={{ x: 1, y: 1 }}
                     start={{ x: 0, y: 0 }}
                     style={s.titleSurface}
@@ -168,13 +172,13 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
                 </LinearGradient>
 
                 <LinearGradient
-                  colors={["#B84DE0", "#7313A6", "#39104F"]}
+                  colors={["rgba(229,100,255,0.72)", "rgba(115,19,166,0.5)", "rgba(57,16,79,0.36)"]}
                   end={{ x: 1, y: 1 }}
                   start={{ x: 0, y: 0 }}
                   style={s.mediaBorder}
                 >
                   <LinearGradient
-                    colors={["#7C20AA", "#2B0A43"]}
+                    colors={["rgba(124,32,170,0.38)", "rgba(20,5,31,0.54)"]}
                     style={s.mediaSurface}
                   >
                     <Ionicons name="tv-outline" size={27} color="#FFFFFF" />
@@ -220,13 +224,13 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
                   style={({ pressed }) => [s.watchTarget, pressed && s.pressed]}
                 >
                   <LinearGradient
-                    colors={["#E469FF", "#8E1FC3", "#5B0E80"]}
+                    colors={["rgba(244,111,255,0.78)", "rgba(142,31,195,0.58)", "rgba(91,14,128,0.46)"]}
                     end={{ x: 1, y: 1 }}
                     start={{ x: 0, y: 0 }}
                     style={s.watchBorder}
                   >
                     <LinearGradient
-                      colors={["#A32FD0", "#691194", "#8D20B8"]}
+                      colors={["rgba(163,47,208,0.42)", "rgba(105,17,148,0.48)", "rgba(141,32,184,0.38)"]}
                       end={{ x: 1, y: 1 }}
                       start={{ x: 0, y: 0 }}
                       style={s.watchSurface}
@@ -261,7 +265,7 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
               style={({ pressed }) => [s.closeTarget, pressed && s.pressed]}
             >
               <LinearGradient
-                colors={["#EC78FF", "#8D1DBA", "#3A0B50"]}
+                colors={["rgba(248,140,255,0.72)", "rgba(141,29,186,0.5)", "rgba(58,11,80,0.38)"]}
                 end={{ x: 1, y: 1 }}
                 start={{ x: 0, y: 0 }}
                 style={s.closeBorder}
@@ -311,6 +315,10 @@ const s = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: C.bgDeep,
   },
+  backgroundArtwork: {
+    width: "100%",
+    height: "100%",
+  },
   headerGlow: {
     position: "absolute",
     left: 72,
@@ -344,10 +352,10 @@ const s = StyleSheet.create({
   cornerBottomRight: { right: -15, bottom: 15, transform: [{ rotate: "-30deg" }] },
   titleBorder: {
     position: "absolute",
-    left: 90,
-    top: 18,
-    width: 216,
-    height: 51,
+    left: 100,
+    top: 22,
+    width: 190,
+    height: 44,
     padding: 1,
     borderRadius: 8,
     transform: [{ skewX: "-4deg" }],
@@ -368,8 +376,8 @@ const s = StyleSheet.create({
   },
   titleText: {
     color: "#FFFFFF",
-    fontSize: 23,
-    lineHeight: 34,
+    fontSize: 21,
+    lineHeight: 31,
     fontFamily: AR.bold,
     textAlign: "center",
     writingDirection: "rtl",
@@ -380,10 +388,10 @@ const s = StyleSheet.create({
   },
   mediaBorder: {
     position: "absolute",
-    left: 169,
-    top: 75,
-    width: 50,
-    height: 44,
+    left: 174,
+    top: 80,
+    width: 40,
+    height: 35,
     padding: 1,
     borderRadius: 13,
   },
@@ -415,7 +423,7 @@ const s = StyleSheet.create({
   headline: {
     position: "absolute",
     left: 103,
-    top: 116,
+    top: 107,
     width: 182,
     color: "#FFFFFF",
     fontSize: 23,
@@ -428,7 +436,7 @@ const s = StyleSheet.create({
   subtitle: {
     position: "absolute",
     left: 86,
-    top: 150,
+    top: 140,
     width: 216,
     color: "#F6F1F8",
     fontSize: 11,
@@ -439,36 +447,36 @@ const s = StyleSheet.create({
   },
   duration: {
     position: "absolute",
-    left: 99,
-    top: 171,
-    width: 190,
-    height: 29,
+    left: 111,
+    top: 158,
+    width: 162,
+    height: 22,
     justifyContent: "center",
     borderWidth: 1,
     borderColor: "rgba(201,69,230,0.74)",
     borderRadius: 7,
-    backgroundColor: "rgba(37,9,45,0.92)",
+    backgroundColor: "rgba(18,5,27,0.58)",
   },
   durationIcon: {
     position: "absolute",
-    left: 10,
-    top: 8,
+    left: 7,
+    top: 5,
   },
   durationText: {
-    paddingHorizontal: 23,
+    paddingHorizontal: 18,
     color: "#EB6AFA",
-    fontSize: 10.5,
-    lineHeight: 18,
+    fontSize: 9.5,
+    lineHeight: 15,
     fontFamily: AR.semibold,
     textAlign: "center",
     writingDirection: "rtl",
   },
   watchTarget: {
     position: "absolute",
-    left: 96,
-    top: 205,
-    width: 196,
-    height: 46,
+    left: 107,
+    top: 190,
+    width: 170,
+    height: 33,
     overflow: "hidden",
     borderRadius: 10,
   },
@@ -493,13 +501,13 @@ const s = StyleSheet.create({
   },
   watchIcon: {
     position: "absolute",
-    left: 18,
-    top: 11,
+    left: 13,
+    top: 5,
   },
   watchText: {
     color: "#FFFFFF",
-    fontSize: 18,
-    lineHeight: 30,
+    fontSize: 16,
+    lineHeight: 25,
     fontFamily: AR.bold,
     textAlign: "center",
     writingDirection: "rtl",
@@ -538,8 +546,8 @@ const s = StyleSheet.create({
   },
   closeTarget: {
     position: "absolute",
-    right: -6,
-    top: -12,
+    right: 8,
+    top: 14,
     zIndex: 12,
     width: S.touchTarget,
     height: S.touchTarget,
@@ -555,7 +563,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 20,
-    backgroundColor: "#09060D",
+    backgroundColor: "rgba(9,6,13,0.58)",
   },
   pressed: {
     opacity: 0.76,

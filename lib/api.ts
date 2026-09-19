@@ -53,9 +53,9 @@ import {
   isResolvedDownloadServer,
   validateDirectServers,
   isProviderSupported,
+  mergePlayableServers,
   mergeVideoServers,
   selectDownloadCandidates,
-  selectServerCandidates,
   serverCandidateSignature,
   normalizeServerUrl,
   probeMediaUrl,
@@ -81,9 +81,9 @@ const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v2:";
+const RECENT_CACHE_PREFIX = "@recent_v3:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v3:";
+const SERVERS_CACHE_PREFIX = "@servers_v4:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
@@ -1073,7 +1073,7 @@ export async function fetchRecent(page = 1): Promise<{
         animeHref: e.animeHref,
         isNew: e.isNew,
       }));
-      return { success: true, data: { page, episodes, hasNext: episodes.length > 0 } };
+      return { success: true, data: { page, episodes, hasNext: r.hasNext ?? episodes.length > 0 } };
     },
     (d) => d.data.episodes.length > 0,
   );
@@ -1339,7 +1339,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     const discovered = new Map<string, (VideoServer & { source?: string })[]>();
     let lastCandidateSignature = "";
     const emitCandidates = (metadata: VideoServersPayload | null) => {
-      const servers = selectServerCandidates(mergeVideoServers([...discovered.values()]));
+      const servers = mergeVideoServers([...discovered.values()]);
       if (servers.length === 0) return;
       const signature = serverCandidateSignature(servers);
       if (signature === lastCandidateSignature) return;
@@ -1423,12 +1423,13 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       a3rbServers,
     ]);
     const metadata = primary || up4;
-    const servers = await resolveDirectServerList(
+    const playable = await resolveDirectServerList(
       candidates,
       40_000,
       !!options.force,
       (playable) => emit(playable, metadata),
     );
+    const servers = mergePlayableServers(candidates, playable);
     return {
       success: servers.length > 0,
       data: {

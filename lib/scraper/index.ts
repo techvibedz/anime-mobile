@@ -2,6 +2,7 @@ import { enqueue } from "./bus";
 import {
   fetchWitListingDirect,
   searchWitanimeDirect,
+  fetchWitRecentPageDirect,
   getWitBase,
   rewriteWitUrl,
   type WitCard,
@@ -110,16 +111,17 @@ export async function scrapeSearchUp4(query: string) {
 /* ── RECENT (episode archive paginated) ────────── */
 
 export async function scrapeRecent(page = 1) {
-  // ponytail: the redesigned site publishes one latest batch; stop pagination
-  // cleanly until it exposes a public recent-episodes page again.
-  if (page > 1) return { episodes: [] as RawEpisodeCard[] };
+  if (page > 1) {
+    return await fetchWitRecentPageDirect(page) || { episodes: [] as RawEpisodeCard[], hasNext: false };
+  }
   const base = await getWitBase();
   const url = `${base}/`;
-  return enqueue({
+  const result = await enqueue({
     url,
     injectAfter: EXTRACT_RECENT,
     timeoutMs: 30000,
-  }) as Promise<{ episodes: RawEpisodeCard[] }>;
+  }) as { episodes: RawEpisodeCard[] };
+  return { ...result, hasNext: result.episodes.length > 0 };
 }
 
 /* ── GENRE / ALL-ANIME (paginated card grid) ───── */

@@ -530,6 +530,120 @@ export async function fetchWitHomeDirect(): Promise<WitHome | null> {
   })), animes, episodes };
 }
 
+export type WitRecentSitemapEntry = { href: string; slug: string; number: number };
+
+export function parseWitEpisodeSitemap(xml: string): WitRecentSitemapEntry[] {
+  const entries: WitRecentSitemapEntry[] = [];
+  for (const match of xml.matchAll(/<loc>([\s\S]*?)<\/loc>/gi)) {
+    const href = htmlDecode(match[1]);
+    try {
+      const path = new URL(href).pathname.match(/^\/watch\/(.+)\/(\d+)\/?$/i);
+      if (path) entries.push({ href, slug: decodeURIComponent(path[1]), number: Number(path[2]) });
+    } catch {}
+  }
+  return entries;
+}
+
+export function selectWitRecentEntries(
+  sitemapXmlsNewestFirst: readonly string[],
+  excludedSlugs: ReadonlySet<string>,
+  page: number,
+  pageSize = 24,
+): { entries: WitRecentSitemapEntry[]; hasNext: boolean } {
+  const offset = Math.max(0, page - 2) * pageSize;
+  const seen = new Set(excludedSlugs);
+  const recent: WitRecentSitemapEntry[] = [];
+  for (const xml of sitemapXmlsNewestFirst) {
+    const entries = parseWitEpisodeSitemap(xml);
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      if (seen.has(entry.slug)) continue;
+      seen.add(entry.slug);
+      recent.push(entry);
+      if (recent.length > offset + pageSize) break;
+    }
+    if (recent.length > offset + pageSize) break;
+  }
+  return {
+    entries: recent.slice(offset, offset + pageSize),
+    hasNext: recent.length > offset + pageSize,
+  };
+}
+
+export function parseWitEpisodeMeta(
+  html: string,
+  entry: WitRecentSitemapEntry,
+): WitHomeEpisode {
+  let animeTitle = decodeURIComponent(entry.slug).replace(/-/g, " ");
+  let animeHref = `${new URL(entry.href).origin}/anime/${entry.slug}`;
+  let image: string | null = null;
+  for (const match of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const value = JSON.parse(match[1]);
+      if (value?.["@type"] !== "TVEpisode") continue;
+      animeTitle = value.partOfSeries?.name || animeTitle;
+      animeHref = value.partOfSeries?.url || animeHref;
+      image = typeof value.image === "string" ? value.image : value.image?.url || null;
+      break;
+    } catch {}
+  }
+  return {
+    title: `الحلقة ${entry.number}`,
+    href: entry.href,
+    image: witUpgradeImg(image),
+    animeTitle,
+    animeHref,
+    isNew: true,
+  };
+}
+
+/** The redesigned site has no recent-episode pagination route. Its public
+ * episode sitemaps remain chronological, so use them for page 2 onward. */
+export async function fetchWitRecentPageDirect(
+  page: number,
+  pageSize = 24,
+): Promise<{ episodes: WitHomeEpisode[]; hasNext: boolean } | null> {
+  if (page < 2) return null;
+  const base = await getWitBase();
+  const [homeHtml, sitemapIndex] = await Promise.all([
+    fetchHtml(`${base}/`, `${base}/`),
+    fetchHtml(`${base}/sitemap.xml`, `${base}/`),
+  ]);
+  if (!homeHtml || !sitemapIndex) return null;
+
+  const excluded = new Set(parseWitHomeEpisodes(homeHtml).map((episode) => {
+    try { return new URL(episode.href).pathname.match(/^\/watch\/(.+)\/\d+\/?$/i)?.[1] || ""; }
+    catch { return ""; }
+  }).filter(Boolean));
+  const sitemapUrls = [...sitemapIndex.matchAll(/<loc>([\s\S]*?sitemap-episodes-(\d+)\.xml)<\/loc>/gi)]
+    .map((match) => ({ url: htmlDecode(match[1]), number: Number(match[2]) }))
+    .sort((a, b) => b.number - a.number);
+  if (sitemapUrls.length === 0) return null;
+
+  const xmls: string[] = [];
+  let selected = { entries: [] as WitRecentSitemapEntry[], hasNext: false };
+  for (const sitemap of sitemapUrls) {
+    const xml = await fetchHtml(sitemap.url, `${base}/sitemap.xml`);
+    if (!xml) continue;
+    xmls.push(xml);
+    selected = selectWitRecentEntries(xmls, excluded, page, pageSize);
+    if (selected.hasNext) break;
+  }
+
+  const episodes = new Array<WitHomeEpisode>(selected.entries.length);
+  let cursor = 0;
+  async function hydrate() {
+    while (cursor < selected.entries.length) {
+      const index = cursor++;
+      const entry = selected.entries[index];
+      const html = await fetchHtml(entry.href, `${base}/`);
+      episodes[index] = parseWitEpisodeMeta(html || "", entry);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(4, selected.entries.length) }, hydrate));
+  return { episodes, hasNext: selected.hasNext };
+}
+
 // Search witanime via its static-HTML results page.
 export async function searchWitanimeDirect(query: string): Promise<WitCard[] | null> {
   if (!query) return null;

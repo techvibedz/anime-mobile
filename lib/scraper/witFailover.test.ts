@@ -1,5 +1,13 @@
 import assert from "node:assert";
-import { isWitAnimeHtml, parseWitCards, parseWitServers, rewriteWitUrl } from "./direct";
+import {
+  isWitAnimeHtml,
+  parseWitCards,
+  parseWitEpisodeMeta,
+  parseWitEpisodeSitemap,
+  parseWitServers,
+  rewriteWitUrl,
+  selectWitRecentEntries,
+} from "./direct";
 
 assert.equal(isWitAnimeHtml('<div class="anime-card-container"></div>'), true);
 assert.equal(isWitAnimeHtml('<title>WitAnime — شاهد الأنمي أون لاين</title>'), true);
@@ -41,6 +49,43 @@ assert.deepEqual(currentCard, {
   type: "TV",
   status: null,
   synopsis: null,
+});
+
+const sitemap = [
+  "a/1", "b/1", "a/2", "c/1", "d/1", "e/1", "f/1",
+].map((path) => `<url><loc>https://witanime.site/watch/${path}</loc></url>`).join("");
+assert.equal(parseWitEpisodeSitemap(`<urlset>${sitemap}</urlset>`).length, 7);
+assert.deepEqual(
+  selectWitRecentEntries([sitemap], new Set(["f"]), 2, 2),
+  {
+    entries: [
+      { href: "https://witanime.site/watch/e/1", slug: "e", number: 1 },
+      { href: "https://witanime.site/watch/d/1", slug: "d", number: 1 },
+    ],
+    hasNext: true,
+  },
+);
+assert.deepEqual(
+  selectWitRecentEntries([sitemap], new Set(["f"]), 3, 2).entries.map((entry) => [entry.slug, entry.number]),
+  [["c", 1], ["a", 2]],
+);
+
+const meta = parseWitEpisodeMeta(`<script type="application/ld+json">${JSON.stringify({
+  "@type": "TVEpisode",
+  image: "https://images.witanime.site/posters/show.jpg",
+  partOfSeries: { name: "Show Name", url: "https://witanime.site/anime/show" },
+})}</script>`, {
+  href: "https://witanime.site/watch/show/12",
+  slug: "show",
+  number: 12,
+});
+assert.deepEqual(meta, {
+  title: "الحلقة 12",
+  href: "https://witanime.site/watch/show/12",
+  image: "https://images.witanime.site/posters/show.jpg",
+  animeTitle: "Show Name",
+  animeHref: "https://witanime.site/anime/show",
+  isNew: true,
 });
 
 console.log("wit failover tests passed");

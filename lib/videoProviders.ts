@@ -232,6 +232,17 @@ export function mergeVideoServers<T extends { id?: string; name: string; provide
   return sortVideoServers(merged).map((server, index) => ({ ...server, id: String(index) }));
 }
 
+/** Keep resolved native streams plus providers that intentionally play in the
+ * visible WebView (including Witanime's session-bound stream gates). */
+export function mergePlayableServers<T extends {
+  id?: string; name: string; provider: string; iframeUrl: string; videoUrl?: string;
+}>(candidates: readonly T[], playable: readonly T[]): (T & { id: string })[] {
+  return mergeVideoServers([
+    playable,
+    candidates.filter((server) => !isDirectProvider(server.provider)),
+  ]);
+}
+
 export function normalizeServerUrl(raw: string): string {
   const value = String(raw || "").trim();
   if (!value) return "";

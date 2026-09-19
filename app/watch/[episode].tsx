@@ -1711,6 +1711,8 @@ export default function WatchScreen() {
           mediaPlaybackRequiresUserAction={false}
           javaScriptEnabled
           domStorageEnabled
+          sharedCookiesEnabled
+          thirdPartyCookiesEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
           originWhitelist={["https://*", "http://*"]}
@@ -1732,6 +1734,9 @@ export default function WatchScreen() {
             // Top-level: only allow embed domain + video files
             const embedOrigin = new URL(iframeUrl).origin.toLowerCase();
             if (u.startsWith(embedOrigin)) return true;
+            // Current WitAnime gates are session-bound 302s to the selected
+            // provider. Allow that non-ad redirect chain to leave witanime.site.
+            if (/witanime\.site\/watch\/stream-gate\//i.test(iframeUrl) && /^https?:\/\//.test(u)) return true;
             if (u.includes(".m3u8") || u.includes(".mp4")) return true;
             return false;
           }}

@@ -144,7 +144,7 @@ export default function ScraperDebug() {
         {/* Home scrape */}
         <View style={ss.card}>
           <Text style={ss.cardTitle}>1. Witanime home scrape</Text>
-          <Text style={ss.cardSub}>Loads witanime.you in a hidden WebView, waits for CF clear, extracts featured + cards + episodes.</Text>
+          <Text style={ss.cardSub}>Loads witanime.site in a hidden WebView, waits for CF clear, extracts featured + cards + episodes.</Text>
           <Pressable
             style={({ pressed }) => [ss.btn, pressed && { opacity: 0.8 }, homeStatus === "running" && { opacity: 0.5 }]}
             onPress={runHome}

@@ -34,12 +34,8 @@ export { classifyProvider } from "../videoProviders";
 const UP4_BASE = "https://w1.anime4up.rest";
 const A3RB_BASE = "https://anime3rb.com";
 
-// witanime rotates TLDs (”.you“ was current at build; ”.life“ is an earlier
-// mirror). A non-standard TLD like “”.you“” may NOT resolve on every DNS
-// resolver/ISP/VPN — the single-user “stuck on loading” cause where changing
-// network/VPN changes nothing because the new DNS also doesn't know the TLD.
-// Probe each known domain once per session, cache whichever answers, and
-// route every witanime fetch through it. Add new mirrors here as they appear.
+// Keep domain selection centralized so legacy saved links are rewritten when
+// WitAnime moves hosts again.
 export const WIT_DOMAINS = SOURCE_DOMAINS.witanime.map((host) => `https://${host}`);
 let _resolvedWitBase: string | null = null;
 let _witBaseInflight: Promise<string> | null = null;
@@ -52,7 +48,7 @@ const WIT_FAIL_WINDOW_MS = 60_000;
 const WIT_BASE_STORAGE_KEY = "@wit_base_v1";
 
 export function isWitAnimeHtml(html: string): boolean {
-  return /anime-card-container|episodes-card-container|lucodeia-slider-slide-item|وايت\s*انمي/i.test(html);
+  return /anime-card-container|episodes-card-container|lucodeia-slider-slide-item|\/watch\/|\/anime\/|وايت\s*انمي|witanime/i.test(html);
 }
 
 export function rewriteWitUrl(raw: string, base: string): string {
@@ -319,9 +315,27 @@ function witUpgradeImg(u: string | null): string | null {
 // Parse every .anime-card-container in a witanime listing/search page. Splitting
 // on the container class keeps each card's image/title/type/status in scope
 // without a brittle single mega-regex.
-function parseWitCards(html: string): WitCard[] {
+export function parseWitCards(html: string): WitCard[] {
   const out: WitCard[] = [];
   const seen = new Set<string>();
+  // Current Laravel/Tailwind cards are one self-contained anchor. Keeping this
+  // branch before the old WordPress parser lets cached/legacy HTML still work.
+  const cardRe = /<a\b[^>]*href=["']([^"']*\/(?:anime|movie)\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let card: RegExpExecArray | null;
+  while ((card = cardRe.exec(html))) {
+    const href = htmlDecode(card[1] || "");
+    const body = card[2] || "";
+    if (!href || seen.has(href)) continue;
+    const titleMatch = body.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+    const imageMatch = body.match(/<img[^>]*\bsrc=["']([^"']+)["'][^>]*>/i);
+    const title = htmlDecode((titleMatch?.[1] || "").replace(/<[^>]+>/g, ""));
+    if (!title || !imageMatch) continue;
+    const badges = [...body.matchAll(/<div[^>]*\btop-2\b[^>]*>([\s\S]*?)<\/div>/gi)]
+      .map((m) => htmlDecode(m[1].replace(/<[^>]+>/g, "")));
+    const type = badges.find((value) => /^(?:TV|TV Short|OVA|ONA|Special|Music|PV|CM|فيلم)$/i.test(value)) || null;
+    seen.add(href);
+    out.push({ title, href, image: witUpgradeImg(imageMatch[1]), type, status: null, synopsis: null });
+  }
   const blocks = html.split("anime-card-container");
   for (let i = 1; i < blocks.length; i++) {
     const b = blocks[i];
@@ -456,6 +470,27 @@ function parseWitHomeAnimes(html: string): WitHomeAnime[] {
 function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
   const out: WitHomeEpisode[] = [];
   const seen = new Set<string>();
+  const currentRe = /<a\b[^>]*href=["']([^"']*\/watch\/([^"']+?)\/(\d+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let current: RegExpExecArray | null;
+  while ((current = currentRe.exec(html))) {
+    const href = htmlDecode(current[1]);
+    const slug = current[2];
+    const number = parseInt(current[3], 10);
+    const body = current[4] || "";
+    if (!href || seen.has(href) || slug === "movie") continue;
+    const title = htmlDecode((body.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i)?.[1] || "").replace(/<[^>]+>/g, ""));
+    const image = body.match(/<img[^>]*\bsrc=["']([^"']+)["'][^>]*>/i)?.[1] || null;
+    if (!title) continue;
+    seen.add(href);
+    out.push({
+      title: `الحلقة ${number}`,
+      href,
+      image: witUpgradeImg(image),
+      animeTitle: title,
+      animeHref: `${new URL(href).origin}/anime/${slug}`,
+      isNew: true,
+    });
+  }
   const blocks = html.split("episodes-card-container");
   for (let i = 1; i < blocks.length; i++) {
     const b = blocks[i];
@@ -489,14 +524,17 @@ export async function fetchWitHomeDirect(): Promise<WitHome | null> {
   const animes = parseWitHomeAnimes(html);
   const episodes = parseWitHomeEpisodes(html);
   if (animes.length === 0 && episodes.length === 0) return null;
-  return { featured: parseWitFeatured(html), animes, episodes };
+  const featured = parseWitFeatured(html);
+  return { featured: featured.length ? featured : animes.slice(0, 5).map((item) => ({
+    title: item.title, href: item.href, image: item.image, description: null, genres: [],
+  })), animes, episodes };
 }
 
 // Search witanime via its static-HTML results page.
 export async function searchWitanimeDirect(query: string): Promise<WitCard[] | null> {
   if (!query) return null;
   const base = await getWitBase();
-  const url = `${base}/?search_param=animes&s=${encodeURIComponent(query)}`;
+  const url = `${base}/search?q=${encodeURIComponent(query)}`;
   const html = await fetchHtml(url, base + "/");
   if (!html) return null;
   return parseWitCards(html);
@@ -735,7 +773,7 @@ function parseAnime4upCards(
 // witanime's full movie listing — every movie in ONE static GET (no server
 // pagination), parsed by the shared card parser.
 export async function fetchWitMoviesListing(): Promise<WitCard[] | null> {
-  return fetchWitListingDirect(`${await getWitBase()}/anime-type/movie/`);
+  return fetchWitListingDirect(`${await getWitBase()}/movies`);
 }
 
 // anime4up home page via plain fetch (NO WebView). fetchHtml follows the home

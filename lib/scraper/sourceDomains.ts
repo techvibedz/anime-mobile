@@ -4,7 +4,7 @@ export type SourceId = "witanime" | "anime4up" | "anime3rb";
 export type SourceFailure = "dns" | "network" | "timeout" | "ssl" | "http" | "cloudflare" | "invalid-content";
 
 export const SOURCE_DOMAINS: Record<SourceId, readonly string[]> = {
-  witanime: ["witanime.you", "witanime.life"],
+  witanime: ["witanime.site"],
   anime4up: ["w1.anime4up.rest", "anime4up.rest"],
   anime3rb: ["anime3rb.com", "www.anime3rb.com"],
 };
@@ -15,6 +15,10 @@ const preferenceKey = (source: SourceId) => `@source_host_${source}_v1`;
 export function identifySource(rawUrl: string): SourceId | null {
   try {
     const host = new URL(rawUrl).hostname.toLowerCase();
+    // Old saved favorites/history still carry retired WitAnime TLDs. Treat
+    // every witanime.* URL as this source so sourceCandidates rewrites it to
+    // the current host instead of trying the dead URL.
+    if (/(^|\.)witanime\./i.test(host)) return "witanime";
     return (Object.keys(SOURCE_DOMAINS) as SourceId[]).find((source) =>
       SOURCE_DOMAINS[source].includes(host),
     ) ?? null;
@@ -100,7 +104,7 @@ export async function clearSourcePreference(rawUrl: string): Promise<void> {
 }
 
 const SOURCE_MARKERS: Record<SourceId, RegExp> = {
-  witanime: /anime-card-container|episodes-card-container|lucodeia-slider-slide-item|وايت\s*انمي|witanime/i,
+  witanime: /anime-card-container|episodes-card-container|lucodeia-slider-slide-item|\/watch\/|\/anime\/|وايت\s*انمي|witanime/i,
   anime4up: /anime-card-container|episode-servers|انمي\s*فور\s*اب|anime4up/i,
   anime3rb: /anime3rb|itemListElement|\/titles\/|انمي\s*عرب/i,
 };

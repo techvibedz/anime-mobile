@@ -6,16 +6,18 @@ const path = require("path");
 const src = fs.readFileSync(path.join(__dirname, "../lib/scraper/scripts.ts"), "utf8");
 
 function grab(name) {
-  const re = new RegExp(`const ${name}(?:: ?[^=]+)? = (?:\\(want: string\\) => )?\`([\\s\\S]*?)\`;`, "m");
+  const re = new RegExp(`const ${name}(?:: ?[^=]+)? = (?:\\([^)]*\\) => )?\`([\\s\\S]*?)\`;`, "m");
   const m = src.match(re);
   if (!m) throw new Error(`could not find ${name}`);
   return m[1];
 }
 
 const HELPERS = eval("`" + grab("HELPERS") + "`");
-const WIT_BASE = "https://witanime.you";
+const WIT_BASE = "https://witanime.site";
 const UP4_BASE = "https://w1.anime4up.rest";
 const want = "test title";
+const genre = "action";
+const page = 1;
 const providerClassifierScript = () => "function provider(url){return 'generic';}";
 
 // Mirror of wrapOnce() in lib/scraper/ScraperHost.tsx.
@@ -27,7 +29,7 @@ function wrapOnce(job) {
 const names = [
   "EXTRACT_HOME_WIT", "EXTRACT_HOME_4UP", "EXTRACT_EPISODES_WIT",
   "EXTRACT_EPISODES_4UP", "EXTRACT_TITLE_MATCH", "EXTRACT_SEARCH",
-  "EXTRACT_RECENT", "EXTRACT_LISTING", "EXTRACT_VIDEO_SERVERS",
+  "EXTRACT_RECENT", "EXTRACT_LISTING", "EXTRACT_WIT_GENRE", "EXTRACT_VIDEO_SERVERS",
   "COLLECT_VIDEO_AFTER",
 ];
 

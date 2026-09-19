@@ -1,7 +1,8 @@
 import assert from "node:assert";
-import { isWitAnimeHtml, parseWitServers, rewriteWitUrl } from "./direct";
+import { isWitAnimeHtml, parseWitCards, parseWitServers, rewriteWitUrl } from "./direct";
 
 assert.equal(isWitAnimeHtml('<div class="anime-card-container"></div>'), true);
+assert.equal(isWitAnimeHtml('<title>WitAnime — شاهد الأنمي أون لاين</title>'), true);
 assert.equal(isWitAnimeHtml('<html><title>Watch Anime Online Free</title></html>'), false);
 assert.equal(
   rewriteWitUrl("https://witanime.you/anime/test/?x=1#episodes", "https://witanime.life"),
@@ -26,5 +27,20 @@ const page = (registryName: string, configName: string) => `
 
 assert.equal(parseWitServers(page("_zX", "_zK"))[0]?.iframeUrl, embed);
 assert.equal(parseWitServers(page("_zH", "_zW"))[0]?.iframeUrl, embed);
+
+const currentCard = parseWitCards(`
+  <a class="group block" href="https://witanime.site/anime/black-torch">
+    <div class="absolute start-2 top-2">TV</div>
+    <img src="https://images.witanime.site/posters/black-torch.jpg" alt="BLACK TORCH">
+    <h3>BLACK TORCH</h3>
+  </a>`)[0];
+assert.deepEqual(currentCard, {
+  title: "BLACK TORCH",
+  href: "https://witanime.site/anime/black-torch",
+  image: "https://images.witanime.site/posters/black-torch.jpg",
+  type: "TV",
+  status: null,
+  synopsis: null,
+});
 
 console.log("wit failover tests passed");

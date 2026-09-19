@@ -14,6 +14,7 @@ import {
   EXTRACT_SEARCH,
   EXTRACT_RECENT,
   EXTRACT_LISTING,
+  EXTRACT_WIT_GENRE,
   EXTRACT_VIDEO_SERVERS,
   EXTRACT_TITLE_MATCH,
   HOOK_VIDEO_BEFORE,
@@ -23,7 +24,6 @@ import {
 export { ScraperHost } from "./ScraperHost";
 
 const UP4_BASE = "https://w1.anime4up.rest";
-const ALL_ANIME_PATH = encodeURIComponent("قائمة-الانمي");
 
 /* ── HOME ──────────────────────────────────────── */
 
@@ -88,7 +88,7 @@ export type RawSearchResult = { title: string; href: string; image: string | nul
 
 export async function scrapeSearch(query: string) {
   const base = await getWitBase();
-  const url = `${base}/?s=${encodeURIComponent(query)}&search_param=animes`;
+  const url = `${base}/search?q=${encodeURIComponent(query)}`;
   return enqueue({
     url,
     injectAfter: EXTRACT_SEARCH,
@@ -110,8 +110,11 @@ export async function scrapeSearchUp4(query: string) {
 /* ── RECENT (episode archive paginated) ────────── */
 
 export async function scrapeRecent(page = 1) {
+  // ponytail: the redesigned site publishes one latest batch; stop pagination
+  // cleanly until it exposes a public recent-episodes page again.
+  if (page > 1) return { episodes: [] as RawEpisodeCard[] };
   const base = await getWitBase();
-  const url = `${base}/episode/page/${page}/`;
+  const url = `${base}/`;
   return enqueue({
     url,
     injectAfter: EXTRACT_RECENT,
@@ -121,47 +124,40 @@ export async function scrapeRecent(page = 1) {
 
 /* ── GENRE / ALL-ANIME (paginated card grid) ───── */
 
-// witanime indexes genres under Arabic slugs only — an English name like
-// "Action" 404s. Map the app's English genre keys to the exact slugs the
-// site uses (verified against witanime.you/anime-genre/<slug>/). Anything not
-// in the map is passed through encoded, so an already-Arabic value still works.
+// The current Livewire browse filter uses stable English genre values.
 const GENRE_SLUG_MAP: Record<string, string> = {
-  Action: "أكشن",
-  Adventure: "مغامرات",
-  Comedy: "كوميدي",
-  Drama: "دراما",
-  Fantasy: "خيال",
-  Horror: "رعب",
-  Mystery: "غموض",
-  Romance: "رومانسي",
-  "Sci-Fi": "خيال-علمي",
-  "Slice of Life": "شريحة-من-الحياة",
-  Sports: "رياضي",
-  Supernatural: "خارق-للطبيعة",
-  Thriller: "إثارة",
-  Mecha: "ميكا",
-  Shounen: "شونين",
-  Seinen: "سينين",
+  Action: "action",
+  Adventure: "adventure",
+  Comedy: "comedy",
+  Drama: "drama",
+  Fantasy: "fantasy",
+  Horror: "horror",
+  Mystery: "mystery",
+  Romance: "romance",
+  "Sci-Fi": "sci-fi",
+  "Slice of Life": "slice-of-life",
+  Sports: "sports",
+  Supernatural: "supernatural",
+  Thriller: "thriller",
+  Mecha: "mecha",
+  Shounen: "shounen",
+  Seinen: "seinen",
 };
 
 export async function scrapeGenre(genre: string, page = 1) {
   const base = await getWitBase();
-  const slug = encodeURIComponent(GENRE_SLUG_MAP[genre] || genre);
-  const url = page === 1
-    ? `${base}/anime-genre/${slug}/`
-    : `${base}/anime-genre/${slug}/page/${page}/`;
+  const slug = GENRE_SLUG_MAP[genre] || genre.toLowerCase();
+  const url = `${base}/browse?page=${page}`;
   return enqueue({
     url,
-    injectAfter: EXTRACT_LISTING,
+    injectAfter: EXTRACT_WIT_GENRE(slug, page),
     timeoutMs: 30000,
   }) as Promise<{ items: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: null }[] }>;
 }
 
 export async function scrapeAllAnime(page = 1) {
   const base = await getWitBase();
-  const url = page === 1
-    ? `${base}/${ALL_ANIME_PATH}/`
-    : `${base}/${ALL_ANIME_PATH}/page/${page}/`;
+  const url = `${base}/browse?page=${page}`;
   return enqueue({
     url,
     injectAfter: EXTRACT_LISTING,
@@ -174,34 +170,18 @@ export async function scrapeAllAnime(page = 1) {
  * far faster and more reliable than rendering them in the hidden WebView.
  * Each returns null on failure so callers can fall back to the WebView scrape. */
 
-const LISTING_PAGE_SIZE = 30;
-
-// Genre pages aren't server-paginated — one page lists EVERY title in the genre.
-// Fetch it once, cache the full parsed list briefly, and paginate client-side so
-// "load more" and quick revisits don't re-download the multi-MB page.
-const _genreFullCache = new Map<string, { items: WitCard[]; ts: number }>();
-const GENRE_FULL_TTL = 30 * 60 * 1000;
-
-export async function scrapeGenreDirect(genre: string, page = 1) {
-  const slug = encodeURIComponent(GENRE_SLUG_MAP[genre] || genre);
-  const url = `${await getWitBase()}/anime-genre/${slug}/`;
-  let full = _genreFullCache.get(genre);
-  if (!full || Date.now() - full.ts > GENRE_FULL_TTL) {
-    const items = await fetchWitListingDirect(url);
-    if (!items || items.length === 0) return null;
-    full = { items, ts: Date.now() };
-    _genreFullCache.set(genre, full);
-  }
-  const start = (page - 1) * LISTING_PAGE_SIZE;
-  const slice = full.items.slice(start, start + LISTING_PAGE_SIZE);
-  return { items: slice, hasNext: start + LISTING_PAGE_SIZE < full.items.length };
+export async function scrapeGenreDirect(
+  _genre: string,
+  _page = 1,
+): Promise<{ items: WitCard[]; hasNext: boolean } | null> {
+  // The current site applies genre filters through Livewire; use the WebView
+  // path above rather than returning an unfiltered /browse page.
+  return null;
 }
 
 export async function scrapeAllAnimeDirect(page = 1) {
   const base = await getWitBase();
-  const url = page === 1
-    ? `${base}/${ALL_ANIME_PATH}/`
-    : `${base}/${ALL_ANIME_PATH}/page/${page}/`;
+  const url = `${base}/browse?page=${page}`;
   const items = await fetchWitListingDirect(url);
   if (!items) return null;
   return { items, hasNext: items.length > 0 };
@@ -225,8 +205,9 @@ export async function findCrossSourceUrl(
   if (!title) return null;
   const wantTarget = primarySource === "witanime" ? "anime4up" : "witanime";
   const base = wantTarget === "anime4up" ? UP4_BASE : await getWitBase();
-  // anime4up search is at root path, not /home8/
-  const searchUrl = `${base}/?search_param=animes&s=${encodeURIComponent(title)}`;
+  const searchUrl = wantTarget === "anime4up"
+    ? `${base}/?search_param=animes&s=${encodeURIComponent(title)}`
+    : `${base}/search?q=${encodeURIComponent(title)}`;
   try {
     const r = await enqueue({
       url: searchUrl,

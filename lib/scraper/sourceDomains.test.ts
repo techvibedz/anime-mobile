@@ -11,8 +11,7 @@ import {
 } from "./sourceDomains";
 
 assert.deepEqual(sourceCandidates("https://witanime.you/anime/x?y=1", null), [
-  "https://witanime.you/anime/x?y=1",
-  "https://witanime.life/anime/x?y=1",
+  "https://witanime.site/anime/x?y=1",
 ]);
 assert.deepEqual(sourceCandidates("https://w1.anime4up.rest/home8/", "anime4up.rest"), [
   "https://anime4up.rest/home8/",
@@ -28,15 +27,16 @@ assert.deepEqual(
   ["primary", "mirror", "primary"],
 );
 assert.equal(
-  preferredHostFromValue(JSON.stringify({ host: "witanime.life", expiresAt: 2_000 }), "witanime", 1_000),
-  "witanime.life",
+  preferredHostFromValue(JSON.stringify({ host: "witanime.site", expiresAt: 2_000 }), "witanime", 1_000),
+  "witanime.site",
 );
 assert.equal(
-  preferredHostFromValue(JSON.stringify({ host: "witanime.life", expiresAt: 2_000 }), "witanime", 2_001),
+  preferredHostFromValue(JSON.stringify({ host: "witanime.site", expiresAt: 2_000 }), "witanime", 2_001),
   null,
 );
 
 assert.equal(isValidSourceHtml("witanime", '<div class="anime-card-container">'), true);
+assert.equal(isValidSourceHtml("witanime", '<a href="https://witanime.site/watch/show/1">'), true);
 assert.equal(isValidSourceHtml("anime4up", '<title>Anime4up - انمي فور اب</title>'), true);
 assert.equal(isValidSourceHtml("anime3rb", '<title>Anime3rb انمي عرب</title>'), true);
 assert.equal(isValidSourceHtml("anime4up", "Attention Required | Cloudflare"), false);

@@ -237,6 +237,10 @@ export async function scrapeVideoServers(episodeUrl: string) {
     url,
     injectAfter: EXTRACT_VIDEO_SERVERS,
     timeoutMs: 60000,
+    // This is the list the watch screen is waiting to display. The host keeps
+    // a WebView slot reserved for priority work, so use it instead of sitting
+    // behind unrelated background scrapes while that slot stays idle.
+    priority: true,
   }) as Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null; up4AnimeUrl?: string | null }>;
 }
 

@@ -831,13 +831,6 @@ async function runWitSite() {
         entries.push({ quality: quality, token: entry.token, label: label });
       });
     });
-    function witProvider(label) {
-      if (label.indexOf('mp4upload') >= 0) return 'mp4upload';
-      if (label.indexOf('hgcloud') >= 0) return 'streamwish';
-      if (label.indexOf('videa') >= 0) return 'videa';
-      if (label.indexOf('mega') >= 0) return 'mega';
-      return 'generic';
-    }
     function witPriority(label) {
       if (label.indexOf('hgcloud') >= 0) return 0;
       if (label.indexOf('videa') >= 0) return 1;
@@ -860,7 +853,10 @@ async function runWitSite() {
         id: entry.token,
         name: ((entry.label || 'WitAnime') + ' ' + entry.quality).trim(),
         iframeUrl: location.origin + '/watch/stream-gate/' + entry.token,
-        provider: witProvider(entry.label),
+        // The gate is session-bound, not the underlying provider URL. Keeping
+        // it WebView-only prevents a slow, doomed direct extraction and keeps
+        // it in the final server list when native validation is unavailable.
+        provider: 'generic',
         });
       } catch (e) {}
       if (i + 1 < entries.length) await new Promise(function (r) { setTimeout(r, 300); });

@@ -143,6 +143,7 @@ export async function fetchHtml(url: string, referer?: string): Promise<string |
     try {
       const res = await fetch(attemptUrl, {
         signal: controller.signal,
+        credentials: "include",
         headers: {
           "User-Agent": BROWSER_UA,
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -534,15 +535,21 @@ export async function fetchWitHomeDirect(): Promise<WitHome | null> {
   })), animes, episodes };
 }
 
-export type WitRecentSitemapEntry = { href: string; slug: string; number: number };
+export type WitRecentSitemapEntry = { href: string; slug: string; number: number; updatedAt: number };
 
 export function parseWitEpisodeSitemap(xml: string): WitRecentSitemapEntry[] {
   const entries: WitRecentSitemapEntry[] = [];
-  for (const match of xml.matchAll(/<loc>([\s\S]*?)<\/loc>/gi)) {
-    const href = htmlDecode(match[1]);
+  for (const match of xml.matchAll(/<url\b[^>]*>([\s\S]*?)<\/url>/gi)) {
+    const body = match[1];
+    const href = htmlDecode(body.match(/<loc>([\s\S]*?)<\/loc>/i)?.[1] || "");
     try {
       const path = new URL(href).pathname.match(/^\/watch\/(.+)\/(\d+)\/?$/i);
-      if (path) entries.push({ href, slug: decodeURIComponent(path[1]), number: Number(path[2]) });
+      if (path) entries.push({
+        href,
+        slug: decodeURIComponent(path[1]),
+        number: Number(path[2]),
+        updatedAt: Date.parse(body.match(/<lastmod>([\s\S]*?)<\/lastmod>/i)?.[1] || "") || 0,
+      });
     } catch {}
   }
   return entries;
@@ -556,18 +563,16 @@ export function selectWitRecentEntries(
 ): { entries: WitRecentSitemapEntry[]; hasNext: boolean } {
   const offset = Math.max(0, page - 2) * pageSize;
   const seen = new Set(excludedSlugs);
-  const recent: WitRecentSitemapEntry[] = [];
-  for (const xml of sitemapXmlsNewestFirst) {
-    const entries = parseWitEpisodeSitemap(xml);
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i];
-      if (seen.has(entry.slug)) continue;
+  const recent = sitemapXmlsNewestFirst
+    .flatMap(parseWitEpisodeSitemap)
+    // Full-season imports share one lastmod; the highest episode is the only
+    // card the recent feed should show for that anime.
+    .sort((a, b) => b.updatedAt - a.updatedAt || b.number - a.number)
+    .filter((entry) => {
+      if (seen.has(entry.slug)) return false;
       seen.add(entry.slug);
-      recent.push(entry);
-      if (recent.length > offset + pageSize) break;
-    }
-    if (recent.length > offset + pageSize) break;
-  }
+      return true;
+    });
   return {
     entries: recent.slice(offset, offset + pageSize),
     hasNext: recent.length > offset + pageSize,
@@ -601,6 +606,49 @@ export function parseWitEpisodeMeta(
   };
 }
 
+async function hydrateWitRecentFromAniList(entries: readonly WitRecentSitemapEntry[]): Promise<WitHomeEpisode[]> {
+  if (entries.length === 0) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  const media = new Map<number, any>();
+  const lookup = async (index: number, search: string) => {
+    const response = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        query: `query ($search: String) { Media(search: $search, type: ANIME) { title { romaji english } coverImage { large } } }`,
+        variables: { search },
+      }),
+    });
+    const match = (await response.json().catch(() => null))?.data?.Media;
+    if (match) media.set(index, match);
+  };
+  try {
+    await Promise.all(entries.map(async (entry, index) => {
+      await lookup(index, entry.slug.replace(/[-_]+/g, " "));
+    }));
+    await Promise.all(entries.map(async (entry, index) => {
+      if (media.has(index)) return;
+      const words = entry.slug.replace(/[-_]+/g, " ").split(/\s+/);
+      if (words.length > 4) await lookup(index, words.slice(0, 4).join(" "));
+    }));
+  } catch {} finally {
+    clearTimeout(timer);
+  }
+  return entries.map((entry, index) => {
+    const match = media.get(index);
+    return {
+      title: `الحلقة ${entry.number}`,
+      href: entry.href,
+      image: match?.coverImage?.large || null,
+      animeTitle: match?.title?.romaji || match?.title?.english || entry.slug.replace(/[-_]+/g, " "),
+      animeHref: `${new URL(entry.href).origin}/anime/${entry.slug}`,
+      isNew: true,
+    };
+  });
+}
+
 /** The redesigned site has no recent-episode pagination route. Its public
  * episode sitemaps remain chronological, so use them for page 2 onward. */
 export async function fetchWitRecentPageDirect(
@@ -615,8 +663,9 @@ export async function fetchWitRecentPageDirect(
   ]);
   if (!homeHtml || !sitemapIndex) return null;
 
-  const excluded = new Set(parseWitHomeEpisodes(homeHtml).map((episode) => {
-    try { return new URL(episode.href).pathname.match(/^\/watch\/(.+)\/\d+\/?$/i)?.[1] || ""; }
+  const homeEpisodes = parseWitHomeEpisodes(homeHtml);
+  const excluded = new Set(homeEpisodes.map((episode) => {
+    try { return decodeURIComponent(new URL(episode.href).pathname.match(/^\/watch\/(.+)\/\d+\/?$/i)?.[1] || ""); }
     catch { return ""; }
   }).filter(Boolean));
   const sitemapUrls = [...sitemapIndex.matchAll(/<loc>([\s\S]*?sitemap-episodes-(\d+)\.xml)<\/loc>/gi)]
@@ -634,27 +683,10 @@ export async function fetchWitRecentPageDirect(
     if (selected.hasNext) break;
   }
 
-  const episodes = new Array<WitHomeEpisode>(selected.entries.length);
-  const missed: number[] = [];
-  let cursor = 0;
-  async function hydrate() {
-    while (cursor < selected.entries.length) {
-      const index = cursor++;
-      const entry = selected.entries[index];
-      const html = await fetchHtml(entry.href, `${base}/`);
-      if (!html) missed.push(index);
-      episodes[index] = parseWitEpisodeMeta(html || "", entry);
-    }
-  }
-  // Witanime rate-limits bursts. Two workers fill a screen quickly without the
-  // 429 storm that caused most of the old 24-card page to lose its posters.
-  await Promise.all(Array.from({ length: Math.min(2, selected.entries.length) }, hydrate));
-  // Retry only transport misses, sequentially, after the burst has settled.
-  for (const index of missed) {
-    const entry = selected.entries[index];
-    const html = await fetchHtml(entry.href, `${base}/`);
-    if (html) episodes[index] = parseWitEpisodeMeta(html, entry);
-  }
+  // One batched AniList request supplies titles/posters for every sitemap item.
+  // The href remains the exact Witanime episode, so no per-card title search or
+  // redirect is needed when the user presses Play.
+  const episodes = await hydrateWitRecentFromAniList(selected.entries);
   return { episodes, hasNext: selected.hasNext };
 }
 
@@ -1322,26 +1354,167 @@ export function parseWitServers(html: string): RawServer[] {
   return out;
 }
 
+type WitPlayerEntry = { quality: string; label: string; token: string };
+
+export function parseWitPlayerConfig(html: string, episodeUrl: string): { sourcesUrl: string; csrf: string } | null {
+  const source = html.match(/sourcesUrl:\s*'([^']+)'/i)?.[1]?.replace(/\\\//g, "/");
+  const csrf = html.match(/<meta[^>]+name=["']csrf-token["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  if (!source || !csrf) return null;
+  try { return { sourcesUrl: new URL(source, episodeUrl).toString(), csrf: htmlDecode(csrf) }; }
+  catch { return null; }
+}
+
+export function parseWitManifestEntries(manifest: any): WitPlayerEntry[] {
+  const entries: WitPlayerEntry[] = [];
+  const seen = new Set<string>();
+  for (const [quality, group] of Object.entries(manifest?.players || {})) {
+    if (!Array.isArray(group)) continue;
+    for (const raw of group as any[]) {
+      const label = String(raw?.label || "witanime").toLowerCase();
+      const token = String(raw?.token || "");
+      if (seen.has(label) || !/^[a-f0-9]{64}$/i.test(token)) continue;
+      seen.add(label);
+      entries.push({ quality, label, token });
+    }
+  }
+  const rank = (label: string) => label.includes("hgcloud") ? 0 : label.includes("videa") ? 1 : label.includes("mp4upload") ? 2 : 3;
+  return entries.sort((a, b) => rank(a.label) - rank(b.label));
+}
+
+export function parseWitGateTarget(
+  location: string | null | undefined,
+  body: string,
+  responseUrl: string,
+  gateUrl: string,
+): string | null {
+  const candidates = [
+    location || "",
+    body.match(/http-equiv=["']refresh["'][^>]+content=["'][^"']*url=['"]?([^'"\s>]+)/i)?.[1] || "",
+    body.match(/<a[^>]+href=["']([^"']+)["']/i)?.[1] || "",
+    responseUrl,
+  ];
+  for (const raw of candidates) {
+    try {
+      const url = new URL(htmlDecode(raw), gateUrl).toString();
+      if (/^https?:\/\//i.test(url) && url.replace(/\/+$/, "") !== gateUrl.replace(/\/+$/, "")) return normalizeEmbedUrl(url);
+    } catch {}
+  }
+  return null;
+}
+
+async function fetchWitPlayerResponse(url: string, init: RequestInit, timeoutMs = 12000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal, credentials: "include" });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function witSessionCookie(response: Response): string {
+  const values: string[] = [];
+  const getSetCookie = (response.headers as any).getSetCookie;
+  if (typeof getSetCookie === "function") values.push(...getSetCookie.call(response.headers));
+  else {
+    const combined = response.headers.get("set-cookie");
+    if (combined) values.push(combined);
+  }
+  const pairs: string[] = [];
+  for (const value of values) {
+    for (const match of value.matchAll(/(?:^|,\s*)(XSRF-TOKEN|[A-Za-z0-9_-]*session)=([^;,]+)/gi)) {
+      pairs.push(`${match[1]}=${match[2]}`);
+    }
+  }
+  return pairs.join("; ");
+}
+
+async function resolveWitManifestServers(
+  html: string,
+  episodeUrl: string,
+  cookie: string,
+): Promise<RawServer[]> {
+  const config = parseWitPlayerConfig(html, episodeUrl);
+  if (!config) return [];
+  const origin = new URL(episodeUrl).origin;
+  const headers = {
+    Accept: "application/json",
+    "X-CSRF-TOKEN": config.csrf,
+    "X-Requested-With": "XMLHttpRequest",
+    Referer: episodeUrl,
+    Origin: origin,
+    "User-Agent": BROWSER_UA,
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+  const manifestResponse = await fetchWitPlayerResponse(config.sourcesUrl, { method: "POST", headers });
+  if (!manifestResponse.ok) return [];
+  const entries = parseWitManifestEntries(await manifestResponse.json());
+  const servers: RawServer[] = [];
+  for (const entry of entries) {
+    const sourceUrl = `${origin}/watch/stream-source/${entry.token}`;
+    let ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
+    if (ready?.status === 429) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
+    }
+    if (!ready?.ok) continue;
+    const gateUrl = `${origin}/watch/stream-gate/${entry.token}`;
+    let target: string | null = null;
+    try {
+      const gate = await fetchWitPlayerResponse(gateUrl, { method: "GET", headers, redirect: "manual" });
+      target = parseWitGateTarget(gate.headers.get("location"), await gate.text(), gate.url, gateUrl);
+    } catch {}
+    // Some React Native networking versions ignore/manual-hide redirects.
+    // A normal follow still exposes the final provider URL on Response.url.
+    if (!target) {
+      try {
+        const gate = await fetchWitPlayerResponse(gateUrl, { method: "GET", headers, redirect: "follow" });
+        target = parseWitGateTarget(null, "", gate.url, gateUrl);
+      } catch {}
+    }
+    if (!target || servers.some((server) => server.iframeUrl === target)) continue;
+    servers.push({
+      id: entry.token,
+      name: `${entry.label} ${entry.quality}`.trim(),
+      iframeUrl: target,
+      provider: classifyProvider(target),
+    });
+  }
+  return servers;
+}
+
 // Full witanime episode-page parse (servers + display titles) from one static
-// GET. Returns null on fetch/decode failure so the caller falls back to the
-// WebView scrape (older episodes predating the _zX/_zK scheme still render
-// plain iframes).
+// GET plus the site's current same-session manifest/gate handshake. Returns
+// real provider embed URLs (not /stream-gate placeholders), so the existing
+// provider extractors can feed the native player.
 export async function scrapeWitanimeEpisodePageDirect(
   episodeUrl: string,
 ): Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string } | null> {
   const base = await getWitBase();
-  const html = await fetchHtml(rewriteWitUrl(episodeUrl, base), base + "/");
+  const resolvedEpisodeUrl = rewriteWitUrl(episodeUrl, base);
+  const page = await fetchWitPlayerResponse(resolvedEpisodeUrl, {
+    method: "GET",
+    headers: {
+      "User-Agent": BROWSER_UA,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "ar,en;q=0.9",
+      Referer: base + "/",
+    },
+  }).catch(() => null);
+  const html = page?.ok ? await page.text() : await fetchHtml(resolvedEpisodeUrl, base + "/");
   if (!html) return null;
   const servers = parseWitServers(html);
+  if (servers.length === 0) servers.push(...await resolveWitManifestServers(html, resolvedEpisodeUrl, page ? witSessionCookie(page) : ""));
   if (servers.length === 0) return null;
   const deent = (s: string) =>
     s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
       .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
   let episodeTitle = "";
-  const h3 = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-  if (h3) episodeTitle = deent(h3[1].replace(/<[^>]+>/g, ""));
+  const heading = html.match(/<main[\s\S]*?<h1[^>]*>([\s\S]*?)<\/h1>/i) || html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+  if (heading) episodeTitle = deent(heading[1].replace(/<[^>]+>/g, ""));
   let animeTitle = "";
-  const link = html.match(/anime-page-link[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
+  const link = html.match(/anime-page-link[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)
+    || html.match(/<a[^>]+href=["'][^"']*\/anime\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/i);
   if (link) animeTitle = deent(link[1].replace(/<[^>]+>/g, ""));
   if (!animeTitle && episodeTitle) animeTitle = episodeTitle.replace(/الحلقة\s*\d+.*$/, "").trim();
   return { servers, episodeTitle, animeTitle };

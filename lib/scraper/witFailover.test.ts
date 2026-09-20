@@ -4,6 +4,9 @@ import {
   parseWitCards,
   parseWitEpisodeMeta,
   parseWitEpisodeSitemap,
+  parseWitGateTarget,
+  parseWitManifestEntries,
+  parseWitPlayerConfig,
   parseWitServers,
   rewriteWitUrl,
   selectWitRecentEntries,
@@ -52,23 +55,35 @@ assert.deepEqual(currentCard, {
 });
 
 const sitemap = [
-  "a/1", "b/1", "a/2", "c/1", "d/1", "e/1", "f/1",
-].map((path) => `<url><loc>https://witanime.site/watch/${path}</loc></url>`).join("");
+  ["a/1", 1], ["b/1", 2], ["a/2", 7], ["c/1", 3], ["d/1", 4], ["e/1", 5], ["f/1", 6],
+].map(([path, minute]) => `<url><loc>https://witanime.site/watch/${path}</loc><lastmod>2026-09-20T00:0${minute}:00Z</lastmod></url>`).join("");
 assert.equal(parseWitEpisodeSitemap(`<urlset>${sitemap}</urlset>`).length, 7);
 assert.deepEqual(
-  selectWitRecentEntries([sitemap], new Set(["f"]), 2, 2),
-  {
-    entries: [
-      { href: "https://witanime.site/watch/e/1", slug: "e", number: 1 },
-      { href: "https://witanime.site/watch/d/1", slug: "d", number: 1 },
-    ],
-    hasNext: true,
-  },
+  selectWitRecentEntries([sitemap], new Set(["a"]), 2, 2).entries.map((entry) => [entry.slug, entry.number]),
+  [["f", 1], ["e", 1]],
 );
 assert.deepEqual(
-  selectWitRecentEntries([sitemap], new Set(["f"]), 3, 2).entries.map((entry) => [entry.slug, entry.number]),
-  [["c", 1], ["a", 2]],
+  selectWitRecentEntries([sitemap], new Set(["a"]), 3, 2).entries.map((entry) => [entry.slug, entry.number]),
+  [["d", 1], ["c", 1]],
 );
+
+const playerHtml = `<meta name="csrf-token" content="csrf123"><div x-data="watchPlayer({ sourcesUrl: '\\/watch\\/show\\/12\\/sources' })">`;
+assert.deepEqual(parseWitPlayerConfig(playerHtml, "https://witanime.site/watch/show/12"), {
+  sourcesUrl: "https://witanime.site/watch/show/12/sources",
+  csrf: "csrf123",
+});
+assert.deepEqual(parseWitManifestEntries({ players: {
+  FHD: [{ label: "mega", token: "a".repeat(64) }, { label: "hgcloud", token: "b".repeat(64) }],
+  HD: [{ label: "hgcloud", token: "c".repeat(64) }, { label: "mp4upload", token: "d".repeat(64) }],
+} }).map((entry) => [entry.label, entry.quality]), [
+  ["hgcloud", "FHD"], ["mp4upload", "HD"], ["mega", "FHD"],
+]);
+assert.equal(parseWitGateTarget(
+  null,
+  `<meta http-equiv="refresh" content="0;url='https://videa.hu/player?v=abc'">`,
+  "https://witanime.site/watch/stream-gate/token",
+  "https://witanime.site/watch/stream-gate/token",
+), "https://videa.hu/player?v=abc");
 
 const meta = parseWitEpisodeMeta(`<script type="application/ld+json">${JSON.stringify({
   "@type": "TVEpisode",
@@ -78,6 +93,7 @@ const meta = parseWitEpisodeMeta(`<script type="application/ld+json">${JSON.stri
   href: "https://witanime.site/watch/show/12",
   slug: "show",
   number: 12,
+  updatedAt: 0,
 });
 assert.deepEqual(meta, {
   title: "الحلقة 12",

@@ -1003,10 +1003,10 @@ export default function WatchScreen() {
 
     const idx = activeIdx;
 
-    // mega.nz / vk never resolve to a direct URL (mega decrypts AES chunks
-    // in-page via MediaSource) — selecting them used to stall ~30s in a
-    // doomed extraction before falling back. Go straight to the embed.
-    if (srv.provider === "mega" || srv.provider === "vk") {
+    // WebView-only providers (including WitAnime's session-bound stream gates)
+    // cannot yield a native media URL. Open them immediately instead of
+    // waiting through a doomed 40-second extraction.
+    if (failStatus(srv.provider) === "webview") {
       setServers((p) => p.map((s, i) => i === idx ? { ...s, status: "webview" } : s));
       return;
     }

@@ -45,23 +45,14 @@ function episodeNumberFrom(item: EpisodeItem): number | null {
   return null;
 }
 
-/**
- * Stable per-anime key for deduplication. Prefers the canonical animeHref,
- * falls back to the anime title, then the episode href as a last resort.
- */
 function episodeAnimeKey(ep: EpisodeItem): string {
   const href = String(ep.animeHref || "").trim();
   if (href) return "h:" + href.toLowerCase().replace(/\/+$/, "");
-  const at = String(ep.animeTitle || "").trim();
-  if (at) return "t:" + at.toLowerCase();
-  return "x:" + String(ep.href || ep.title || "");
+  const title = String(ep.animeTitle || "").trim();
+  return title ? "t:" + title.toLowerCase() : "x:" + String(ep.href || ep.title || "");
 }
 
-/**
- * Keeps only the first occurrence of each anime. Since the "recently updated"
- * feed is newest-first, the first episode seen for an anime is its latest one.
- * Mutates `seen` so the same Set carries dedup state across pages.
- */
+/** Keep only the newest episode for each anime across every loaded page. */
 function dedupeEpisodes(eps: EpisodeItem[], seen: Set<string>): EpisodeItem[] {
   const out: EpisodeItem[] = [];
   for (const ep of eps) {
@@ -79,8 +70,8 @@ const GAP = S.gapRelaxed;
 const NUM_COLS = 3;
 const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
-// witanime's /episode/page/N/ serves a fixed batch, and dedup can discard most
-// of it — so a single page may not fill the grid. FILL_TARGET (≈4 rows) is the
+// Witanime serves a fixed batch, and dedup can discard repeated anime, so
+// FILL_TARGET (≈4 rows) is the
 // minimum number of *fresh* items we try to gather per fetch cycle; the loop
 // over-fetches pages (bounded by MAX_PAGES_PER_FILL) until it's met. In the
 // common case page 1 already clears the bar and only one network trip happens.

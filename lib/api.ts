@@ -81,9 +81,9 @@ const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v4:";
+const RECENT_CACHE_PREFIX = "@recent_v6:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v5:";
+const SERVERS_CACHE_PREFIX = "@servers_v6:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
@@ -1159,13 +1159,9 @@ async function scrapeUp4ServersFast(episodeUrl: string) {
     .catch(() => null);
 }
 
-// witanime hides its server embeds in an obfuscated _zX/_zK registry that only
-// its gh100.js decodes on click. The WebView render depends on those clicks
-// firing past witanime's Cloudflare gate and frequently comes back empty — so
-// decode the registry straight from the static HTML. Falls back to the WebView
-// scrape when the direct decode yields nothing (older pages that still ship
-// plain iframes). `direct` lets the merge keep validated servers even if
-// generic, so a brand-new witanime host still plays instead of vanishing.
+// Resolve WitAnime's current session-bound manifest/gates directly first. The
+// direct scraper returns the underlying provider embeds, which can be resolved
+// into native media URLs; WebView remains the compatibility fallback.
 async function scrapeWitServersFast(episodeUrl: string) {
   try {
     const direct = await scrapeWitanimeEpisodePageDirect(episodeUrl);
@@ -1353,6 +1349,36 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     let a3rbPromise = initialTitle || options.url3rb || /anime3rb\.com\/episode\//i.test(episodeUrl)
       ? loadA3rb(initialTitle)
       : null;
+
+    // Surface whichever source answers first. The complete merge still runs
+    // below, but a blocked primary must not hide a ready sibling for 45s.
+    const emitEarly = (
+      servers: (VideoServer & { source?: string })[],
+      metadata: VideoServersPayload | null,
+    ) => {
+      if (servers.length === 0) return;
+      options.onCandidates?.({
+        success: true,
+        data: {
+          episodeTitle: metadata?.data.episodeTitle || (episodeNumber != null ? `الحلقة ${episodeNumber}` : ""),
+          animeTitle: initialTitle || metadata?.data.animeTitle || "",
+          animeHref: options.animeHref || metadata?.data.animeHref || "",
+          serverCount: servers.length,
+          servers,
+          navigation: metadata?.data.navigation || { prev: null, next: null },
+        },
+      });
+    };
+    void primaryPromise.then((result) => {
+      if (result?.data.servers.length) emitEarly(result.data.servers, result);
+    });
+    if (up4Promise) void up4Promise.then((result) => {
+      if (result?.data.servers.length) emitEarly(result.data.servers, result);
+    });
+    if (a3rbPromise) void a3rbPromise.then((servers) => {
+      emitEarly(servers.map((server) => ({ ...server, source: "anime3rb" })), null);
+    });
+
     const primary = await withTimeout(primaryPromise, discoveryDeadline - Date.now(), null);
     const resolvedTitle = initialTitle || primary?.data.animeTitle || "";
     const exactUp4 = preferredAnime4upEpisodeUrl(options.url4up, primary?.data.up4EpisodeUrl);

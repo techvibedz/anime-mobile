@@ -45,10 +45,11 @@ for (const name of names) {
 
 try {
   const videoServers = eval("`" + grab("EXTRACT_VIDEO_SERVERS") + "`");
-  for (const marker of ["seenLabels", "witProvider", "witPriority", "ready.status === 429", "'mp4upload'", "'streamwish'", "'videa'"]) {
+  for (const marker of ["seenLabels", "witPriority", "ready.status === 429", "'/watch/stream-gate/'", "provider: 'generic'"]) {
     if (!videoServers.includes(marker)) throw new Error(`missing Witanime player marker: ${marker}`);
   }
-  console.log("OK    EXTRACT_VIDEO_SERVERS (Witanime provider routing)");
+  if (videoServers.includes("provider: witProvider")) throw new Error("Witanime stream gates must stay WebView-only");
+  console.log("OK    EXTRACT_VIDEO_SERVERS (Witanime stream gates)");
 } catch (e) {
   failed = true;
   console.error(`FAIL  EXTRACT_VIDEO_SERVERS routing: ${e.message}`);

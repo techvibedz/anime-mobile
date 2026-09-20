@@ -237,10 +237,10 @@ export function mergeVideoServers<T extends { id?: string; name: string; provide
 export function mergePlayableServers<T extends {
   id?: string; name: string; provider: string; iframeUrl: string; videoUrl?: string;
 }>(candidates: readonly T[], playable: readonly T[]): (T & { id: string })[] {
-  return mergeVideoServers([
-    playable,
-    candidates.filter((server) => !isDirectProvider(server.provider)),
-  ]);
+  // Keep every discovered server visible. Pre-resolution is an optimization,
+  // not an eligibility check: a provider may need the user's live WebView/
+  // cookie session and still resolve successfully when selected.
+  return mergeVideoServers([playable, candidates]);
 }
 
 export function normalizeServerUrl(raw: string): string {

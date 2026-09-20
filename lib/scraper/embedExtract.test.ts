@@ -6,7 +6,7 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
-import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, parseAnime4upRecentHtml, parseUp4Episodes, parseUp4Servers, pickMediaUrl } from "./direct";
+import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, parseAnime4upEpisodeTitles, parseAnime4upRecentHtml, parseUp4Episodes, parseUp4Servers, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -127,6 +127,13 @@ test("Anime4up archive keeps the latest episode per anime and paginates", () => 
   const result = parseAnime4upRecentHtml(card(12, "alpha") + card(11, "alpha") + card(8, "beta") + '<a href="/episode/page/2/">2</a>', 1);
   assert.deepEqual(result.episodes.map((episode) => [episode.animeTitle, episode.title]), [["alpha", "الحلقة 12"], ["beta", "الحلقة 8"]]);
   assert.equal(result.hasNext, true);
+});
+
+test("Anime4up episode title ignores the download-section heading", () => {
+  const titles = parseAnime4upEpisodeTitles(`
+    <title>انمي Digimon Beatbreak الحلقة 48 مترجمة | Anime4up</title>
+    <h3 class="area-title">روابط تحميل الحلقة</h3>`);
+  assert.deepEqual(titles, { episodeTitle: "الحلقة 48", animeTitle: "Digimon Beatbreak" });
 });
 
 test("Videa manifest request and signed source parse without a WebView", () => {

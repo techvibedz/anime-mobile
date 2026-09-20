@@ -1319,28 +1319,24 @@ export async function scrapeAnime4upEpisodePageDirect(
   if (!html) return null;
   const servers = parseUp4Servers(html);
   if (servers.length === 0) return null;
-  const deent = (s: string) =>
-    s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
-      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
-  // Episode title: prefer the page heading, fall back to <title> minus the
-  // site-name suffix.
-  let episodeTitle = "";
-  const h3 = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-  if (h3) episodeTitle = deent(h3[1].replace(/<[^>]+>/g, ""));
-  if (!episodeTitle) {
-    const t = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    if (t) episodeTitle = deent(t[1]).split(/\s*[|–-]\s*(?:anime4up|أنمي فور أب).*/i)[0].trim();
-  }
-  // Anime title: the breadcrumb/anime-page link, else strip "الحلقة N" off
-  // the episode title.
-  let animeTitle = "";
-  const link = html.match(/anime-page-link[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)
-    || html.match(/<a[^>]*href=["'][^"']*\/anime\/[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
-  if (link) animeTitle = deent(link[1].replace(/<[^>]+>/g, ""));
-  if (!animeTitle && episodeTitle) {
-    animeTitle = episodeTitle.replace(/الحلقة\s*\d+.*$/, "").replace(/\bepisode\s*\d+.*$/i, "").trim();
-  }
+  const { episodeTitle, animeTitle } = parseAnime4upEpisodeTitles(html);
   return { servers, episodeTitle, animeTitle };
+}
+
+export function parseAnime4upEpisodeTitles(html: string): { episodeTitle: string; animeTitle: string } {
+  const raw = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "";
+  const pageTitle = htmlDecode(raw.replace(/<[^>]+>/g, ""))
+    .split(/\s*[|–—]\s*(?:anime4up|أنمي فور أب).*/i)[0]
+    .trim();
+  const number = (pageTitle.match(/(?:الحلقة|episode)\s*(\d+)/i) || [])[1];
+  const animeTitle = pageTitle
+    .replace(/^\s*(?:مشاهدة|تحميل)?\s*(?:انمي|أنمي|انيمي)\s+/i, "")
+    .replace(/\s+(?:الحلقة|episode)\s*\d+.*$/i, "")
+    .trim();
+  return {
+    episodeTitle: number ? `الحلقة ${number}` : pageTitle,
+    animeTitle: /روابط\s+تحميل\s+الحلقة/i.test(animeTitle) ? "" : animeTitle,
+  };
 }
 
 /* ── witanime direct server decode ── */

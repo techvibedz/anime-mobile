@@ -262,7 +262,7 @@ test("merges all usable providers and deduplicates equivalent embeds", () => {
   assert.equal(merged.filter((server) => server.provider === "generic").length, 1);
 });
 
-test("keeps Witanime WebView gates while dropping unresolved native servers", () => {
+test("keeps every discovered server visible while preserving resolved media", () => {
   const candidates = [
     { name: "Witanime Mega", provider: "generic", iframeUrl: "https://witanime.site/watch/stream-gate/token" },
     { name: "Broken native", provider: "voe", iframeUrl: "https://voe.sx/e/broken" },
@@ -273,7 +273,8 @@ test("keeps Witanime WebView gates while dropping unresolved native servers", ()
     videoUrl: "https://s14.mp4upload.com/d/ok/video.mp4",
   }];
   const merged = mergePlayableServers(candidates, playable);
-  assert.deepEqual(merged.map((server) => server.name), ["MP4", "Witanime Mega"]);
+  assert.deepEqual(merged.map((server) => server.name), ["MP4", "Broken native", "Witanime Mega"]);
+  assert.equal(merged.find((server) => server.name === "MP4")?.videoUrl, "https://s14.mp4upload.com/d/ok/video.mp4");
 });
 
 test("rejects decoys and provider-invalid media URLs", () => {

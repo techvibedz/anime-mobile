@@ -75,8 +75,9 @@ const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 // minimum number of *fresh* items we try to gather per fetch cycle; the loop
 // over-fetches pages (bounded by MAX_PAGES_PER_FILL) until it's met. In the
 // common case page 1 already clears the bar and only one network trip happens.
-const FILL_TARGET = NUM_COLS * 4;
-const MAX_PAGES_PER_FILL = 5;
+const FILL_TARGET = NUM_COLS * 8;
+const MAX_PAGES_PER_FILL = 8;
+const PAGES_PER_BATCH = 4;
 
 /**
  * Fetches `recently updated` pages starting at `fromPage`, deduping against the
@@ -88,13 +89,20 @@ async function fillRecent(fromPage: number, seen: Set<string>) {
   let page = fromPage;
   let more = true;
   const collected: EpisodeItem[] = [];
-  for (let i = 0; i < MAX_PAGES_PER_FILL && more; i++) {
-    const res = await fetchRecent(page);
-    page += 1;
-    if (!res.success) break;
-    more = res.data.hasNext;
-    for (const e of dedupeEpisodes(res.data.episodes, seen)) collected.push(e);
-    if (collected.length >= FILL_TARGET) break;
+  let fetched = 0;
+  while (fetched < MAX_PAGES_PER_FILL && more && collected.length < FILL_TARGET) {
+    const count = Math.min(PAGES_PER_BATCH, MAX_PAGES_PER_FILL - fetched);
+    const batch = await Promise.all(
+      Array.from({ length: count }, (_, offset) => fetchRecent(page + offset).catch(() => null)),
+    );
+    for (const res of batch) {
+      if (!res?.success) { more = false; break; }
+      page += 1;
+      fetched += 1;
+      more = res.data.hasNext;
+      for (const e of dedupeEpisodes(res.data.episodes, seen)) collected.push(e);
+      if (!more) break;
+    }
   }
   return { collected, nextPage: page, more };
 }

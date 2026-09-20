@@ -2,6 +2,7 @@
 // No HTTP backend is required.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import PantoufaDownloads from "../modules/pantoufa-downloads";
 import {
   scrapeWitanimeHome,
   scrapeEpisodesPage,
@@ -83,9 +84,9 @@ const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v7:";
+const RECENT_CACHE_PREFIX = "@recent_v8:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v6:";
+const SERVERS_CACHE_PREFIX = "@servers_v7:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
@@ -1915,10 +1916,11 @@ async function resolveVideoFresh(iframeUrl: string, provider: string, priority: 
     const resolved = success(r);
     if (resolved) return resolved;
   }
-  // ponytail: MEGA files are AES-CTR encrypted client-side, so an OTA cannot
-  // expose a media URL to Expo Video. Fail immediately and let the picker move
-  // to the next native mirror instead of opening MEGA's visible embed.
-  if (provider === "mega") return { success: false, error: "MEGA requires native decryption" };
+  if (provider === "mega") {
+    const url = await PantoufaDownloads?.startMegaStream(iframeUrl).catch(() => null);
+    const resolved = success(url ? { url, type: "mp4" } : null);
+    return resolved || { success: false, error: "Could not start MEGA native stream" };
+  }
   if (provider === "doodstream") {
     const r = await extractDoodstream(iframeUrl).catch(() => null);
     const resolved = success(r);

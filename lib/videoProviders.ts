@@ -65,7 +65,7 @@ export const PROVIDER_POLICIES: Record<string, ProviderPolicy> = {
   videas: { patterns: ["app\\.videas\\.fr"], rank: 3, resolution: "directThenWebView", failureMode: "failed", supported: true },
   videa: { patterns: ["videa\\.", "vidvaita", "vidit", "videakid"], rank: 3, resolution: "directThenWebView", failureMode: "failed", supported: true },
   vk: { patterns: ["vk\\.com"], rank: 11, resolution: "webview", failureMode: "webview", supported: true },
-  mega: { patterns: ["mega\\.nz"], rank: 12, resolution: "webview", failureMode: "webview", supported: true },
+  mega: { patterns: ["mega\\.nz"], rank: 12, resolution: "direct", failureMode: "failed", supported: true },
   vid3rb: { patterns: ["vid3rb", "anime3rb"], rank: -1, resolution: "direct", failureMode: "failed", supported: true, downloadable: true },
   luluvdo: { patterns: ["luluvdo", "lulustream", "luluvid"], rank: 9, resolution: "directThenWebView", failureMode: "failed", supported: true },
   yonaplay: { patterns: ["yonaplay"], rank: 99, resolution: "webview", failureMode: "failed", supported: false },

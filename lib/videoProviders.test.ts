@@ -107,11 +107,11 @@ test("the injected classifier uses the same provider rules", () => {
 });
 
 test("keeps only non-native providers on visible WebView fallback", () => {
-  for (const provider of ["vk", "mega", "generic"]) {
+  for (const provider of ["vk", "generic"]) {
     assert.equal(isProviderSupported(provider), true, provider);
     assert.equal(providerFailureMode(provider), "webview", provider);
   }
-  for (const provider of ["voe", "okru", "uqload", "share4max", "streamruby"]) {
+  for (const provider of ["voe", "okru", "uqload", "share4max", "streamruby", "mega"]) {
     assert.equal(providerFailureMode(provider), "failed", provider);
   }
   assert.equal(isProviderSupported("yonaplay"), false);
@@ -119,10 +119,10 @@ test("keeps only non-native providers on visible WebView fallback", () => {
 });
 
 test("direct picker includes native extractors and hides WebView-only providers", () => {
-  for (const provider of ["vid3rb", "mp4upload", "streamwish", "videas", "doodstream", "dailymotion", "voe", "uqload", "okru", "videa"]) {
+  for (const provider of ["vid3rb", "mp4upload", "streamwish", "videas", "doodstream", "dailymotion", "voe", "uqload", "okru", "videa", "mega"]) {
     assert.equal(isDirectProvider(provider), true, provider);
   }
-  for (const provider of ["generic", "yonaplay", "vk", "mega"]) {
+  for (const provider of ["generic", "yonaplay", "vk"]) {
     assert.equal(isDirectProvider(provider), false, provider);
   }
 });

@@ -133,13 +133,17 @@ export async function getWitBase(): Promise<string> {
 // A hard 4xx (404/410 — e.g. a slug probe miss) won't change on retry, so bail
 // fast.
 const FETCH_ATTEMPT_TIMEOUTS = [8000, 16000, 24000];
-export async function fetchHtml(url: string, referer?: string): Promise<string | null> {
-  const ATTEMPTS = FETCH_ATTEMPT_TIMEOUTS.length;
+export async function fetchHtml(
+  url: string,
+  referer?: string,
+  attemptTimeouts: readonly number[] = FETCH_ATTEMPT_TIMEOUTS,
+): Promise<string | null> {
+  const ATTEMPTS = attemptTimeouts.length;
   const candidates = await getSourceCandidates(url);
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const attemptUrl = candidateForAttempt(candidates, attempt);
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), FETCH_ATTEMPT_TIMEOUTS[attempt - 1]);
+    const t = setTimeout(() => controller.abort(), attemptTimeouts[attempt - 1]);
     try {
       const res = await fetch(attemptUrl, {
         signal: controller.signal,
@@ -961,6 +965,67 @@ export function parseAnime4upHomeHtml(html: string): WitHome | null {
     rating: null,
   }));
   return featured.length || episodes.length || animes.length ? { featured, animes, episodes } : null;
+}
+
+function up4AbsoluteUrl(href: string): string {
+  try { return new URL(htmlDecode(href), UP4_BASE).toString(); }
+  catch { return htmlDecode(href); }
+}
+
+/** Parse Anime4up's paginated episode archive, keeping only the newest card
+ * for each anime on the page. The see-all screen performs the same de-dupe
+ * across pages, so old consecutive episodes never reappear while scrolling. */
+export function parseAnime4upRecentHtml(
+  html: string,
+  page = 1,
+): { episodes: WitHomeEpisode[]; hasNext: boolean } {
+  const episodes: WitHomeEpisode[] = [];
+  const seenAnime = new Set<string>();
+  for (const block of html.split("anime-card-container").slice(1)) {
+    const episodeAnchor = [...block.matchAll(/<a\b[^>]*href=["']([^"']*\/episode\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)][0];
+    if (!episodeAnchor) continue;
+    const animeAnchor = [...block.matchAll(/<a\b[^>]*href=["']([^"']*\/anime\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+      .find((match) => htmlDecode(match[2].replace(/<[^>]+>/g, "")).trim());
+    const href = up4AbsoluteUrl(episodeAnchor[1]);
+    const animeHref = animeAnchor ? up4AbsoluteUrl(animeAnchor[1]) : href;
+    const animeTitle = animeAnchor
+      ? htmlDecode(animeAnchor[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim()
+      : "";
+    const episodeText = htmlDecode(episodeAnchor[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    let decodedHref = href;
+    try { decodedHref = decodeURIComponent(href); } catch {}
+    const number = Number((episodeText.match(/(?:الحلقة|episode)\s*(\d+)/i) || decodedHref.match(/الحلقة[-\s]*(\d+)/i) || [])[1]);
+    const key = (animeHref || animeTitle || href).toLowerCase().replace(/\/+$/, "");
+    if (!href || !animeTitle || seenAnime.has(key)) continue;
+    seenAnime.add(key);
+    const image = block.match(/<img[^>]*\b(?:data-image|data-src|data-original|src)=["']([^"']+)["']/i)?.[1] || null;
+    episodes.push({
+      title: Number.isFinite(number) && number > 0 ? `الحلقة ${number}` : episodeText,
+      href,
+      image: witUpgradeImg(image),
+      animeTitle,
+      animeHref,
+      isNew: true,
+    });
+  }
+  const nextPage = Math.max(1, page) + 1;
+  return {
+    episodes,
+    hasNext: new RegExp(`/episode/page/${nextPage}/?(?:["'#?]|$)`, "i").test(html),
+  };
+}
+
+export async function fetchAnime4upRecentPageDirect(
+  page = 1,
+): Promise<{ episodes: WitHomeEpisode[]; hasNext: boolean } | null> {
+  const safePage = Math.max(1, Math.floor(page));
+  const url = safePage === 1 ? `${UP4_BASE}/episode/` : `${UP4_BASE}/episode/page/${safePage}/`;
+  // The home feed must stay fast when Anime4up is temporarily blocked. One
+  // bounded attempt is enough; see-all still has the hidden-WebView fallback.
+  const html = await fetchHtml(url, UP4_BASE + "/", [10_000]);
+  if (!html) return null;
+  const result = parseAnime4upRecentHtml(html, safePage);
+  return result.episodes.length ? result : null;
 }
 
 // The anime4up current-season catalogue, scraped directly. anime4up's main menu
@@ -2205,6 +2270,95 @@ export function extractVideasUrl(html: string): string | null {
   return pickMediaUrl(html);
 }
 
+type VideaRequest = { url: string; keyPrefix: string };
+
+// Videa's player splits its request key across the page's `_xt` token. This is
+// the same small transform used by VideaPlayerClasses.min.js; no browser DOM is
+// needed, so the signed media URL can go straight to Expo Video.
+export function buildVideaXmlRequest(embedUrl: string, html: string, sessionId = "pantoufa"): VideaRequest | null {
+  const token = html.match(/\bvar\s+_xt\s*=\s*["']([^"']+)["']/)?.[1];
+  let videoId = "";
+  try { videoId = new URL(embedUrl).searchParams.get("v") || ""; } catch {}
+  if (!token || !videoId) return null;
+  const state: Record<string, string> = {};
+  let keys = ["e", "a", "g", "j", "d", "c", "h", "i", "b", "f"];
+  for (let i = 0; i < token.length; i++) {
+    const key = keys[Math.floor(i / 8) + 1];
+    if (!key) break;
+    if (i % 8 === 0) state[key] = "";
+    state[key] += token[i];
+  }
+  state.e = sessionId.slice(0, 8).padEnd(8, "0");
+  const alphabet = "xHb0ZvME5q8CBcoQi6AngerDu3FGO9fkUlwPmLVY_RTzj2hJIS4NasXWKy1td7p";
+  const encoded = state.a + state.g + state.j + state.d;
+  const source = state.c + state.h + state.i + state.b;
+  let mixed = "";
+  for (let i = 0; i < encoded.length; i++) mixed += source.charAt(i - (alphabet.indexOf(encoded[i]) - 31));
+  keys = ["f", "h", "c", "b", "i"];
+  for (let i = 0; i < mixed.length; i++) {
+    const key = keys[Math.floor(i / 8) + 1];
+    if (!key) break;
+    if (i % 8 === 0) state[key] = "";
+    state[key] += mixed[i];
+  }
+  state.f = "";
+  const query = `v=${encodeURIComponent(videoId)}&_s=${encodeURIComponent(state.e)}&_t=${encodeURIComponent(state.h + state.c)}`;
+  return { url: `https://videa.hu/player/xml?${query}`, keyPrefix: state.b + state.i + state.e };
+}
+
+function rc4Binary(binary: string, key: string): string {
+  if (!binary || !key) return "";
+  const box = Array.from({ length: 256 }, (_, i) => i);
+  let j = 0;
+  for (let i = 0; i < 256; i++) {
+    j = (j + box[i] + key.charCodeAt(i % key.length)) & 255;
+    [box[i], box[j]] = [box[j], box[i]];
+  }
+  let i = 0;
+  j = 0;
+  let out = "";
+  for (let n = 0; n < binary.length; n++) {
+    i = (i + 1) & 255;
+    j = (j + box[i]) & 255;
+    [box[i], box[j]] = [box[j], box[i]];
+    out += String.fromCharCode(binary.charCodeAt(n) ^ box[(box[i] + box[j]) & 255]);
+  }
+  return out;
+}
+
+export function decodeVideaXml(body: string, key: string): string {
+  return rc4Binary(b64ToBinary(body), key);
+}
+
+export function extractVideaXmlUrl(xml: string): string | null {
+  const decoded = htmlDecode(xml).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1");
+  const hashes = new Map<string, string>();
+  for (const match of decoded.matchAll(/<hash_value_([^>\s]+)[^>]*>([^<]+)<\/hash_value_[^>]+>/gi)) {
+    hashes.set(match[1], match[2].trim());
+  }
+  const sources: { url: string; quality: number; nativeScore: number }[] = [];
+  for (const match of decoded.matchAll(/<video_source\b([^>]*)>([\s\S]*?)<\/video_source>/gi)) {
+    const attrs = match[1];
+    const attr = (name: string) => attrs.match(new RegExp(`\\b${name}=["']([^"']+)["']`, "i"))?.[1] || "";
+    let url = attr("value") || match[2].replace(/<[^>]+>/g, "").trim();
+    if (url.startsWith("//")) url = "https:" + url;
+    if (!/^https?:\/\//i.test(url)) continue;
+    const name = attr("name");
+    const exp = attr("exp");
+    const hash = hashes.get(name);
+    if (hash && exp && !/[?&]md5=/i.test(url)) url += `${url.includes("?") ? "&" : "?"}md5=${encodeURIComponent(hash)}&expires=${encodeURIComponent(exp)}`;
+    sources.push({
+      url,
+      quality: Number((name.match(/\d+/) || [])[0]) || 0,
+      // MP4/H.264 is native on both Android and iOS; Videa's higher WebM/VP9
+      // renditions are Android-only, so prefer the portable stream.
+      nativeScore: /video\/mp4/i.test(attr("mimetype")) ? 1 : 0,
+    });
+  }
+  sources.sort((a, b) => b.nativeScore - a.nativeScore || b.quality - a.quality);
+  return sources[0]?.url || pickMediaUrl(decoded);
+}
+
 // streamwish family (streamwish/hlswish/wishembed/wishfast/…): the master
 // m3u8 lives in packed JS in the embed page's initial HTML.
 export async function extractStreamwish(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
@@ -2225,6 +2379,33 @@ export async function extractVideas(embedUrl: string): Promise<{ url: string; ty
   const got = await fetchEmbed(embedUrl, 10000);
   const url = got.html ? extractVideasUrl(got.html) : null;
   return url ? { url, type: mediaType(url) } : null;
+}
+
+export async function extractVidea(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  const got = await fetchEmbed(embedUrl, 10000, "https://videa.hu/");
+  if (!got.html) return null;
+  const request = buildVideaXmlRequest(got.finalUrl, got.html, Math.random().toString(36).slice(2, 10));
+  if (!request) return null;
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(request.url, {
+      signal: controller.signal,
+      headers: { "User-Agent": BROWSER_UA, Referer: got.finalUrl, Accept: "application/xml,text/xml,*/*" },
+    });
+    if (!response.ok) return null;
+    let xml = await response.text();
+    if (!/^\s*</.test(xml)) {
+      const xs = response.headers.get("X-Videa-XS") || response.headers.get("x-videa-xs") || "";
+      xml = decodeVideaXml(xml, request.keyPrefix + xs);
+    }
+    const url = extractVideaXmlUrl(xml);
+    return url ? { url, type: mediaType(url) } : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 // NOTE: voe deliberately has NO direct resolver. Live testing (2026-07) shows

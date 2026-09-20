@@ -6,7 +6,7 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
-import { extractFromPacked, extractMp4uploadUrl, extractVideasUrl, isMp4uploadMediaUrl, parseUp4Episodes, parseUp4Servers, pickMediaUrl } from "./direct";
+import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, parseAnime4upRecentHtml, parseUp4Episodes, parseUp4Servers, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -116,6 +116,25 @@ test("mp4upload direct playback accepts only its progressive MP4", () => {
 test("videas static HTML yields its direct playlist", () => {
   const url = "https://cdn.videas.fr/v-medias/example/playlist.m3u8";
   assert.equal(extractVideasUrl(`<script>player.setup({file:"${url}"})</script>`), url);
+});
+
+test("Anime4up archive keeps the latest episode per anime and paginates", () => {
+  const card = (episode: number, anime: string) => `<div class="anime-card-container">
+    <div class="anime-card-poster"><a class="overlay" href="https://w1.anime4up.rest/episode/${anime}-الحلقة-${episode}/"></a><img data-src="https://img/${anime}.jpg"></div>
+    <div class="anime-card-status"><a href="https://w1.anime4up.rest/episode/${anime}-الحلقة-${episode}/">الحلقة ${episode}</a></div>
+    <div class="anime-card-title"><h3><a href="https://w1.anime4up.rest/anime/${anime}/">${anime}</a></h3></div>
+  </div>`;
+  const result = parseAnime4upRecentHtml(card(12, "alpha") + card(11, "alpha") + card(8, "beta") + '<a href="/episode/page/2/">2</a>', 1);
+  assert.deepEqual(result.episodes.map((episode) => [episode.animeTitle, episode.title]), [["alpha", "الحلقة 12"], ["beta", "الحلقة 8"]]);
+  assert.equal(result.hasNext, true);
+});
+
+test("Videa manifest request and signed source parse without a WebView", () => {
+  const token = "HkECgvfnGgVQzV_O3LO_zImFfXzwhN2llCAjOAmTo9a7QztESocRozxNSYW98t3R";
+  const request = buildVideaXmlRequest("https://videa.hu/player?v=abc123", `<script>var _xt = "${token}";</script>`, "12345678");
+  assert.ok(request?.url.includes("/player/xml?v=abc123&_s=12345678&_t="));
+  const xml = '<hash_values><hash_value_720>sig</hash_value_720></hash_values><video_sources><video_source name="720" exp="99">https://videa.hu/static/video.mp4</video_source></video_sources>';
+  assert.equal(extractVideaXmlUrl(xml), "https://videa.hu/static/video.mp4?md5=sig&expires=99");
 });
 
 test("current Anime4up HTML exposes private CDN and redirected DoodStream servers", () => {

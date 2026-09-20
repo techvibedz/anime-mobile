@@ -36,7 +36,9 @@ import {
   extractMp4upload,
   extractStreamwish,
   extractVideas,
+  extractVidea,
   extractDoodstream,
+  fetchAnime4upRecentPageDirect,
   fetchWitHomeDirect,
   type WitHome,
 } from "./scraper/direct";
@@ -71,7 +73,7 @@ import {
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
 // detail page with a boilerplate/seasons-grid synopsis. Old cached entries
 // are simply ignored, forcing a fresh scrape with the current parsers.
-const HOME_CACHE_KEY = "@home_cache_v4";
+const HOME_CACHE_KEY = "@home_cache_v5";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -81,7 +83,7 @@ const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v6:";
+const RECENT_CACHE_PREFIX = "@recent_v7:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
 const SERVERS_CACHE_PREFIX = "@servers_v6:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
@@ -392,7 +394,7 @@ function buildHomePayload(
 }
 
 async function fetchHomeFresh(): Promise<HomePayload> {
-  const home = await loadWitanimeHome<WitHome>(
+  const [home, anime4upRecent] = await Promise.all([loadWitanimeHome<WitHome>(
     async () => {
       const direct = await fetchWitHomeDirect();
       return sourceHomeHasContent(direct) ? direct : null;
@@ -401,12 +403,13 @@ async function fetchHomeFresh(): Promise<HomePayload> {
       const viaWebView = await scrapeWitanimeHome();
       return sourceHomeHasContent(viaWebView) ? viaWebView : null;
     },
-  );
-  if (!home) {
+  ), fetchAnime4upRecentPageDirect(1).catch(() => null)]);
+  if (!home && !anime4upRecent?.episodes.length) {
     void remoteLog("warn", "home", "Witanime home unavailable", { witanime: "empty" });
     return { success: true, data: { featured: [], sections: [] } };
   }
-  const result = buildHomePayload(home, []);
+  const baseHome = home || { featured: [], animes: [], episodes: [] };
+  const result = buildHomePayload({ ...baseHome, episodes: anime4upRecent?.episodes || [] }, []);
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
   // serving it on every launch.
@@ -1907,6 +1910,15 @@ async function resolveVideoFresh(iframeUrl: string, provider: string, priority: 
     const resolved = success(r);
     if (resolved) return resolved;
   }
+  if (provider === "videa") {
+    const r = await extractVidea(iframeUrl).catch(() => null);
+    const resolved = success(r);
+    if (resolved) return resolved;
+  }
+  // ponytail: MEGA files are AES-CTR encrypted client-side, so an OTA cannot
+  // expose a media URL to Expo Video. Fail immediately and let the picker move
+  // to the next native mirror instead of opening MEGA's visible embed.
+  if (provider === "mega") return { success: false, error: "MEGA requires native decryption" };
   if (provider === "doodstream") {
     const r = await extractDoodstream(iframeUrl).catch(() => null);
     const resolved = success(r);

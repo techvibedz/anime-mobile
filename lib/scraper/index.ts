@@ -1,9 +1,8 @@
 import { enqueue } from "./bus";
 import {
   fetchWitListingDirect,
-  fetchWitHomeDirect,
+  fetchAnime4upRecentPageDirect,
   searchWitanimeDirect,
-  fetchWitRecentPageDirect,
   getWitBase,
   rewriteWitUrl,
   type WitCard,
@@ -112,13 +111,9 @@ export async function scrapeSearchUp4(query: string) {
 /* ── RECENT (episode archive paginated) ────────── */
 
 export async function scrapeRecent(page = 1) {
-  if (page > 1) {
-    return await fetchWitRecentPageDirect(page) || { episodes: [] as RawEpisodeCard[], hasNext: false };
-  }
-  const direct = await fetchWitHomeDirect().catch(() => null);
-  if (direct?.episodes.length) return { episodes: direct.episodes, hasNext: true };
-  const base = await getWitBase();
-  const url = `${base}/`;
+  const direct = await fetchAnime4upRecentPageDirect(page).catch(() => null);
+  if (direct?.episodes.length) return direct;
+  const url = page === 1 ? `${UP4_BASE}/episode/` : `${UP4_BASE}/episode/page/${page}/`;
   const result = await enqueue({
     url,
     injectAfter: EXTRACT_RECENT,

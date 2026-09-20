@@ -71,7 +71,7 @@ import {
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
 // detail page with a boilerplate/seasons-grid synopsis. Old cached entries
 // are simply ignored, forcing a fresh scrape with the current parsers.
-const HOME_CACHE_KEY = "@home_cache_v3";
+const HOME_CACHE_KEY = "@home_cache_v4";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -81,9 +81,9 @@ const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v3:";
+const RECENT_CACHE_PREFIX = "@recent_v4:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v4:";
+const SERVERS_CACHE_PREFIX = "@servers_v5:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
@@ -111,6 +111,7 @@ async function writeCache(key: string, data: unknown) {
 // refresh keeps the cache fresh for the next visit. `valid` gates what gets
 // cached so transient empty scrapes aren't frozen for the whole TTL.
 const _swrInFlight = new Set<string>();
+const _swrMisses = new Map<string, Promise<unknown>>();
 async function swr<T>(
   key: string,
   ttlMs: number,
@@ -128,9 +129,16 @@ async function swr<T>(
     }
     return cached;
   }
-  const data = await fresh();
-  if (valid(data)) void writeCache(key, data);
-  return data;
+  const pending = _swrMisses.get(key) as Promise<T> | undefined;
+  if (pending) return pending;
+  const request = fresh()
+    .then((data) => {
+      if (valid(data)) void writeCache(key, data);
+      return data;
+    })
+    .finally(() => _swrMisses.delete(key));
+  _swrMisses.set(key, request);
+  return request;
 }
 
 const UP4_BASE = "https://w1.anime4up.rest";
@@ -316,6 +324,7 @@ function cleanAnimeTitle(raw: string | null | undefined): string {
 type HomePayload = { success: boolean; data: { featured: FeaturedItem[]; sections: HomeSection[] } };
 
 let bgRefreshInFlight = false;
+let homeFreshInFlight: Promise<HomePayload> | null = null;
 
 // A home payload is only worth caching/showing if it actually carries content.
 // A cold WebView or an un-cleared Cloudflare challenge can yield an empty
@@ -410,6 +419,12 @@ async function fetchHomeFresh(): Promise<HomePayload> {
   return result;
 }
 
+function fetchHomeFreshShared(): Promise<HomePayload> {
+  if (homeFreshInFlight) return homeFreshInFlight;
+  homeFreshInFlight = fetchHomeFresh().finally(() => { homeFreshInFlight = null; });
+  return homeFreshInFlight;
+}
+
 // Cheap change detector for the SWR push: a new episode / new trending entry
 // always alters a section's item count or its first item, so comparing section
 // counts + lead hrefs catches every visible change without a full deep-equal.
@@ -429,7 +444,7 @@ export async function fetchHome(onUpdated?: (p: HomePayload) => void): Promise<H
   if (homeHasContent(cached)) {
     if (!bgRefreshInFlight) {
       bgRefreshInFlight = true;
-      void fetchHomeFresh()
+      void fetchHomeFreshShared()
         .then((fresh) => {
           if (onUpdated && homeHasContent(fresh) && homeSignature(fresh) !== homeSignature(cached))
             onUpdated(fresh);
@@ -439,7 +454,7 @@ export async function fetchHome(onUpdated?: (p: HomePayload) => void): Promise<H
     }
     return cached;
   }
-  return fetchHomeFresh();
+  return fetchHomeFreshShared();
 }
 
 /* ── /episodes ──────────────────────────────── */
@@ -1064,7 +1079,18 @@ export async function fetchRecent(page = 1): Promise<{
     RECENT_CACHE_PREFIX + page,
     RECENT_CACHE_TTL,
     async () => {
-      const r = await scrapeRecent(page);
+      let r: Awaited<ReturnType<typeof scrapeRecent>>;
+      if (page === 1) {
+        const home = await fetchHome();
+        const recent = home.data.sections.find((section) => section.id === "recently_updated");
+        if (recent?.items.length) {
+          return {
+            success: true,
+            data: { page, episodes: recent.items as EpisodeItem[], hasNext: true },
+          };
+        }
+      }
+      r = await scrapeRecent(page);
       const episodes: EpisodeItem[] = r.episodes.map((e) => ({
         title: e.title,
         href: e.href,

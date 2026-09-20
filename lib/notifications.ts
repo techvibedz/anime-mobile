@@ -178,19 +178,13 @@ function animeUrlFor(ep: RawEpisode): string {
     : (toAnimeUrl(ep.animeHref || ep.href) || ep.animeHref || "");
 }
 
-/** Pull the first couple of pages of the "recently updated" feed (newest first). */
+/** Pull the latest home batch. Older sitemap pages are for explicit browsing;
+ * loading them here made two background notification jobs saturate startup. */
 async function fetchRecentFeed(): Promise<RawEpisode[]> {
-  const episodes: RawEpisode[] = [];
-  for (const page of [1, 2]) {
-    try {
-      const r = await fetchRecent(page);
-      if (r.success) episodes.push(...r.data.episodes);
-      if (!r.success || !r.data.hasNext) break;
-    } catch {
-      break;
-    }
-  }
-  return episodes;
+  try {
+    const result = await fetchRecent(1);
+    return result.success ? result.data.episodes : [];
+  } catch { return []; }
 }
 
 /**

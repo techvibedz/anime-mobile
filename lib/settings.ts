@@ -73,7 +73,7 @@ export async function clearContentCache(): Promise<number> {
       "@search_v2:",
       "@search_v3:",
       "@listing_v1:",
-      "@recent_v1:",
+      "@recent_v",
       "@servers_v",
       "@xsource_v1",
       "@anime_airing_v1:",

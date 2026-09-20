@@ -109,6 +109,10 @@ async function resolveWitBase(): Promise<string> {
  * probe so cold-start bursts cannot emit duplicate warnings or select different hosts. */
 export async function getWitBase(): Promise<string> {
   if (_resolvedWitBase) return _resolvedWitBase;
+  // One configured host has nothing to fail over to. Probing it here only
+  // downloads the full home page once, then fetchWitHomeDirect downloads it
+  // again immediately — the main cold-start regression on the new domain.
+  if (WIT_DOMAINS.length === 1) return (_resolvedWitBase = WIT_DOMAINS[0]);
   if (Date.now() < _witFailUntil) return WIT_DOMAINS[0];
   if (_witBaseInflight) return _witBaseInflight;
   _witBaseInflight = resolveWitBase().finally(() => { _witBaseInflight = null; });
@@ -601,7 +605,7 @@ export function parseWitEpisodeMeta(
  * episode sitemaps remain chronological, so use them for page 2 onward. */
 export async function fetchWitRecentPageDirect(
   page: number,
-  pageSize = 24,
+  pageSize = 12,
 ): Promise<{ episodes: WitHomeEpisode[]; hasNext: boolean } | null> {
   if (page < 2) return null;
   const base = await getWitBase();
@@ -631,16 +635,26 @@ export async function fetchWitRecentPageDirect(
   }
 
   const episodes = new Array<WitHomeEpisode>(selected.entries.length);
+  const missed: number[] = [];
   let cursor = 0;
   async function hydrate() {
     while (cursor < selected.entries.length) {
       const index = cursor++;
       const entry = selected.entries[index];
       const html = await fetchHtml(entry.href, `${base}/`);
+      if (!html) missed.push(index);
       episodes[index] = parseWitEpisodeMeta(html || "", entry);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(4, selected.entries.length) }, hydrate));
+  // Witanime rate-limits bursts. Two workers fill a screen quickly without the
+  // 429 storm that caused most of the old 24-card page to lose its posters.
+  await Promise.all(Array.from({ length: Math.min(2, selected.entries.length) }, hydrate));
+  // Retry only transport misses, sequentially, after the burst has settled.
+  for (const index of missed) {
+    const entry = selected.entries[index];
+    const html = await fetchHtml(entry.href, `${base}/`);
+    if (html) episodes[index] = parseWitEpisodeMeta(html, entry);
+  }
   return { episodes, hasNext: selected.hasNext };
 }
 

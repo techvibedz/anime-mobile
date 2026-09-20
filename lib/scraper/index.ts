@@ -1,6 +1,7 @@
 import { enqueue } from "./bus";
 import {
   fetchWitListingDirect,
+  fetchWitHomeDirect,
   searchWitanimeDirect,
   fetchWitRecentPageDirect,
   getWitBase,
@@ -114,6 +115,8 @@ export async function scrapeRecent(page = 1) {
   if (page > 1) {
     return await fetchWitRecentPageDirect(page) || { episodes: [] as RawEpisodeCard[], hasNext: false };
   }
+  const direct = await fetchWitHomeDirect().catch(() => null);
+  if (direct?.episodes.length) return { episodes: direct.episodes, hasNext: true };
   const base = await getWitBase();
   const url = `${base}/`;
   const result = await enqueue({

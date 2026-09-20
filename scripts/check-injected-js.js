@@ -42,4 +42,15 @@ for (const name of names) {
     console.error(`FAIL  ${name}: ${e.message}`);
   }
 }
+
+try {
+  const videoServers = eval("`" + grab("EXTRACT_VIDEO_SERVERS") + "`");
+  for (const marker of ["seenLabels", "witProvider", "witPriority", "ready.status === 429", "'mp4upload'", "'streamwish'", "'videa'"]) {
+    if (!videoServers.includes(marker)) throw new Error(`missing Witanime player marker: ${marker}`);
+  }
+  console.log("OK    EXTRACT_VIDEO_SERVERS (Witanime provider routing)");
+} catch (e) {
+  failed = true;
+  console.error(`FAIL  EXTRACT_VIDEO_SERVERS routing: ${e.message}`);
+}
 process.exit(failed ? 1 : 0);

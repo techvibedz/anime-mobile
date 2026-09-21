@@ -12,6 +12,16 @@ assert.equal(match(["Mushoku Tensei III"], [card("Mushoku Tensei 3rd Season", "m
 assert.equal(match(["King's Game", "Ousama Game"], [card("Ousama Game", "og")]), card("", "og").href);
 assert.equal(match(["One Piece"], [card("One Piece", "one"), card("One Piece", "remake")]), null);
 
+// Mixed-script titles: the source lists "ون بيس One Piece" and the site indexes
+// the Latin half only. Scoring the whole string caps at 0.615 (< 0.8), so the
+// Latin half has to be scored on its own.
+assert.equal(match(["ون بيس One Piece"], [card("One Piece", "one")]), card("", "one").href);
+assert.equal(match(["قاتل الشياطين Kimetsu no Yaiba"], [card("Kimetsu no Yaiba", "kny")]), card("", "kny").href);
+// ...and the reverse: an Arabic-only card matched from a mixed title.
+assert.equal(match(["ون بيس One Piece"], [card("ون بيس", "ar")]), card("", "ar").href);
+// The half-match must not leak a different anime in.
+assert.equal(match(["ون بيس One Piece"], [card("One Punch Man", "opm")]), null);
+
 const anime = "https://witanime.site/anime/one-piece";
 const html = '<a href="/watch/other/12">wrong anime</a><a href="/watch/one-piece/11">wrong episode</a><a href="/watch/one-piece/12">correct</a>';
 assert.equal(witEpisodeLink(html, anime, 12), "https://witanime.site/watch/one-piece/12");
@@ -28,6 +38,26 @@ async function main() {
   assert.equal(reads, 1);
   assert.equal(await resolveWitanimeEpisode("", 12, anime, async () => { throw Error("Known URL should skip search"); },
     async () => [], tm_seasonNum, async () => html), "https://witanime.site/watch/one-piece/12");
-  console.log("Witanime matching: spelling, aliases, seasons, ambiguity and exact episode passed");
+
+  // Cross-source discovery for a mixed-script episode title: exactly ONE search
+  // must fire (the site answers 429 to a parallel burst and the lookup used to
+  // lose every server over it).
+  const queries: string[] = [];
+  const mixed = await resolveWitanimeEpisode("ون بيس One Piece", 1179, null,
+    async (query) => { queries.push(query); return [card("One Piece", "one-piece")]; },
+    async () => { throw Error("aliases must not be needed"); }, tm_seasonNum,
+    async (url) => url.endsWith("/anime/one-piece") ? '<a href="/watch/one-piece/1179">1179</a>' : "");
+  assert.equal(mixed, "https://witanime.site/watch/one-piece/1179");
+  assert.equal(queries.length, 1);
+
+  // A title only the site's spelling resolves still walks the query plan.
+  const slowQueries: string[] = [];
+  const viaPlan = await resolveWitanimeEpisode("Some Obscure Show", 3, null,
+    async (query) => { slowQueries.push(query); return query === "obscure" ? [card("Some Obscure Show", "some-obscure-show")] : []; },
+    async () => [], tm_seasonNum,
+    async () => '<a href="/watch/some-obscure-show/3">3</a>');
+  assert.equal(viaPlan, "https://witanime.site/watch/some-obscure-show/3");
+  assert.ok(slowQueries.length > 1 && slowQueries.includes("obscure"));
+  console.log("Witanime matching: spelling, aliases, seasons, mixed script, ambiguity and exact episode passed");
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

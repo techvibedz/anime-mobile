@@ -92,6 +92,10 @@ const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const RECENT_CACHE_PREFIX = "@recent_v8:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
 const SERVERS_CACHE_PREFIX = "@servers_v8:";
+// Resolved Witanime ANIME pages per source title (see fetchCompleteVideoServers).
+// Remembers what a free-text search resolved to so later episodes of the same
+// anime skip the site's rate-limited /search and only fetch the anime page.
+const WIT_ANIME_CACHE_PREFIX = "@wit_anime_v1:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
@@ -1314,14 +1318,24 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       : fetchVideoServers(episodeUrl, undefined, !!options.force).catch(() => null);
 
     const episodeNumber = options.episodeNumber ?? episodeNumberFromUrl(episodeUrl);
+    // Cross-source discovery: an episode opened from anime4up / anime3rb carries
+    // a title the site may spell differently (mixed script, romaji vs English),
+    // so resolveWitanimeEpisode searches for it. Remember what that search
+    // landed on — the next episode of the same anime then skips /search (which
+    // the site rate-limits with HTTP 429) and only fetches the anime page.
+    const witAnimeKey = (title: string) =>
+      WIT_ANIME_CACHE_PREFIX + title.toLowerCase().replace(/\s+/g, " ").trim();
     const loadWit = async (title: string): Promise<VideoServersPayload | null> => {
       if ((!primaryIsUp4 && !primaryIsA3rb) || episodeNumber == null) return null;
       const base = await getWitBase();
+      const known = options.animeHref ? rewriteWitUrl(options.animeHref, base) : null;
+      const remembered = !known && title ? await readCache<string>(witAnimeKey(title), UP4_CACHE_TTL) : null;
       const href = await resolveWitanimeEpisode(
-        title, episodeNumber, options.animeHref ? rewriteWitUrl(options.animeHref, base) : null,
-        (query) => withTimeout(searchWitanimeDirect(query), 8_000, null),
+        title, episodeNumber, known || remembered,
+        (query) => withTimeout(searchWitanimeDirect(query), 12_000, null),
         (name) => withTimeout(getAltTitles(name), 5_000, []), tm_seasonNum,
         (url) => withTimeout(fetchHtml(url, base + "/"), 8_000, null),
+        (animeUrl) => { if (title) void writeCache(witAnimeKey(title), animeUrl); },
       ).catch(() => null);
       return href ? fetchVideoServers(href, undefined, !!options.force).catch(() => null) : null;
     };

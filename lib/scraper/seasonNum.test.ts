@@ -37,6 +37,15 @@ test("Roman IV/V/IX resolve to 4/5/9", () => {
   assert.equal(tm_seasonNum("Some Anime V"), 5);
   assert.equal(tm_seasonNum("Some Anime IX"), 9);
 });
+test("UNICODE roman numerals count too (witanime prints 'Mushoku Tensei Ⅲ')", () => {
+  // The regression behind "witanime servers never show for anime4up episodes":
+  // the card said Ⅲ (U+2162) so it read as season 1, while the lookup title said
+  // III → 3, and the season filter rejected every candidate.
+  assert.equal(tm_seasonNum("Mushoku Tensei Ⅲ: Isekai Ittara Honki Dasu"), 3);
+  assert.equal(tm_seasonNum("Mushoku Tensei Ⅱ: Isekai Ittara Honki Dasu"), 2);
+  assert.equal(tm_seasonNum("Some Anime Ⅳ"), 4);
+  assert.equal(tm_seasonNum("Some Anime Ⅹ"), 10);
+});
 test('"season N" still wins', () => {
   assert.equal(tm_seasonNum("Overlord Season 4"), 4);
 });

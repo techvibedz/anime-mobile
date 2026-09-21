@@ -133,6 +133,16 @@ export async function getWitBase(): Promise<string> {
 // A hard 4xx (404/410 — e.g. a slug probe miss) won't change on retry, so bail
 // fast.
 const FETCH_ATTEMPT_TIMEOUTS = [8000, 16000, 24000];
+
+/** Server-requested retry delay (Retry-After in seconds or as an HTTP-date). */
+function retryAfterMs(header: string | null, capMs = 10_000): number {
+  if (!header) return 0;
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(capMs, seconds * 1000);
+  const date = Date.parse(trimmed);
+  return Number.isFinite(date) ? Math.min(capMs, Math.max(0, date - Date.now())) : 0;
+}
 export async function fetchHtml(
   url: string,
   referer?: string,
@@ -144,6 +154,10 @@ export async function fetchHtml(
     const attemptUrl = candidateForAttempt(candidates, attempt);
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), attemptTimeouts[attempt - 1]);
+    // 429/503 mean "too fast": honour Retry-After and step back harder than the
+    // generic 600ms, otherwise the retry lands in the same rate-limit window and
+    // every attempt is wasted.
+    let retryDelayMs = 600 * attempt;
     try {
       const res = await fetch(attemptUrl, {
         signal: controller.signal,
@@ -170,12 +184,15 @@ export async function fetchHtml(
       if (res.status === 404 || res.status === 410) return null;
       const retryable = isRetryableSourceStatus(res.status);
       if (!retryable || attempt === ATTEMPTS) return null;
+      if (res.status === 429 || res.status === 503) {
+        retryDelayMs = Math.max(retryAfterMs(res.headers.get("retry-after")), 1200 * attempt);
+      }
     } catch {
       clearTimeout(t);
       void clearSourcePreference(attemptUrl).catch(() => {});
       if (attempt === ATTEMPTS) return null;
     }
-    await new Promise((r) => setTimeout(r, 600 * attempt));
+    await new Promise((r) => setTimeout(r, retryDelayMs));
   }
   return null;
 }
@@ -695,11 +712,80 @@ export async function fetchWitRecentPageDirect(
 }
 
 // Search witanime via its static-HTML results page.
+//
+// The site answers HTTP 429 after a short burst of /search GETs, and the
+// cross-source episode lookup fires several queries back to back (the title,
+// its normalized spelling, then single words). Firing them in parallel used to
+// 429 every one of them, so an episode opened from anime4up found no Witanime
+// copy and its servers never appeared. Every search GET now goes through one
+// queue with a small gap and a shared cooldown that a 429 (or its Retry-After)
+// extends — the queue also stops two screens from stampeding the site at once.
+const WIT_SEARCH_MIN_GAP_MS = 350;
+const WIT_SEARCH_RETRY_LIMIT = 2;
+const WIT_SEARCH_COOLDOWN_MAX_MS = 10_000;
+let _witSearchTail: Promise<unknown> = Promise.resolve();
+let _witSearchCooldownUntil = 0;
+let _witSearchNextAt = 0;
+
+async function witSearchGet(url: string, referer: string): Promise<{ html: string | null; status: number; retryAfterMs: number }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 9000);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      credentials: "include",
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ar,en;q=0.9",
+        Referer: referer,
+      },
+    });
+    if (res.ok) {
+      void markSourceHealthy(url).catch(() => {});
+      return { html: await res.text(), status: res.status, retryAfterMs: 0 };
+    }
+    return { html: null, status: res.status, retryAfterMs: retryAfterMs(res.headers.get("retry-after")) };
+  } catch {
+    return { html: null, status: 0, retryAfterMs: 0 };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function witSearchRequest(url: string, referer: string): Promise<string | null> {
+  const task = _witSearchTail.then(async () => {
+    for (let attempt = 0; attempt <= WIT_SEARCH_RETRY_LIMIT; attempt++) {
+      const wait = Math.max(0, _witSearchCooldownUntil - Date.now(), _witSearchNextAt - Date.now());
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      _witSearchNextAt = Date.now() + WIT_SEARCH_MIN_GAP_MS;
+      const { html, status, retryAfterMs } = await witSearchGet(url, referer);
+      if (html) return html;
+      if (status === 429 || status === 503) {
+        const backoff = Math.min(
+          WIT_SEARCH_COOLDOWN_MAX_MS,
+          Math.max(retryAfterMs, 1200 * (attempt + 1)),
+        );
+        _witSearchCooldownUntil = Date.now() + backoff;
+        // A long pause is the site saying "stop for a while": hand it to the
+        // queue (the next query is worth more) instead of burning the whole
+        // discovery window retrying this one.
+        if (backoff > 2_500) return null;
+        continue;
+      }
+      if (!isRetryableSourceStatus(status)) return null;
+    }
+    return null;
+  });
+  _witSearchTail = task.catch(() => {});
+  return task;
+}
+
 export async function searchWitanimeDirect(query: string): Promise<WitCard[] | null> {
   if (!query) return null;
   const base = await getWitBase();
   const url = `${base}/search?q=${encodeURIComponent(query)}`;
-  const html = await fetchHtml(url, base + "/");
+  const html = await witSearchRequest(url, base + "/");
   if (!html) return null;
   return parseWitCards(html);
 }
@@ -719,15 +805,27 @@ export async function searchWitanimeDirect(query: string): Promise<WitCard[] | n
 const ROMAN_SEASON: Record<string, number> = {
   II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10,
 };
+// WitAnime prints season numerals with UNICODE roman characters ("Mushoku
+// Tensei Ⅲ"), not ASCII "III". The season detector read Ⅲ as season 1 while the
+// lookup title said 3, so every season-match was rejected and the episode found
+// no Witanime copy — the servers simply never appeared. Fold them to ASCII
+// before matching.
+const UNICODE_ROMAN: Record<string, string> = {
+  "Ⅰ": "I", "Ⅱ": "II", "Ⅲ": "III", "Ⅳ": "IV", "Ⅴ": "V", "Ⅵ": "VI",
+  "Ⅶ": "VII", "Ⅷ": "VIII", "Ⅸ": "IX", "Ⅹ": "X", "Ⅺ": "XI", "Ⅻ": "XII",
+};
+function tm_asciiRomans(s: string): string {
+  return String(s || "").replace(/[\u2160-\u217f]/g, (ch) => UNICODE_ROMAN[ch] ?? ch);
+}
 function tm_romanSeason(orig: string): number {
-  const s = orig || "";
+  const s = tm_asciiRomans(orig);
   const multi = s.match(/\b(VIII|VII|VI|IV|IX|III|II)\b/i);
   if (multi) return ROMAN_SEASON[multi[1].toUpperCase()];
   const single = s.match(/\b(X|V)\b/); // uppercase-only for the word-colliding singles
   return single ? ROMAN_SEASON[single[1]] : 0;
 }
 export function tm_seasonNum(orig: string): number {
-  const s = (orig || "").toLowerCase();
+  const s = tm_asciiRomans(orig).toLowerCase();
   const m =
     s.match(/\b(?:season|s|part|cour)\s*(\d+)\b/) ||
     // Ordinal-before-keyword form: "7th Season", "2nd Part", "3rd Cour".
@@ -739,7 +837,7 @@ export function tm_seasonNum(orig: string): number {
     const v = parseInt(n, 10);
     if (!isNaN(v)) return v;
   }
-  return tm_romanSeason(orig) || 1;
+  return tm_romanSeason(tm_asciiRomans(orig)) || 1;
 }
 function tm_normLatin(s: string): string {
   return String(s || "").toLowerCase()
@@ -2122,9 +2220,19 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
 // native player's playback UA, so the extracted URL stays valid.
 export async function extractMp4upload(iframeUrl: string): Promise<{ url: string; type: "mp4" } | null> {
   const embedUrl = normalizeEmbedUrl(iframeUrl);
-  const got = await fetchEmbed(embedUrl, 8000, "https://www.mp4upload.com/");
-  const url = got.html ? extractMp4uploadUrl(got.html) : null;
-  return url ? { url, type: "mp4" } : null;
+  // The embed page is tiny (~4 KB) and the direct .mp4 sits in its static HTML
+  // or its packed player, so a miss is nearly always a transient timeout/5xx on
+  // a slow phone link — not a parse failure. A single attempt used to hand the
+  // episode to the WebView fallback (up to 40s), which is what made mp4upload
+  // feel like it took forever to appear. A Cloudflare challenge is NOT retried:
+  // it cannot clear on an immediate second GET, so that case still bails out.
+  for (const timeoutMs of [6000, 12000]) {
+    const got = await fetchEmbed(embedUrl, timeoutMs, "https://www.mp4upload.com/");
+    if (got.blocked) return null;
+    const url = got.html ? extractMp4uploadUrl(got.html) : null;
+    if (url) return { url, type: "mp4" };
+  }
+  return null;
 }
 
 /* ── Direct embed resolvers: streamwish / doodstream ───────────────────────

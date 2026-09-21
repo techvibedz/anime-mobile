@@ -58,6 +58,16 @@ async function main() {
     async () => '<a href="/watch/some-obscure-show/3">3</a>');
   assert.equal(viaPlan, "https://witanime.site/watch/some-obscure-show/3");
   assert.ok(slowQueries.length > 1 && slowQueries.includes("obscure"));
+  // A stale known/cached anime page must fall back to the title search instead
+  // of reporting "no Witanime copy" for that episode.
+  const staleSearches: string[] = [];
+  const recovered = await resolveWitanimeEpisode("Some Show", 4, "https://witanime.site/anime/some-show-renamed",
+    async (query) => { staleSearches.push(query); return [card("Some Show", "some-show")]; },
+    async () => [], tm_seasonNum,
+    async (url) => url.includes("renamed") ? '<a href="/watch/other/4">4</a>' : '<a href="/watch/some-show/4">4</a>');
+  assert.equal(recovered, "https://witanime.site/watch/some-show/4");
+  assert.ok(staleSearches.length >= 1, "a stale anime page must trigger the search fallback");
+
   console.log("Witanime matching: spelling, aliases, seasons, mixed script, ambiguity and exact episode passed");
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

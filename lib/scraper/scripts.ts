@@ -800,10 +800,19 @@ function collectIframes(seen, out) {
   });
 }
 function extractTitles() {
-  var ep = document.querySelector('.main-section h3') || document.querySelector('h1') || document.querySelector('.episode-title');
   var anime = document.querySelector('.anime-page-link a') || document.querySelector('h1');
+  var ep = document.querySelector('.main-section h3') || document.querySelector('.episode-title');
+  var episodeTitle = (ep && ep.textContent.trim()) || '';
+  if (!episodeTitle) {
+    // The new Witanime watch page has no dedicated episode heading (the h1 is
+    // the anime name), so the episode number comes from the URL instead:
+    // /watch/<slug>/12 or /watch/movie/<slug>/1
+    var isMovie = location.pathname.indexOf('/movie/') >= 0;
+    var m = location.pathname.match(/\\/watch\\/(?:movie\\/)?[^\\/]+\\/(\\d+)/);
+    episodeTitle = m ? (isMovie ? 'فيلم ' + m[1] : 'الحلقة ' + m[1]) : '';
+  }
   return {
-    episodeTitle: (ep && ep.textContent.trim()) || '',
+    episodeTitle: episodeTitle,
     animeTitle: (anime && anime.textContent.trim()) || '',
   };
 }

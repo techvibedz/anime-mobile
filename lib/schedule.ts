@@ -1,24 +1,18 @@
-// Weekly anime airing calendar.
+// Weekly anime schedule.
 //
-// Same data source as the per-anime countdown (lib/airing.ts): the public
-// AnimeSchedule.net timetable. This pulls the coming seven days and buckets
-// them by local calendar day — "what new episode airs each day this week".
-//
-// The source sites (witanime/anime4up/anime3rb) expose no air-time data at all,
-// so an external timetable is required. We keep Japanese/raw entries (a viewer
-// can tap through to search our own sources for the Arabic sub/dub).
+// Sourced from Witanime's own /schedule page: it is static HTML (one plain GET,
+// no per-title availability checks), every row carries a real poster image and a
+// ready /anime/<slug> link, and everything it lists is by definition playable.
 //
 // Cached per local day so the bucketing stays correct across a date rollover,
-// with a short TTL so newly-scheduled episodes roll in. Because each item
-// carries an absolute `airingAt`, a slightly stale cache is still correct — the
-// screen recomputes "today/upcoming" from the device clock.
+// with a short TTL so newly-scheduled episodes roll in.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   searchAnime4upDirect,
   searchAnime3rbCatalog,
+  fetchWitanimeScheduleDirect,
 } from "./scraper/direct";
-import { fetchAnimeScheduleTimetable } from "./animeSchedule";
 
 export interface ScheduleItem {
   /** Stable source id — used as a list key and for de-duping. */
@@ -33,6 +27,8 @@ export interface ScheduleItem {
   format: string | null;
   /** Source score (0–100) or null. */
   score: number | null;
+  /** Resolved witanime detail URL — the schedule row opens this directly. */
+  sourceHref: string;
 }
 
 export interface ScheduleDay {
@@ -43,7 +39,7 @@ export interface ScheduleDay {
   items: ScheduleItem[];
 }
 
-const CACHE_PREFIX = "@anime_schedule_v1:";
+const CACHE_PREFIX = "@anime_schedule_v2:";
 const TTL = 3 * 60 * 60 * 1000; // 3h
 
 type Cached = { ts: number; data: ScheduleDay[] };
@@ -51,7 +47,7 @@ type Cached = { ts: number; data: ScheduleDay[] };
 const inflight = new Map<string, Promise<ScheduleDay[]>>();
 
 // Seven empty day-buckets starting at local midnight today.
-function buildDays(): { days: ScheduleDay[]; windowStart: number; windowEnd: number } {
+function buildDays(): ScheduleDay[] {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const days: ScheduleDay[] = [];
@@ -59,12 +55,7 @@ function buildDays(): { days: ScheduleDay[]; windowStart: number; windowEnd: num
     const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
     days.push({ dayStart: Math.floor(d.getTime() / 1000), weekday: d.getDay(), items: [] });
   }
-  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
-  return {
-    days,
-    windowStart: Math.floor(start.getTime() / 1000),
-    windowEnd: Math.floor(end.getTime() / 1000),
-  };
+  return days;
 }
 
 // Stable cache key keyed to the local date so a rollover past midnight starts a
@@ -74,21 +65,32 @@ function todayKey(): string {
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
-async function doFetch(): Promise<ScheduleDay[]> {
-  const { days, windowStart, windowEnd } = buildDays();
-  const items = await fetchAnimeScheduleTimetable();
-  for (const item of items) {
-    if (item.airingAt < windowStart || item.airingAt >= windowEnd) continue;
-    // Bucket by LOCAL calendar day (robust across DST, unlike /86400 math).
-    const d = new Date(item.airingAt * 1000);
-    const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1000;
-    const day = days.find((x) => x.dayStart === midnight);
-    if (day) day.items.push({ ...item, score: null });
-  }
+// Mon..Sun (as used in the witanime schedule HTML) → JS weekday index.
+const WEEKDAYS: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-  // Keep each day chronological (the global TIME sort already does this, but a
-  // late page could append out of order after de-duping).
-  for (const day of days) day.items.sort((a, b) => a.airingAt - b.airingAt);
+async function doFetch(): Promise<ScheduleDay[]> {
+  const days = buildDays();
+  const entries = await fetchWitanimeScheduleDirect();
+  if (!entries) return days;
+
+  // Each weekday appears exactly once in the 7-day window (today first).
+  const byWeekday = new Map(days.map((d) => [d.weekday, d]));
+  let id = 0;
+  for (const entry of entries) {
+    const day = byWeekday.get(WEEKDAYS[entry.weekday] ?? -1);
+    if (!day) continue;
+    day.items.push({
+      id: id++,
+      title: entry.title,
+      image: entry.image,
+      episode: entry.episode,
+      // Witanime lists no air times; midnight marks "this day, time unknown".
+      airingAt: day.dayStart,
+      format: entry.format,
+      score: entry.score,
+      sourceHref: entry.href,
+    });
+  }
   return days;
 }
 
@@ -120,7 +122,7 @@ export async function fetchWeeklySchedule(force = false): Promise<ScheduleDay[]>
       const data = await doFetch();
       const hasAny = data.some((d) => d.items.length > 0);
       // Only persist a non-empty week; an all-empty result is likely a transient
-      // A timetable hiccup shouldn't be frozen for the whole TTL.
+      // hiccup and shouldn't be frozen for the whole TTL.
       if (hasAny) {
         try {
           await AsyncStorage.setItem(key, JSON.stringify({ ts: Date.now(), data } as Cached));
@@ -128,7 +130,7 @@ export async function fetchWeeklySchedule(force = false): Promise<ScheduleDay[]>
       }
       return data;
     } catch {
-      return buildDays().days;
+      return buildDays();
     } finally {
       inflight.delete(key);
     }
@@ -138,16 +140,12 @@ export async function fetchWeeklySchedule(force = false): Promise<ScheduleDay[]>
 }
 
 /* ── Source availability ─────────────────────────
- * The schedule comes from a global timetable, but the app can only PLAY what
- * its own sources carry. Verify each title against anime4up + anime3rb (the two
- * romaji-friendly sources, both plain-GET / no WebView) and hide anything that
- * resolves on neither. Results are cached in memory + on disk for a week so a
- * given title is only ever checked once. */
+ * Not needed for the schedule anymore (witanime rows already carry playable
+ * links), but the home/seasons screens open titles by romaji title, so this
+ * resolves a title to a playable anime4up/anime3rb URL. Cached in memory + on
+ * disk for a week so a given title is only ever checked once. */
 const SRCURL_PREFIX = "@anime_srcurl_v1:";
 const SRCURL_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
-// The resolved SOURCE URL for a title (or null = checked, not found). Caching the
-// URL — not just a boolean — lets the popular/seasons screens open the anime's
-// real detail page directly instead of bouncing through Discover.
 const srcUrlMem = new Map<string, string | null>();
 const srcUrlInflight = new Map<string, Promise<string | null>>();
 
@@ -199,71 +197,4 @@ export async function resolveSourceUrl(title: string): Promise<string | null> {
   srcUrlInflight.set(key, p);
   p.finally(() => srcUrlInflight.delete(key));
   return p;
-}
-
-async function isAnimeAvailable(title: string): Promise<boolean> {
-  return !!(await resolveSourceUrl(title).catch(() => null));
-}
-
-// Like filterAvailableItems but ATTACHES the resolved source URL to each kept
-// item (so the caller can open its detail page directly). Streams via onProgress
-// as each title resolves. Lower default concurrency than the boolean filter —
-// it's used on the home screen where it must not saturate the network.
-export async function resolveAvailableItems<T extends { title: string }>(
-  items: T[],
-  onProgress?: (soFar: (T & { sourceHref: string })[]) => void,
-  concurrency = 6,
-): Promise<(T & { sourceHref: string })[]> {
-  if (items.length === 0) return [];
-  await searchAnime3rbCatalog(items[0]?.title || "").catch(() => {});
-  const urls = new Array<string | null>(items.length).fill(null);
-  const build = () =>
-    items
-      .map((it, i) => (urls[i] ? { ...it, sourceHref: urls[i]! } : null))
-      .filter((x): x is T & { sourceHref: string } => !!x);
-  const emit = () => onProgress?.(build());
-
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      urls[i] = await resolveSourceUrl(items[i].title).catch(() => null);
-      if (urls[i]) emit();
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  return build();
-}
-
-// Run a list through `isAnimeAvailable` with bounded concurrency and return only
-// the items the sources can actually serve, preserving the original order.
-//
-// `onProgress` fires after every resolution with the available items found SO
-// FAR (in original order), so the screen can stream rows in as they're confirmed
-// instead of waiting for the whole day — most of the perceived speed-up.
-export async function filterAvailableItems<T extends { title: string }>(
-  items: T[],
-  onProgress?: (availableSoFar: T[]) => void,
-): Promise<T[]> {
-  if (items.length === 0) return [];
-
-  // Pre-warm the anime3rb catalog sitemap ONCE (one ~6300-slug GET). Without
-  // this, the first concurrency-wide burst of catalog checks would each refetch
-  // the sitemap; warming it first makes every per-item catalog match in-memory.
-  await searchAnime3rbCatalog(items[0]?.title || "").catch(() => {});
-
-  const keep = new Array<boolean>(items.length).fill(false);
-  const emit = () => onProgress?.(items.filter((_, i) => keep[i]));
-
-  const CONCURRENCY = 12;
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      keep[i] = await isAnimeAvailable(items[i].title).catch(() => false);
-      if (keep[i]) emit();
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
-  return items.filter((_, i) => keep[i]);
 }

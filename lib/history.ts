@@ -261,17 +261,17 @@ export function animeTitleKey(s: string | null | undefined): string {
   if (cached !== undefined) return cached;
   // Tokenize on the RAW string (Arabic stays composed) so decoration words can
   // be filtered by exact token, then NFKD-fold the survivors for Latin diacritics.
+  // Tokens are joined WITHOUT a separator so a title stored with punctuation
+  // ("Re:Zero") keys identically to the same name without it ("Rezero").
   const key = raw
     .toLowerCase()
     .replace(/[^a-z0-9؀-ۿ]+/g, " ")
     .trim()
     .split(" ")
     .filter((tok) => tok && !TITLE_DECORATION.has(tok))
-    .join(" ")
+    .join("")
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/[̀-ͯ]/g, "");
   if (titleKeyCache.size > 2000) titleKeyCache.clear();
   titleKeyCache.set(raw, key);
   return key;

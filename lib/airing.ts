@@ -1,8 +1,9 @@
 // Next-episode countdown for the anime detail page.
 //
-// The streaming sources do not expose exact future air times. Reuse the weekly
-// AnimeSchedule.net timetable that powers the schedule screen; AniList remains
-// a fallback for delayed episodes beyond that seven-day window.
+// The streaming sources expose no exact future air times, so the countdown uses
+// AniList's nextAiringEpisode — the only source with a real timestamp. The
+// weekly schedule screen (witanime) lists days but no times, so it can't back
+// a countdown.
 //
 // One POST per title, deduped in-flight and cached. Because the payload is an
 // absolute `airingAt` timestamp (not a relative "X seconds left"), a slightly
@@ -14,7 +15,6 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getAltTitles } from "./animeInfo";
-import { fetchWeeklySchedule, type ScheduleItem } from "./schedule";
 
 export interface NextAiring {
   /** Episode number that is about to air. */
@@ -160,33 +160,8 @@ function pickFinished(candidates: any[], queries: string[], lastKnownEp?: number
 }
 
 async function doFetch(title: string): Promise<NextAiring | null> {
-  const base = baseTitle(title);
-  const queries = new Set([norm(title), norm(base)].filter(Boolean));
-  const scheduled = (await fetchWeeklySchedule()).flatMap((day) => day.items);
-
-  const pickScheduled = (items: ScheduleItem[]): NextAiring | null => {
-    const ranked = items
-      .map((item) => ({ item, score: titleScore({ title: { romaji: item.title } }, [...queries]) }))
-      .filter((entry) => entry.score >= 500 && entry.item.airingAt * 1000 > Date.now())
-      .sort((a, b) => b.score - a.score || a.item.airingAt - b.item.airingAt);
-    const item = ranked[0]?.item;
-    return item ? { episode: item.episode, airingAt: item.airingAt } : null;
-  };
-
-  let pick = pickScheduled(scheduled);
-  if (pick) return pick;
-
-  // Cross-language/romanisation bridge for source titles that do not directly
-  // match the timetable's display name.
-  try {
-    const alts = await getAltTitles(base || title);
-    for (const alt of alts.slice(0, 4)) {
-      queries.add(norm(alt));
-      queries.add(norm(baseTitle(alt)));
-    }
-    pick = pickScheduled(scheduled);
-    if (pick) return pick;
-  } catch {}
+  // The weekly schedule carries no air times, so it can't back a countdown —
+  // AniList is the only source with a real nextAiringEpisode timestamp.
   return doFetchAniList(title);
 }
 

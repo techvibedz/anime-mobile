@@ -556,6 +556,63 @@ export async function fetchWitHomeDirect(): Promise<WitHome | null> {
   })), animes, episodes };
 }
 
+// The witanime schedule page (/schedule) is static HTML grouped by weekday with
+// a ready /anime/<slug> href + poster per row, so it replaces the old slow
+// schedule source entirely. Rows are duplicated across the list/grid views, so
+// they are de-duplicated per weekday.
+export type WitScheduleEntry = {
+  weekday: string; // Mon..Sun
+  title: string;
+  href: string;
+  image: string | null;
+  episode: number;
+  format: string | null;
+  score: number | null;
+};
+
+export function parseWitanimeSchedule(html: string): WitScheduleEntry[] {
+  const out: WitScheduleEntry[] = [];
+  const dayParts = html.split('id="schedule-day-').slice(1);
+  for (const part of dayParts) {
+    const weekday = part.slice(0, 3);
+    const block = part.split('id="schedule-day-')[0];
+    // Splitting on the row anchor keeps each row's img/h3/spans in scope.
+    const tokens = block.split(/<a[^>]*href="(https:\/\/witanime\.site\/anime\/[^"]+)"/);
+    const seen = new Set<string>();
+    for (let i = 1; i + 1 < tokens.length; i += 2) {
+      const href = tokens[i];
+      const row = tokens[i + 1];
+      if (seen.has(href)) continue;
+      seen.add(href);
+      const titleMatch = row.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+      const imageMatch = row.match(/<img[^>]*\bsrc=["']([^"']+)["'][^>]*>/i);
+      const episodeMatch = row.match(/الحلقة\s*(\d+)/);
+      const formatMatch = row.match(/<span[^>]*>(TV|ONA|OVA|Special|فيلم)<\/span>/i);
+      const scoreMatch = row.match(/font-semibold[^>]*>([\d.]+)</);
+      const title = htmlDecode((titleMatch?.[1] || "").replace(/<[^>]+>/g, "").trim());
+      if (!title) continue;
+      out.push({
+        weekday,
+        title,
+        href,
+        image: witUpgradeImg(imageMatch?.[1] || null),
+        episode: Number(episodeMatch?.[1] || 0),
+        format: formatMatch ? formatMatch[1] : null,
+        score: scoreMatch ? Number(scoreMatch[1]) : null,
+      });
+    }
+  }
+  return out;
+}
+
+export async function fetchWitanimeScheduleDirect(): Promise<WitScheduleEntry[] | null> {
+  const base = await getWitBase();
+  const html = await fetchHtml(base + "/schedule", base + "/");
+  if (!html) return null;
+  const entries = parseWitanimeSchedule(html);
+  return entries.length ? entries : null;
+}
+
 export type WitRecentSitemapEntry = { href: string; slug: string; number: number; updatedAt: number };
 
 export function parseWitEpisodeSitemap(xml: string): WitRecentSitemapEntry[] {

@@ -22,7 +22,7 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, findAnime3rbAnimeUrl, findWitanimeAnimeUrl, searchAnime } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, findAnime3rbAnimeUrl, findWitanimeAnimeUrl, findAnime4upAnimeUrl, searchAnime } from "../../lib/api";
 import type { AnimeDetail, Episode, SearchResult } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
@@ -247,21 +247,20 @@ export default function AnimeDetailScreen() {
       if (cancelled) return;
       // Record EVERY known source href + title so a card from any source rail
       // (e.g. the anime4up-sourced "this season" rail) resolves the badge — not
-      // just the URL the anime happened to be opened under. The witanime URL is
-      // only known when the page itself is witanime; anime4up/anime3rb pages
-      // never resolve it, and witanime cards look the record up by that href, so
-      // resolve it by title here (memoized — repeat records don't re-search).
+      // just the URL the anime happened to be opened under. Any source whose URL
+      // isn't already known is resolved by title here (memoized — repeat records
+      // don't re-search), all three in parallel.
       const hrefs: (string | null | undefined)[] = [animeHref, merged?.anime4up];
-      if (!isMainSource) {
-        const wit = await findWitanimeAnimeUrl(data.title);
-        if (cancelled) return;
-        if (wit) hrefs.push(wit);
-      }
-      if (!/anime3rb\.com/i.test(animeHref)) {
-        const a3rb = await findAnime3rbAnimeUrl(data.title);
-        if (cancelled) return;
-        if (a3rb) hrefs.push(a3rb);
-      }
+      const has = (re: RegExp) => hrefs.some((h) => h && re.test(h));
+      const resolvers: Promise<void>[] = [];
+      if (!has(/witanime\./i))
+        resolvers.push(findWitanimeAnimeUrl(data.title).then((u) => { if (u) hrefs.push(u); }));
+      if (!has(/anime4up/i))
+        resolvers.push(findAnime4upAnimeUrl(data.title).then((u) => { if (u) hrefs.push(u); }));
+      if (!has(/anime3rb\.com/i))
+        resolvers.push(findAnime3rbAnimeUrl(data.title).then((u) => { if (u) hrefs.push(u); }));
+      await Promise.all(resolvers);
+      if (cancelled) return;
       await recordAnimeCompletion({
         hrefs,
         titles: [data.title],

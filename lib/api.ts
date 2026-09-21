@@ -419,7 +419,10 @@ async function fetchHomeFresh(): Promise<HomePayload> {
     return { success: true, data: { featured: [], sections: [] } };
   }
   const baseHome = home || { featured: [], animes: [], episodes: [] };
-  const result = buildHomePayload({ ...baseHome, episodes: anime4upRecent?.episodes || [] }, []);
+  // anime4up's recent feed wins when it loaded (it is fresher), but a
+  // failed/empty anime4up page must not wipe Witanime's own recent episodes.
+  const recentEps = anime4upRecent?.episodes?.length ? anime4upRecent.episodes : baseHome.episodes;
+  const result = buildHomePayload({ ...baseHome, episodes: recentEps }, []);
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
   // serving it on every launch.
@@ -791,6 +794,20 @@ export function findWitanimeAnimeUrl(title: string): Promise<string | null> {
     witAnimeUrlCache.set(key, getCrossSourceUrl(title, "anime4up").catch(() => null));
   }
   return witAnimeUrlCache.get(key)!;
+}
+
+// Same idea, the other direction: the anime's anime4up page (or null). The
+// detail page only knows it when episodes merged from anime4up, so a record
+// written on a witanime/anime3rb page would miss it — and anime4up-sourced
+// rails (recent feed, seasons) look records up BY that href.
+const up4AnimeUrlCache = new Map<string, Promise<string | null>>();
+export function findAnime4upAnimeUrl(title: string): Promise<string | null> {
+  const key = (title || "").toLowerCase().trim();
+  if (!key) return Promise.resolve(null);
+  if (!up4AnimeUrlCache.has(key)) {
+    up4AnimeUrlCache.set(key, getCrossSourceUrl(title, "witanime").catch(() => null));
+  }
+  return up4AnimeUrlCache.get(key)!;
 }
 
 // ── anime4up episode-level resolution (pagination-aware) ──

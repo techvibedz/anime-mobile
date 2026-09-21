@@ -51,14 +51,14 @@ private object MegaStreamServer {
 
   private fun resolve(embedUrl: String): MegaStream {
     val uri = Uri.parse(embedUrl)
-    require(uri.host?.endsWith("mega.nz", true) == true) { "Invalid MEGA URL" }
+    require(uri.scheme == "https" && (uri.host == "mega.nz" || uri.host?.endsWith(".mega.nz") == true)) { "Invalid MEGA URL" }
     val parts = uri.pathSegments
     val marker = parts.indexOfFirst { it.equals("embed", true) || it.equals("file", true) }
     val handle = if (marker >= 0) parts.getOrNull(marker + 1) else null
     val fragment = uri.fragment
     require(!handle.isNullOrBlank() && !fragment.isNullOrBlank()) { "Incomplete MEGA URL" }
     val rawKey = Base64.decode(fragment, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-    require(rawKey.size >= 32) { "Invalid MEGA key" }
+    require(rawKey.size == 32 && Regex("[A-Za-z0-9_-]{8}").matches(handle)) { "Invalid MEGA key or handle" }
     val key = ByteArray(16) { rawKey[it].toInt().xor(rawKey[it + 16].toInt()).toByte() }
     val nonce = ByteArray(16).also { rawKey.copyInto(it, 0, 16, 24) }
 
@@ -68,11 +68,13 @@ private object MegaStreamServer {
     api.connectTimeout = 15_000
     api.readTimeout = 15_000
     api.setRequestProperty("Content-Type", "application/json")
-    api.outputStream.use { out ->
-      out.write("[{\"a\":\"g\",\"g\":1,\"p\":\"$handle\"}]".toByteArray(StandardCharsets.UTF_8))
-    }
-    require(api.responseCode in 200..299) { "MEGA API ${api.responseCode}" }
-    val body = api.inputStream.bufferedReader().use { it.readText() }
+    val body = try {
+      api.outputStream.use { out ->
+        out.write("[{\"a\":\"g\",\"g\":1,\"ssl\":2,\"p\":\"$handle\"}]".toByteArray(StandardCharsets.UTF_8))
+      }
+      require(api.responseCode in 200..299) { "MEGA API ${api.responseCode}" }
+      api.inputStream.bufferedReader().use { it.readText() }
+    } finally { api.disconnect() }
     val result = JSONArray(body).getJSONObject(0)
     val downloadUrl = result.optString("g")
     val size = result.optLong("s", -1)
@@ -90,7 +92,10 @@ private object MegaStreamServer {
   }
 
   private fun serve(client: java.net.Socket) = client.use { socket ->
+    var upstream: HttpURLConnection? = null
+    var sentHeaders = false
     try {
+      socket.soTimeout = 15_000
       val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII))
       val request = reader.readLine() ?: return@use
       val requestParts = request.split(' ')
@@ -103,25 +108,30 @@ private object MegaStreamServer {
         if (line.startsWith("Range:", true)) range = line.substringAfter(':').trim()
       }
       val stream = streams[token] ?: return@use respond(socket, 404, "Not Found", 0, null)
-      val match = Regex("bytes=(\\d+)-(\\d*)", RegexOption.IGNORE_CASE).find(range ?: "")
+      if (method != "GET" && method != "HEAD") return@use respond(socket, 405, "Method Not Allowed", 0, null)
+      val match = Regex("bytes=(\\d+)-(\\d*)", RegexOption.IGNORE_CASE).matchEntire(range ?: "")
       val start = match?.groupValues?.get(1)?.toLongOrNull() ?: 0L
       val end = (match?.groupValues?.get(2)?.toLongOrNull() ?: (stream.size - 1)).coerceAtMost(stream.size - 1)
-      require(start in 0..end)
+      if ((range != null && match == null) || start !in 0..end) {
+        return@use respond(socket, 416, "Range Not Satisfiable", 0, "bytes */${stream.size}")
+      }
       val partial = match != null
       val length = end - start + 1
-      respond(socket, if (partial) 206 else 200, if (partial) "Partial Content" else "OK", length,
-        if (partial) "bytes $start-$end/${stream.size}" else null, headersOnly = method.equals("HEAD", true))
-      if (method.equals("HEAD", true)) return@use
+      if (method == "HEAD") return@use respond(socket, if (partial) 206 else 200, "OK", length,
+        if (partial) "bytes $start-$end/${stream.size}" else null)
 
       val alignedStart = start - (start % 16)
-      val upstream = URL(stream.downloadUrl).openConnection() as HttpURLConnection
+      // MEGA encodes the encrypted byte range in the URL, not an HTTP Range header.
+      upstream = URL("${stream.downloadUrl.trimEnd('/')}/$alignedStart-$end").openConnection() as HttpURLConnection
       upstream.connectTimeout = 15_000
       upstream.readTimeout = 30_000
-      upstream.setRequestProperty("Range", "bytes=$alignedStart-$end")
       upstream.setRequestProperty("Accept-Encoding", "identity")
-      require(upstream.responseCode == 206 || (upstream.responseCode == 200 && alignedStart == 0L)) {
+      require(upstream.responseCode == 200 || upstream.responseCode == 206) {
         "MEGA stream ${upstream.responseCode}"
       }
+      respond(socket, if (partial) 206 else 200, if (partial) "Partial Content" else "OK", length,
+        if (partial) "bytes $start-$end/${stream.size}" else null, headersOnly = false)
+      sentHeaders = true
       val iv = stream.nonce.copyOf()
       addCounter(iv, alignedStart / 16)
       val cipher = Cipher.getInstance("AES/CTR/NoPadding")
@@ -142,8 +152,9 @@ private object MegaStreamServer {
       }
       socket.getOutputStream().flush()
       input.close()
-      upstream.disconnect()
-    } catch (_: Exception) {}
+    } catch (_: Exception) {
+      if (!sentHeaders) runCatching { respond(socket, 502, "Bad Gateway", 0, null) }
+    } finally { upstream?.disconnect() }
   }
 
   private fun respond(

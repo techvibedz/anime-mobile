@@ -2122,15 +2122,9 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
 // native player's playback UA, so the extracted URL stays valid.
 export async function extractMp4upload(iframeUrl: string): Promise<{ url: string; type: "mp4" } | null> {
   const embedUrl = normalizeEmbedUrl(iframeUrl);
-  for (const timeoutMs of [8000, 15000]) {
-    const got = await fetchEmbed(embedUrl, timeoutMs, "https://www.mp4upload.com/");
-    if (got.blocked) return null;
-    const html = got.html;
-    if (!html) continue;
-    const url = extractMp4uploadUrl(html);
-    if (url) return { url, type: "mp4" };
-  }
-  return null;
+  const got = await fetchEmbed(embedUrl, 8000, "https://www.mp4upload.com/");
+  const url = got.html ? extractMp4uploadUrl(got.html) : null;
+  return url ? { url, type: "mp4" } : null;
 }
 
 /* ── Direct embed resolvers: streamwish / doodstream ───────────────────────

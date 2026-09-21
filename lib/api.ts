@@ -3,6 +3,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import PantoufaDownloads from "../modules/pantoufa-downloads";
+import { resolveWitanimeEpisode } from "./witanimeMatch";
 import {
   scrapeWitanimeHome,
   scrapeEpisodesPage,
@@ -21,6 +22,10 @@ import {
 } from "./scraper";
 import {
   searchAnime4upDirect,
+  searchWitanimeDirect,
+  fetchHtml,
+  getWitBase,
+  rewriteWitUrl,
   searchAnime4upDirectList,
   scrapeAnime4upEpisodePageDirect,
   scrapeWitanimeEpisodePageDirect,
@@ -86,12 +91,12 @@ const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const RECENT_CACHE_PREFIX = "@recent_v8:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v7:";
+const SERVERS_CACHE_PREFIX = "@servers_v8:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v1";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
 const completeVideoServerRequests = createRequestCache<VideoServersPayload>(30_000);
-const videoResolutionRequests = createRequestCache<ResolveVideoResult>(20_000);
+const videoResolutionRequests = createRequestCache<ResolveVideoResult>(90_000);
 
 async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
   try {
@@ -1309,6 +1314,17 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       : fetchVideoServers(episodeUrl, undefined, !!options.force).catch(() => null);
 
     const episodeNumber = options.episodeNumber ?? episodeNumberFromUrl(episodeUrl);
+    const loadWit = async (title: string): Promise<VideoServersPayload | null> => {
+      if ((!primaryIsUp4 && !primaryIsA3rb) || episodeNumber == null) return null;
+      const base = await getWitBase();
+      const href = await resolveWitanimeEpisode(
+        title, episodeNumber, options.animeHref ? rewriteWitUrl(options.animeHref, base) : null,
+        (query) => withTimeout(searchWitanimeDirect(query), 8_000, null),
+        (name) => withTimeout(getAltTitles(name), 5_000, []), tm_seasonNum,
+        (url) => withTimeout(fetchHtml(url, base + "/"), 8_000, null),
+      ).catch(() => null);
+      return href ? fetchVideoServers(href, undefined, !!options.force).catch(() => null) : null;
+    };
     const loadUp4 = async (title: string): Promise<VideoServersPayload | null> => {
       if (primaryIsUp4) return null;
       let href = options.url4up || null;
@@ -1349,6 +1365,15 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     };
 
     const initialTitle = (options.animeTitle || "").trim();
+    const warming = new Set<string>();
+    const warm = (payload: VideoServersPayload) => {
+      const servers = selectWarmupServers(payload.data.servers).filter((server) => !warming.has(server.iframeUrl));
+      servers.forEach((server) => warming.add(server.iframeUrl));
+      if (servers.length) void resolveDirectServerList(servers, 40_000, !!options.force, (playable) => {
+        options.onPartial?.({ ...payload, data: { ...payload.data, servers: playable, serverCount: playable.length } });
+      }).catch(() => {});
+    };
+    let witPromise = initialTitle || options.animeHref ? loadWit(initialTitle) : null;
     let up4Promise = initialTitle || options.url4up ? loadUp4(initialTitle) : null;
     let a3rbPromise = initialTitle || options.url3rb || /anime3rb\.com\/episode\//i.test(episodeUrl)
       ? loadA3rb(initialTitle)
@@ -1361,6 +1386,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       metadata: VideoServersPayload | null,
     ) => {
       if (servers.length === 0) return;
+      warm({ success: true, data: { episodeTitle: metadata?.data.episodeTitle || "", animeTitle: initialTitle || metadata?.data.animeTitle || "", animeHref: options.animeHref || "", servers, serverCount: servers.length, navigation: { prev: null, next: null } } });
       options.onCandidates?.({
         success: true,
         data: {
@@ -1374,6 +1400,9 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       });
     };
     void primaryPromise.then((result) => {
+      if (result?.data.servers.length) emitEarly(result.data.servers, result);
+    });
+    if (witPromise) void witPromise.then((result) => {
       if (result?.data.servers.length) emitEarly(result.data.servers, result);
     });
     if (up4Promise) void up4Promise.then((result) => {
@@ -1391,6 +1420,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     }
     if (!up4Promise) up4Promise = loadUp4(resolvedTitle);
     if (!a3rbPromise) a3rbPromise = loadA3rb(resolvedTitle);
+    if (!witPromise) witPromise = loadWit(resolvedTitle);
 
     const discovered = new Map<string, (VideoServer & { source?: string })[]>();
     let lastCandidateSignature = "";
@@ -1418,7 +1448,16 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     }
     const observedUp4 = up4Promise.then((result) => {
       if (result?.data.servers.length) {
+        warm(result);
         discovered.set("anime4up", result.data.servers);
+        emitCandidates(primary || result);
+      }
+      return result;
+    });
+    const observedWit = witPromise.then((result) => {
+      if (result?.data.servers.length) {
+        warm(result);
+        discovered.set("witanime", result.data.servers);
         emitCandidates(primary || result);
       }
       return result;
@@ -1456,18 +1495,12 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     // Warm the best three native candidates immediately, including their
     // hidden extractor fallback. Limiting this to three leaves one WebView
     // slot available for cross-source discovery instead of saturating the pool.
-    if (primary && primary.data.servers.length > 0) {
-      void resolveDirectServerList(
-        selectWarmupServers(primary.data.servers),
-        40_000,
-        !!options.force,
-        (playable) => emit(playable, primary),
-      );
-    }
+    if (primary) warm(primary);
     const remaining = Math.max(0, discoveryDeadline - Date.now());
-    const [up4, a3rb] = await Promise.all([
+    const [up4, a3rb, wit] = await Promise.all([
       withTimeout(observedUp4, remaining, null),
       withTimeout(observedA3rb, remaining, [] as RawServer[]),
+      withTimeout(observedWit, remaining, null),
     ]);
     const a3rbServers: (VideoServer & { source?: string })[] = a3rb.map((server) => ({
       ...server,
@@ -1475,14 +1508,15 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     }));
     const candidates = mergeVideoServers([
       primary?.data.servers || [],
+      wit?.data.servers || [],
       up4?.data.servers || [],
       a3rbServers,
     ]);
-    const metadata = primary || up4;
+    const metadata = primary || wit || up4;
     const playable = await resolveDirectServerList(
       candidates,
       40_000,
-      !!options.force,
+      false,
       (playable) => emit(playable, metadata),
     );
     const servers = mergePlayableServers(candidates, playable);

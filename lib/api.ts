@@ -777,6 +777,22 @@ export async function fetchEpisodesUp4(
   return result;
 }
 
+// Public resolver for an anime's Witanime page (or null). The detail page only
+// knows the Witanime URL when the anime was opened FROM Witanime — a completion
+// record written on an anime4up / anime3rb page then carries no Witanime href,
+// and Witanime-sourced poster cards look that record up BY href, so their badge
+// never lit up. Memoized per title for the session (a null is remembered too, so
+// the recording effect's re-fires don't re-run the rate-limited search).
+const witAnimeUrlCache = new Map<string, Promise<string | null>>();
+export function findWitanimeAnimeUrl(title: string): Promise<string | null> {
+  const key = (title || "").toLowerCase().trim();
+  if (!key) return Promise.resolve(null);
+  if (!witAnimeUrlCache.has(key)) {
+    witAnimeUrlCache.set(key, getCrossSourceUrl(title, "anime4up").catch(() => null));
+  }
+  return witAnimeUrlCache.get(key)!;
+}
+
 // ── anime4up episode-level resolution (pagination-aware) ──
 // anime4up anime pages only list the newest ~40 episodes on page 1 (One Piece
 // spans 25 pages), so the episode-list match above can NEVER find an older

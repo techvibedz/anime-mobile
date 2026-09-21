@@ -236,15 +236,18 @@ Deno.serve(async (req) => {
   }
 
   // Check the small shared queue before downloading every user's tokens and
-  // favorites. Most cron runs are idle, so fan-out data is unnecessary egress.
+  // favorites. A row is processed once; keeping handled rows for the TTL still
+  // deduplicates repeated client reports without re-running the full fan-out.
   const cutoff = new Date(Date.now() - QUEUE_TTL_HOURS * 3600 * 1000).toISOString();
   const { data: queueRows } = await supabase
     .from("episode_queue")
-    .select("*")
+    .select("episode_key, anime_key, anime_title, anime_href, episode_title, episode_href, episode_number, image, created_at")
+    .is("processed_at", null)
     .gte("created_at", cutoff)
     .order("created_at", { ascending: true })
     .limit(500);
-  const sanitized = ((queueRows ?? []) as QueueRow[]).filter(isPlausibleRow).map(sanitizeRow);
+  const pendingRows = (queueRows ?? []) as QueueRow[];
+  const sanitized = pendingRows.filter(isPlausibleRow).map(sanitizeRow);
   const queueByKey = new Map<string, QueueRow>();
   for (const q of sanitized) {
     const ek = `${normAnimeKey(q.anime_key)}#${q.episode_number}`;
@@ -252,6 +255,12 @@ Deno.serve(async (req) => {
   }
   const queue = [...queueByKey.values()];
   if (queue.length === 0) {
+    if (pendingRows.length > 0) {
+      await supabase
+        .from("episode_queue")
+        .update({ processed_at: new Date().toISOString() })
+        .in("episode_key", pendingRows.map((q) => q.episode_key));
+    }
     try {
       await supabase.from("episode_queue").delete().lt("created_at", cutoff);
     } catch { /* ignore */ }
@@ -389,6 +398,13 @@ Deno.serve(async (req) => {
   }
 
   await sendExpoPush(messages);
+
+  // Do this after delivery. If the update fails, the next run retries the row;
+  // notified_episodes still prevents duplicate pushes.
+  await supabase
+    .from("episode_queue")
+    .update({ processed_at: new Date().toISOString() })
+    .in("episode_key", pendingRows.map((q) => q.episode_key));
 
   // Housekeeping: drop queue rows past the TTL.
   try {

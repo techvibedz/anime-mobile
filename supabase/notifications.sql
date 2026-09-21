@@ -76,8 +76,14 @@ create table if not exists public.episode_queue (
   episode_href   text,
   episode_number integer not null,
   image          text,
-  created_at     timestamptz not null default now()
+  created_at     timestamptz not null default now(),
+  processed_at   timestamptz
 );
+
+-- Existing projects need the delivery marker added without rebuilding or
+-- rewriting the queue. New reports remain NULL until the notifier handles them.
+alter table public.episode_queue
+  add column if not exists processed_at timestamptz;
 
 alter table public.episode_queue enable row level security;
 

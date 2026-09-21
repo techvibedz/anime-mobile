@@ -52,6 +52,7 @@ supabase/.temp/
 *.apk
 
 # Agent tooling / local state (not part of the app)
+.tmp-*
 .agents/
 .claude/
 .codex/

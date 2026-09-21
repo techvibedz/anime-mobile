@@ -8,32 +8,75 @@ import { useAuth } from "../../lib/auth";
 import { C, R, S, ELEVATION_GLOW, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora } from "../../components/ScreenChrome";
+import { authErrorKey, needsConfirmationHelp, type AuthErrorKey } from "../../lib/authErrors";
+import { remoteLog } from "../../lib/remoteLog";
 
 export default function Login() {
   const insets = useSafeAreaInsets();
-  const { signInWithEmail, signInWithGoogle, isConfigured } = useAuth();
+  const { signInWithEmail, signInWithGoogle, resendConfirmation, sendSignInLink, isConfigured } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [helpLoading, setHelpLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Auth failures are shown through their translated reason, never as the raw
+  // English GoTrue message.
+  const [errorKey, setErrorKey] = useState<AuthErrorKey | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function handleLogin() {
     setError(null);
+    setErrorKey(null);
+    setNotice(null);
     if (!email.trim() || !password) { setError(t.emailPasswordRequired); return; }
     setLoading(true);
     const { error: err } = await signInWithEmail(email, password);
     setLoading(false);
-    if (err) setError(err);
+    if (err) {
+      setErrorKey(authErrorKey(err));
+      // Keep the real reason in the admin log: this project requires email
+      // confirmation, so most "I can't log in" reports are exactly that.
+      void remoteLog("warn", "auth", "password sign-in rejected", { reason: err });
+    }
+  }
+
+  // Confirmation-email paths. The project has mailer_autoconfirm OFF, so a
+  // password sign-in is rejected until the address is confirmed — these two
+  // actions let the user finish from inside the app instead of dead-ending.
+  async function handleResend() {
+    setError(null);
+    setErrorKey(null);
+    setNotice(null);
+    if (!email.trim()) { setError(t.emailPasswordRequired); return; }
+    setHelpLoading(true);
+    const { error: err } = await resendConfirmation(email);
+    setHelpLoading(false);
+    if (err) setErrorKey(authErrorKey(err));
+    else setNotice(t.resendConfirmationSent);
+  }
+
+  async function handleSignInLink() {
+    setError(null);
+    setErrorKey(null);
+    setNotice(null);
+    if (!email.trim()) { setError(t.emailPasswordRequired); return; }
+    setHelpLoading(true);
+    const { error: err } = await sendSignInLink(email);
+    setHelpLoading(false);
+    if (err) setErrorKey(authErrorKey(err));
+    else setNotice(t.signInLinkSent);
   }
 
   async function handleGoogle() {
     setError(null);
+    setErrorKey(null);
+    setNotice(null);
     setGoogleLoading(true);
     const { error: err } = await signInWithGoogle();
     setGoogleLoading(false);
-    if (err) setError(err);
+    if (err) setErrorKey(authErrorKey(err));
   }
 
   return (
@@ -139,6 +182,34 @@ export default function Login() {
             <View style={ss.errorBox}>
               <Ionicons name="alert-circle" size={14} color={C.accent} />
               <Text style={ss.errorText}>{error}</Text>
+            </View>
+          )}
+
+          {errorKey && (
+            <View style={ss.errorBox}>
+              <Ionicons name="alert-circle" size={14} color={C.accent} />
+              <Text style={ss.errorText}>{t.authErrors[errorKey]}</Text>
+            </View>
+          )}
+
+          {errorKey && needsConfirmationHelp(errorKey) && (
+            <View style={ss.helpBox}>
+              <Text style={ss.helpText}>{t.confirmEmailHelp}</Text>
+              <Pressable style={ss.helpBtn} onPress={handleResend} disabled={helpLoading}>
+                <Ionicons name="mail-unread-outline" size={14} color={C.accent} />
+                <Text style={ss.helpBtnText}>{t.resendConfirmation}</Text>
+              </Pressable>
+              <Pressable style={ss.helpBtn} onPress={handleSignInLink} disabled={helpLoading}>
+                <Ionicons name="link-outline" size={14} color={C.accent} />
+                <Text style={ss.helpBtnText}>{t.sendSignInLink}</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {notice && (
+            <View style={ss.noticeBox}>
+              <Ionicons name="checkmark-circle" size={14} color={C.success} />
+              <Text style={ss.noticeText}>{notice}</Text>
             </View>
           )}
 
@@ -251,6 +322,27 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: C.borderAccent,
   },
   errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "right" },
+
+  helpBox: {
+    backgroundColor: C.inkHigh, borderRadius: R.lg, padding: 12, marginTop: 8,
+    borderWidth: 1, borderColor: C.line, gap: 8,
+  },
+  helpText: {
+    color: C.textSecondary, fontSize: 12, lineHeight: 18,
+    fontFamily: "Cairo_500Medium", textAlign: "right", writingDirection: "rtl",
+  },
+  helpBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 10, borderRadius: R.md,
+    borderWidth: 1, borderColor: C.borderAccent, backgroundColor: C.accentSoft,
+  },
+  helpBtnText: { color: C.accent, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
+
+  noticeBox: {
+    flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: C.successSoft,
+    borderRadius: R.lg, padding: 12, marginTop: 8, borderWidth: 1, borderColor: C.line,
+  },
+  noticeText: { color: C.text, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
   submitWrap: { borderRadius: R.pill, marginTop: 16, ...ELEVATION_GLOW },
   submitBtn: {

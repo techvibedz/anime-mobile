@@ -8,16 +8,19 @@ import { useAuth } from "../../lib/auth";
 import { C, R, S, ELEVATION_GLOW, ELEVATION_CARD } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora } from "../../components/ScreenChrome";
+import { authErrorKey } from "../../lib/authErrors";
 
 export default function Register() {
   const insets = useSafeAreaInsets();
-  const { signUpWithEmail, signInWithGoogle, isConfigured } = useAuth();
+  const { signUpWithEmail, signInWithGoogle, resendConfirmation, isConfigured } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendNotice, setResendNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsConfirmation, setNeedsConfirmation] = useState(false);
 
@@ -29,8 +32,20 @@ export default function Register() {
     setLoading(true);
     const res = await signUpWithEmail(email, password);
     setLoading(false);
-    if (res.error) { setError(res.error); return; }
+    if (res.error) { setError(authErrorKey(res.error) === "unknown" ? res.error : t.authErrors[authErrorKey(res.error)]); return; }
+    // Supabase reports "success" for an address that already has an account
+    // (it won't leak which addresses exist). Saying "check your inbox" to that
+    // user left them waiting for an email that never comes.
+    if (res.emailExists) { setError(t.emailAlreadyRegisteredHint); return; }
     if (res.needsConfirmation) setNeedsConfirmation(true);
+  }
+
+  async function handleResend() {
+    setResendNotice(null);
+    setResendLoading(true);
+    const { error: err } = await resendConfirmation(email);
+    setResendLoading(false);
+    setResendNotice(err ? t.authErrors[authErrorKey(err)] : t.resendConfirmationSent);
   }
 
   async function handleGoogle() {
@@ -54,6 +69,17 @@ export default function Register() {
         </LinearGradient>
         <Text style={ss.confirmTitle}>{t.checkInbox}</Text>
         <Text style={ss.confirmText}>{t.confirmEmailSent(email)}</Text>
+        <Pressable style={ss.resendBtn} onPress={handleResend} disabled={resendLoading}>
+          {resendLoading ? (
+            <ActivityIndicator color={C.accent} />
+          ) : (
+            <>
+              <Ionicons name="mail-unread-outline" size={15} color={C.accent} />
+              <Text style={ss.resendText}>{t.resendConfirmation}</Text>
+            </>
+          )}
+        </Pressable>
+        {resendNotice && <Text style={ss.resendNotice}>{resendNotice}</Text>}
         <Pressable
           style={({ pressed }) => [ss.submitWrap, pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] }]}
           onPress={() => router.replace("/(auth)/login")}
@@ -305,6 +331,17 @@ const ss = StyleSheet.create({
     color: C.text, fontSize: 28, fontWeight: "800", marginBottom: 12,
     fontFamily: "Cairo_700Bold", textAlign: "right", writingDirection: "rtl",
   },
+  resendBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 12, paddingHorizontal: 18, borderRadius: R.md,
+    borderWidth: 1, borderColor: C.borderAccent, backgroundColor: C.accentSoft,
+  },
+  resendText: { color: C.accent, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
+  resendNotice: {
+    color: C.textSecondary, fontSize: 12, marginTop: 12, lineHeight: 20,
+    fontFamily: "Cairo_500Medium", textAlign: "center",
+  },
+
   confirmText: {
     color: C.textSecondary, fontSize: 14, lineHeight: 22, marginBottom: 32,
     fontFamily: "Cairo_500Medium", textAlign: "right", writingDirection: "rtl",

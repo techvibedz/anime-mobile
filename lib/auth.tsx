@@ -16,10 +16,15 @@ interface AuthState {
   ready: boolean;
   isConfigured: boolean;
   signInWithEmail: (email: string, password: string) => Promise<{ error?: string }>;
-  signUpWithEmail: (email: string, password: string) => Promise<{ error?: string; needsConfirmation?: boolean }>;
+  signUpWithEmail: (email: string, password: string) => Promise<{ error?: string; needsConfirmation?: boolean; emailExists?: boolean }>;
   signInWithGoogle: () => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   sendPasswordReset: (email: string) => Promise<{ error?: string }>;
+  /** Re-send the confirmation link. This project requires email confirmation,
+   * so a password sign-in is rejected until the link is opened. */
+  resendConfirmation: (email: string) => Promise<{ error?: string }>;
+  /** One-time sign-in link — works even when the account is unconfirmed. */
+  sendSignInLink: (email: string) => Promise<{ error?: string }>;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -109,10 +114,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signUpWithEmail = useCallback(async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      // Send the confirmation link BACK INTO THE APP. Without this GoTrue
+      // redirects to the project's Site URL — a website that has nothing to do
+      // with this flow — so the user "confirms" on the web and the app never
+      // gets a session (the account then looks permanently unconfirmed).
+      options: { emailRedirectTo: Linking.createURL("/auth-callback") },
+    });
     if (error) return { error: error.message };
-    // Supabase requires email confirmation if enabled — no session returned until confirmed
+    // Supabase answers "success" with a user that has NO identities when the
+    // address is already registered (it refuses to confirm that to the caller).
+    // Left alone the screen told an existing user "check your inbox" forever.
+    if (data.user && (data.user.identities?.length ?? 0) === 0) return { emailExists: true };
+    // Confirmation is enabled on this project — no session until confirmed.
     return { needsConfirmation: !data.session };
+  }, []);
+
+  const resendConfirmation = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: email.trim(),
+      options: { emailRedirectTo: Linking.createURL("/auth-callback") },
+    });
+    return { error: error?.message };
+  }, []);
+
+  const sendSignInLink = useCallback(async (email: string) => {
+    // shouldCreateUser:false — this is a SIGN-IN link for an existing account,
+    // never a registration path (GoTrue silently no-ops for unknown addresses).
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { shouldCreateUser: false, emailRedirectTo: Linking.createURL("/auth-callback") },
+    });
+    return { error: error?.message };
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
@@ -163,6 +199,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithGoogle,
         signOut,
         sendPasswordReset,
+        resendConfirmation,
+        sendSignInLink,
       }}
     >
       {children}

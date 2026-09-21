@@ -63,6 +63,15 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
     private val cache = ConcurrentHashMap<String, CacheEntry>()
 
     override fun lookup(hostname: String): List<InetAddress> {
+        // Literal addresses and localhost NEVER go to DoH. The MEGA decrypter
+        // serves playback from http://127.0.0.1:PORT/..., and public resolvers
+        // answer NXDOMAIN for "127.0.0.1" / "localhost" (Cloudflare and Google
+        // both return Status 3, never the address itself). Every request to the
+        // local stream therefore paid two dead DoH round-trips before falling
+        // back to the system resolver — up to 5s each on a network that blocks
+        // 1.1.1.1 — which blew the 8s playback probe and stalled ExoPlayer.
+        // That is the "MEGA server does not work in the native player" report.
+        if (isLiteralHost(hostname)) return listOf(InetAddress.getByName(hostname))
         val now = System.currentTimeMillis()
         cache[hostname]?.let {
             if (it.expiresAt > now) return it.addresses
@@ -81,6 +90,16 @@ class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
         } catch (_: Exception) {
             throw UnknownHostException(hostname)
         }
+    }
+
+    /** IPv4/IPv6 literals and localhost: the OS resolves those, DoH must not. */
+    private fun isLiteralHost(hostname: String): Boolean {
+        val host = hostname.trim().removePrefix("[").removeSuffix("]")
+        if (host.isEmpty()) return false
+        if (host.equals("localhost", ignoreCase = true)) return true
+        if (host.contains(':')) return true
+        val parts = host.split(".")
+        return parts.size == 4 && parts.all { part -> part.isNotEmpty() && part.all { it.isDigit() } }
     }
 
     private fun resolveDoh(hostname: String): DohResult? {

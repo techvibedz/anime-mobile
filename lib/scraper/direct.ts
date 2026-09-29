@@ -457,7 +457,17 @@ export async function fetchWitanimeAnimeSections(
 export type WitHomeFeatured = { title: string; href: string; image: string | null; description: string | null; genres: string[] };
 export type WitHomeAnime = { title: string; href: string; image: string | null; type: string | null; status: string | null; description: string | null; isNew: boolean; rating: string | null };
 export type WitHomeEpisode = { title: string; href: string; image: string | null; animeTitle: string; animeHref: string; isNew: boolean };
-export type WitHome = { featured: WitHomeFeatured[]; animes: WitHomeAnime[]; episodes: WitHomeEpisode[] };
+export type WitHome = {
+  featured: WitHomeFeatured[];
+  animes: WitHomeAnime[];
+  episodes: WitHomeEpisode[];
+  // Rails the home feed renders as-is, in page order. Optional: only the
+  // witanime direct parse fills them (anime4up / anime3rb homes have no such
+  // sections, and old cached payloads simply yield none).
+  latestMovies?: WitHomeAnime[];
+  topAnimes?: WitHomeAnime[];
+  topMovies?: WitHomeAnime[];
+};
 
 function parseHomeSlides(html: string): { featured: WitHomeFeatured[]; episodes: WitHomeEpisode[] } {
   const featured: WitHomeFeatured[] = [];
@@ -553,8 +563,8 @@ export function parseWitFeatured(html: string): WitHomeFeatured[] {
 // Parse the home anime cards into the home payload's anime shape. parseWitCards
 // already extracts every .anime-card-container (title/href/image/type/status),
 // so reuse it and derive isNew from the ongoing-status marker.
-function parseWitHomeAnimes(html: string): WitHomeAnime[] {
-  return parseWitCards(html).map((c) => ({
+function toWitHomeAnimes(cards: WitCard[]): WitHomeAnime[] {
+  return cards.map((c) => ({
     title: c.title,
     href: c.href,
     image: c.image,
@@ -564,6 +574,34 @@ function parseWitHomeAnimes(html: string): WitHomeAnime[] {
     isNew: (c.status || "").indexOf("مستمر") >= 0,
     rating: null,
   }));
+}
+
+function parseWitHomeAnimes(html: string): WitHomeAnime[] {
+  return toWitHomeAnimes(parseWitCards(html));
+}
+
+// Slice one server-rendered home section (from its <h2> heading to the end of
+// its <section>) and parse its cards with the shared card parser.
+function witSectionCards(html: string, heading: string): WitCard[] {
+  const m = new RegExp(`<h2[^>]*>\\s*${heading}\\s*</h2>`).exec(html);
+  if (!m || m.index == null) return [];
+  const end = html.indexOf("</section>", m.index);
+  return parseWitCards(end > m.index ? html.slice(m.index, end) : html.slice(m.index));
+}
+
+// The three witanime home rails the app shows below "latest episodes": latest
+// movies, all-time most-watched animes, all-time most-watched movies. All live
+// in the same home-page GET as everything else — no extra request per rail.
+export function parseWitHomeRails(html: string): {
+  latestMovies: WitHomeAnime[];
+  topAnimes: WitHomeAnime[];
+  topMovies: WitHomeAnime[];
+} {
+  return {
+    latestMovies: toWitHomeAnimes(witSectionCards(html, "أحدث الأفلام")),
+    topAnimes: toWitHomeAnimes(witSectionCards(html, "أكثر الأنميات مشاهدة")),
+    topMovies: toWitHomeAnimes(witSectionCards(html, "أكثر الأفلام مشاهدة")),
+  };
 }
 
 // Parse the recent-episode cards (.episodes-card-container). Each block carries
@@ -628,7 +666,7 @@ export async function fetchWitHomeDirect(): Promise<WitHome | null> {
   const featured = parseWitFeatured(html);
   return { featured: featured.length ? featured : animes.slice(0, 5).map((item) => ({
     title: item.title, href: item.href, image: item.image, description: null, genres: [],
-  })), animes, episodes };
+  })), animes, episodes, ...parseWitHomeRails(html) };
 }
 
 // The witanime schedule page (/schedule) is static HTML grouped by weekday with

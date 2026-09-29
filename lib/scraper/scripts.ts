@@ -150,12 +150,44 @@ function heroSlides() {
   });
   return out;
 }
+// One home rail by its section heading ("أحدث الأفلام", "أكثر الأنميات مشاهدة"…).
+// Current witanime renders each rail as a <section> whose first headings are a
+// <h2>; find the heading, scope to its section, and read the standard
+// h3+img card anchors. No-op on legacy/missing layouts (returns []).
+function headingCards(heading) {
+  var out = [];
+  var seen = {};
+  var headings = document.querySelectorAll('h2');
+  for (var i = 0; i < headings.length; i++) {
+    if ((headings[i].textContent || '').trim() !== heading) continue;
+    var root = headings[i].closest('section') || headings[i].parentElement;
+    if (!root) return out;
+    root.querySelectorAll('a[href*="/anime/"], a[href*="/movie/"]').forEach(function (a) {
+      var href = _absUrl(a.getAttribute('href') || '', location.origin);
+      var h3 = a.querySelector('h3');
+      var title = h3 ? (h3.textContent || '').trim() : '';
+      if (!href || !title || seen[href]) return;
+      seen[href] = true;
+      out.push({ title: title, href: href, image: _bestImg(a), type: null, status: null, description: null, isNew: false, rating: null });
+    });
+    return out;
+  }
+  return out;
+}
+function homeRails() {
+  return {
+    latestMovies: headingCards('أحدث الأفلام'),
+    topAnimes: headingCards('أكثر الأنميات مشاهدة'),
+    topMovies: headingCards('أكثر الأفلام مشاهدة'),
+  };
+}
 function scrape() {
+  var rails = homeRails();
   var hero = heroSlides();
   var siteAnimes = _siteCards().filter(function (item) { return item.href.indexOf('/anime/') >= 0; });
   var siteEpisodes = _siteEpisodes();
   if (hero.length || siteAnimes.length || siteEpisodes.length) {
-    return {
+    return Object.assign({
       featured: hero.length ? hero : siteAnimes.slice(0, 5).map(function (item) {
         return { title: item.title, href: item.href, image: item.image, description: null, genres: [] };
       }),
@@ -163,7 +195,7 @@ function scrape() {
         return { title: item.title, href: item.href, image: item.image, type: item.type, status: item.status, description: null, isNew: false, rating: null };
       }),
       episodes: siteEpisodes,
-    };
+    }, rails);
   }
   var featured = [];
   document.querySelectorAll('.lucodeia-slider-slide-item').forEach(function (el) {
@@ -221,7 +253,7 @@ function scrape() {
     });
   });
 
-  return { featured: featured.slice(0, 5), animes: animes, episodes: episodes };
+  return Object.assign({ featured: featured.slice(0, 5), animes: animes, episodes: episodes }, rails);
 }
 _waitFor(
   function(){ return !!document.querySelector('[data-hero-slide], a[href*="/anime/"] h3, a[href*="/watch/"] h3, .anime-card-container, .lucodeia-slider-slide-item, .episodes-card-container'); },

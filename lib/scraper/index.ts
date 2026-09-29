@@ -48,7 +48,15 @@ export async function scrapeWitanimeHome() {
     url: `${base}/`,
     injectAfter: EXTRACT_HOME_WIT,
     timeoutMs: 35000,
-  }) as Promise<{ featured: RawFeatured[]; animes: RawAnime[]; episodes: RawEpisodeCard[] }>;
+  }) as Promise<{
+    featured: RawFeatured[];
+    animes: RawAnime[];
+    episodes: RawEpisodeCard[];
+    // Home rails below "latest episodes" (present on the current layout only).
+    latestMovies?: RawAnime[];
+    topAnimes?: RawAnime[];
+    topMovies?: RawAnime[];
+  }>;
 }
 
 export async function scrapeAnime4upHome() {

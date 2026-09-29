@@ -28,7 +28,6 @@ import type { WatchEntry } from "../../lib/history";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebar } from "../../components/Sidebar";
 import { Shimmer } from "../../components/Shimmer";
-import { SourceRail } from "../../components/SourceRail";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
 import { reconcileCompletionFromEpisodes } from "../../lib/completion";
@@ -53,20 +52,17 @@ const EP_H = 112;
 const PAD = S.paddingContent;
 
 const SECTION_LABELS: Record<string, string> = {
-  trending: "الأكثر رواجًا",
   recently_updated: "حلقات جديدة",
-  tv_series: "مسلسلات",
-  movies: "أفلام",
+  latest_movies: "أحدث الأفلام",
+  top_animes: "أكثر الأنميات مشاهدة",
+  top_movies: "أكثر الأفلام مشاهدة",
 };
 
-// Display order for the home sections: New Episodes first, then Most Popular,
-// then everything else in the API's original order (stable sort). Continue
-// Watching is rendered separately above and is unaffected.
-const SECTION_ORDER = ["recently_updated", "trending"];
-function sectionRank(id: string): number {
-  const i = SECTION_ORDER.indexOf(id);
-  return i === -1 ? SECTION_ORDER.length : i;
-}
+// The home feed shows ONLY witanime's own rails, in payload order: latest
+// episodes, then latest movies / most-watched animes / most-watched movies.
+// Filtering to the known ids keeps a stale cached payload from resurrecting
+// the removed "trending"/"movies" sections.
+const HOME_SECTION_IDS = ["recently_updated", "latest_movies", "top_animes", "top_movies"];
 
 /* ── Hero Carousel (isolated) ──────────────────────────────────
    Owns its OWN paging index + 5s auto-advance timer, so a hero tick or swipe
@@ -381,21 +377,19 @@ export default function HomeScreen() {
     getUnreadCount().then(setUnread).catch(() => {});
   }, []));
 
-  // Filter + order the section rails once per `sections` change, not on every
-  // re-render (focus history/unread updates) — keeps unrelated state changes off
-  // the work of rebuilding the rail list.
+  // Show only the known witanime rails, in the payload's (display) order.
   const visibleSections = useMemo(
-    () => sections
-      .filter((s) => s.id !== "tv_series")
-      .sort((a, b) => sectionRank(a.id) - sectionRank(b.id)),
+    () => sections.filter((s) => HOME_SECTION_IDS.includes(s.id)),
     [sections],
   );
 
   if (loading) return <HomeSkeleton />;
 
   // Genuinely nothing to show after the retries were exhausted — give the user
-  // a clear retry affordance instead of a near-blank page.
-  if (featured.length === 0 && sections.length === 0 && history.length === 0) {
+  // a clear retry affordance instead of a near-blank page. Uses the filtered
+  // rail list so a payload carrying only dropped/unknown section ids still
+  // lands on the empty state instead of rendering an almost-blank feed.
+  if (featured.length === 0 && visibleSections.length === 0 && history.length === 0) {
     return (
       <HomeEmpty
         insets={insets}
@@ -539,10 +533,6 @@ export default function HomeScreen() {
             </Rise>
           );
         })}
-
-        {/* ── Source-direct rails (scraped from our own sources, no AniList) ── */}
-        <SourceRail kind="season" title={t.railThisSeason} order={0} />
-        <SourceRail kind="movies" title={t.railMovies} order={1} />
 
         {/* Banner ad at the end of the feed (no-op until configured) */}
         <AdBanner style={{ marginTop: S.xxl }} />

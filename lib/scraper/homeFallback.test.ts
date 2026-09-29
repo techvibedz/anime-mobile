@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseAnime4upHomeHtml, parseWitFeatured } from "./direct";
+import { parseAnime4upHomeHtml, parseWitFeatured, parseWitHomeRails } from "./direct";
 import { dedupeRecentEpisodes, loadWitanimeHome, mergeRecentEpisodes } from "../homeSourceSelection";
 
 const html = `
@@ -133,6 +133,68 @@ async function main() {
   assert.equal(hero[1]?.title, "BLACK TORCH");
   assert.equal(hero[1]?.description, "قصة أخرى.");
   assert.deepEqual(hero[1]?.genres, []);
+
+  // Home rails below "latest episodes": witanime's three server-rendered
+  // sections (latest movies / most-watched animes / most-watched movies) are
+  // sliced by heading so a rail can never bleed into a neighbouring one — the
+  // old full-page card scan is exactly what mixed upcoming titles and movies
+  // into the removed "trending" rail. Markup mirrors the live home page.
+  const railsHtml = `
+    <section class="mb-14">
+      <div class="mb-6"><h2 class="text-xl font-bold text-white sm:text-2xl">أحدث الأفلام</h2><span>جديد</span></div>
+      <div class="sm:px-5"><div class="grid grid-cols-2">
+        <a href="https://witanime.site/movie/mononoke-movie-hebigami" class="group relative isolate flex w-full cursor-pointer flex-col overflow-hidden rounded-xl bg-neutral-800" data-preview="https://witanime.site/preview/movie/mononoke-movie-hebigami">
+          <span class="pointer-events-none absolute inset-0"><img src="https://images.witanime.site/posters/f9d60e3bd5990d8286290fc21f2773b6.jpg" alt="" aria-hidden="true" class="h-full w-full scale-150 object-cover opacity-[.12] blur-md"></span>
+          <div class="relative px-3 pb-3 pt-4 text-center"><h3 dir="ltr" class="truncate text-sm font-medium text-white">Mononoke Movie: Hebigami</h3></div>
+          <div class="relative mt-auto"><div class="relative overflow-hidden rounded-t-xl bg-neutral-900"><img src="https://images.witanime.site/posters/f9d60e3bd5990d8286290fc21f2773b6.jpg" alt="Mononoke Movie: Hebigami" class="aspect-[2/3] w-full object-cover"></div></div>
+        </a>
+        <a href="https://witanime.site/movie/kusunoki-no-bannin" class="group relative isolate flex w-full cursor-pointer flex-col overflow-hidden rounded-xl bg-neutral-800">
+          <div class="relative px-3 pb-3 pt-4 text-center"><h3 dir="ltr" class="truncate text-sm font-medium text-white">Kusunoki no Bannin</h3></div>
+          <div class="relative mt-auto"><img src="https://images.witanime.site/posters/93b959150eff48c8c59486380467708c.jpg" alt="Kusunoki no Bannin" class="aspect-[2/3] w-full object-cover"></div>
+        </a>
+      </div></div>
+    </section>
+    <section class="mb-14">
+      <div class="sm:px-5"><div x-data="{ overflowing: false }">
+        <div class="mb-6"><h2 class="text-xl font-bold text-white sm:text-2xl">أكثر الأنميات مشاهدة</h2><span>كل الأوقات</span></div>
+        <a class="@container group block w-full cursor-pointer" data-preview="https://witanime.site/preview/anime/one-piece" href="https://witanime.site/anime/one-piece">
+          <div class="relative mb-3 aspect-[2/3] overflow-hidden rounded-xl bg-neutral-900">
+            <img src="https://images.witanime.site/posters/96b62f648db8ff6cd11e38f430d725f7.jpg" alt="One Piece" class="h-full w-full object-cover opacity-80">
+            <div class="absolute inset-x-0 top-0 z-10"><div class="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-sm font-bold text-black">1</div></div>
+          </div>
+          <h3 dir="ltr" class="truncate text-base font-semibold leading-snug text-white">One Piece</h3>
+        </a>
+      </div></div>
+    </section>
+    <section class="mb-14">
+      <div class="sm:px-5"><div x-data="{ overflowing: false }">
+        <div class="mb-6"><h2 class="text-xl font-bold text-white sm:text-2xl">أكثر الأفلام مشاهدة</h2><span>كل الأوقات</span></div>
+        <a href="https://witanime.site/movie/bleach-sennen-kessen-hen-kashin-tan-movie" class="group relative isolate flex w-full cursor-pointer flex-col overflow-hidden rounded-xl bg-neutral-800" data-preview="https://witanime.site/preview/movie/bleach-sennen-kessen-hen-kashin-tan-movie">
+          <span class="pointer-events-none absolute inset-0"><img src="https://images.witanime.site/posters/2351b991203a615344f5876bd37aec69.jpg" alt="" class="h-full w-full scale-150 blur-md"></span>
+          <div class="relative px-3 pb-3 pt-4 text-center"><h3 dir="ltr" class="truncate text-sm font-medium text-white">BLEACH: Sennen Kessen-hen - Kashin-tan Movie</h3></div>
+          <div class="relative mt-auto"><div class="relative overflow-hidden rounded-t-xl bg-neutral-900"><img src="https://images.witanime.site/posters/2351b991203a615344f5876bd37aec69.jpg" alt="BLEACH: Sennen Kessen-hen - Kashin-tan Movie" class="aspect-[2/3] w-full object-cover"><div class="absolute start-2 top-2 z-10"><div class="flex h-8 w-8 rounded-lg bg-white text-sm font-bold text-black">1</div></div></div></div>
+        </a>
+      </div></div>
+    </section>`;
+  const rails = parseWitHomeRails(railsHtml);
+  assert.deepEqual(rails.latestMovies.map((c) => c.title), ["Mononoke Movie: Hebigami", "Kusunoki no Bannin"]);
+  assert.equal(rails.latestMovies[0]?.href, "https://witanime.site/movie/mononoke-movie-hebigami");
+  assert.equal(rails.latestMovies[0]?.image, "https://images.witanime.site/posters/f9d60e3bd5990d8286290fc21f2773b6.jpg");
+  assert.equal(rails.latestMovies[0]?.isNew, false);
+  assert.deepEqual(rails.topAnimes.map((c) => c.title), ["One Piece"]);
+  assert.equal(rails.topAnimes[0]?.href, "https://witanime.site/anime/one-piece");
+  // The most-watched rails must not pick up the rank badge div as a type.
+  assert.equal(rails.topAnimes[0]?.type, null);
+  assert.deepEqual(rails.topMovies.map((c) => c.title), ["BLEACH: Sennen Kessen-hen - Kashin-tan Movie"]);
+  assert.equal(rails.topMovies[0]?.href, "https://witanime.site/movie/bleach-sennen-kessen-hen-kashin-tan-movie");
+
+  // A page without those headings (legacy cached HTML / layout drift) must
+  // degrade to empty rails — never harvest cards from unrelated sections.
+  const noRails = parseWitHomeRails(`
+    <section><h2>أنميات قادمة</h2>
+      <a href="https://witanime.site/anime/upcoming-thing"><img src="https://img.example/u.jpg" alt=""><h3>Upcoming Thing</h3></a>
+    </section>`);
+  assert.deepEqual(noRails, { latestMovies: [], topAnimes: [], topMovies: [] });
 
   console.log("home fallback tests passed");
 }

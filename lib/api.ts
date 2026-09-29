@@ -83,7 +83,10 @@ import {
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
 // detail page with a boilerplate/seasons-grid synopsis. Old cached entries
 // are simply ignored, forcing a fresh scrape with the current parsers.
-const HOME_CACHE_KEY = "@home_cache_v7";
+// v8: the home feed dropped the mixed "trending"/"movies" rails for witanime's
+// own latest-movies / most-watched animes / most-watched movies rails, so
+// pre-v8 payloads (wrong section ids) are discarded too.
+const HOME_CACHE_KEY = "@home_cache_v8";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -182,11 +185,6 @@ export interface AnimeItem {
   sourceHrefs?: Record<string, string>;
 }
 
-export interface MergedAnimeItem extends AnimeItem {
-  sources: string[];
-  sourceHrefs: Record<string, string>;
-}
-
 export interface EpisodeItem {
   title: string;
   href: string;
@@ -265,19 +263,6 @@ export type EpisodeCard = EpisodeItem;
 function norm(s: string) {
   return (s || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
 }
-function keyWords(s: string, n = 4) {
-  return norm(s).split(" ").filter((w) => w.length > 2).slice(0, n).join(" ");
-}
-function fuzzyMatch(a: string, b: string) {
-  const ka = keyWords(a, 4);
-  const kb = keyWords(b, 4);
-  if (!ka || !kb) return false;
-  if (ka.includes(kb) || kb.includes(ka)) return true;
-  const wa = ka.split(" ");
-  const wb = kb.split(" ");
-  const common = wa.filter((w) => wb.includes(w));
-  return common.length >= Math.min(3, Math.min(wa.length, wb.length));
-}
 
 function imgOrEmpty(s: string | null | undefined): string {
   return s ?? "";
@@ -354,55 +339,41 @@ function sourceHomeHasContent(home: WitHome | null | undefined): home is WitHome
   return !!home && (home.featured.length > 0 || home.animes.length > 0 || home.episodes.length > 0);
 }
 
-function buildHomePayload(
-  wit: { featured: FeaturedItem[]; animes: any[]; episodes: any[] },
-  up4Animes: { title: string; href: string; image: string | null; type: string | null }[],
-  // Label the cards with the source they actually came from. Normally
-  // "witanime"; the anime3rb last-resort path passes "anime3rb" so the detail
-  // screen treats the href as an anime3rb page (not a witanime one).
-  primarySource: "witanime" | "anime4up" | "anime3rb" = "witanime",
-): HomePayload {
-  const used4up = new Set<string>();
-  const merged: MergedAnimeItem[] = wit.animes.map((w: any) => {
-    const m = up4Animes.find((u) => !used4up.has(u.href) && fuzzyMatch(w.title, u.title));
-    const item: MergedAnimeItem = {
-      ...w,
-      image: imgOrEmpty(w.image),
-      sources: [primarySource],
-      sourceHrefs: { [primarySource]: w.href },
-    };
-    if (m) {
-      used4up.add(m.href);
-      item.sources.push("anime4up");
-      item.sourceHrefs.anime4up = m.href;
-      if (!item.image && m.image) item.image = m.image;
-    }
-    return item;
-  });
-  for (const u of up4Animes) {
-    if (!used4up.has(u.href) && u.title && u.href) {
-      merged.push({
-        title: u.title, href: u.href, image: imgOrEmpty(u.image),
-        type: u.type, status: null, description: null, rating: null, isNew: true,
-        sources: ["anime4up"], sourceHrefs: { anime4up: u.href },
-      });
-    }
-  }
-
+// Build the home feed from witanime's own home rails, in display order: the
+// newest episodes first, then the three source rails below them — latest
+// movies, most-watched animes, most-watched movies. The old "trending" rail
+// mixed every card on the page (upcoming titles + movies) and the derived
+// TV/Movies rails duplicated the source's own sections, so all three were
+// dropped. A rail the source didn't render is simply omitted.
+function buildHomePayload(wit: {
+  featured: FeaturedItem[];
+  episodes: any[];
+  latestMovies?: any[];
+  topAnimes?: any[];
+  topMovies?: any[];
+}): HomePayload {
   const featured: FeaturedItem[] = wit.featured;
   const recentEpisodes: EpisodeItem[] = wit.episodes.map((e: any) => ({
     title: e.title, href: e.href, image: imgOrEmpty(e.image),
     animeTitle: e.animeTitle, animeHref: e.animeHref, isNew: e.isNew,
   }));
+  const toAnimeItems = (cards: any[] | undefined): AnimeItem[] => (cards ?? []).map((c: any) => ({
+    title: c.title, href: c.href, image: imgOrEmpty(c.image),
+    type: c.type ?? null, status: c.status ?? null, description: c.description ?? null,
+    rating: c.rating ?? null, isNew: !!c.isNew,
+  }));
 
   const sections: HomeSection[] = [];
-  if (merged.length > 0) sections.push({ id: "trending", title: "Trending Now", type: "anime", items: merged });
   if (recentEpisodes.length > 0) sections.push({ id: "recently_updated", title: "Recently Updated", type: "episode", items: recentEpisodes });
-
-  const tvItems = merged.filter((a) => a.type && (a.type.includes("TV") || a.type.includes("مسلسل")));
-  const movieItems = merged.filter((a) => a.type && (a.type.includes("فيلم") || a.type.includes("Movie")));
-  if (tvItems.length >= 3) sections.push({ id: "tv_series", title: "TV Series", type: "anime", items: tvItems });
-  if (movieItems.length >= 2) sections.push({ id: "movies", title: "Movies", type: "anime", items: movieItems });
+  const rails: [string, string, any[] | undefined][] = [
+    ["latest_movies", "Latest Movies", wit.latestMovies],
+    ["top_animes", "Most Watched Animes", wit.topAnimes],
+    ["top_movies", "Most Watched Movies", wit.topMovies],
+  ];
+  for (const [id, title, cards] of rails) {
+    const items = toAnimeItems(cards);
+    if (items.length > 0) sections.push({ id, title, type: "anime", items });
+  }
 
   return { success: true, data: { featured: featured.slice(0, 6), sections } };
 }
@@ -428,7 +399,7 @@ async function fetchHomeFresh(): Promise<HomePayload> {
   // Merge instead of replace: anime4up page 1 is often one batch upload, so
   // its per-anime de-dupe alone shrinks the rail to a couple of cards.
   const recentEps = mergeRecentEpisodes(anime4upRecent?.episodes ?? [], baseHome.episodes);
-  const result = buildHomePayload({ ...baseHome, episodes: recentEps }, []);
+  const result = buildHomePayload({ ...baseHome, episodes: recentEps });
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
   // serving it on every launch.
@@ -447,7 +418,7 @@ function fetchHomeFreshShared(): Promise<HomePayload> {
   return homeFreshInFlight;
 }
 
-// Cheap change detector for the SWR push: a new episode / new trending entry
+// Cheap change detector for the SWR push: a new episode / new rail lead item
 // always alters a section's item count or its first item, so comparing section
 // counts + lead hrefs catches every visible change without a full deep-equal.
 function homeSignature(p: HomePayload): string {

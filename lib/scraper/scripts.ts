@@ -114,12 +114,49 @@ const UP4_BASE = "https://w1.anime4up.rest";
 // HOME (witanime) — featured slider + anime cards + recent episodes
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_HOME_WIT = `(function(){${HELPERS}
+function heroSlides() {
+  // Current witanime layout: server-rendered hero carousel ([data-hero-slide]).
+  // Each slide carries the banner, the anime link/title, a meta row
+  // (type/rating/year/episodes/status/genres) and a synopsis paragraph.
+  var out = [];
+  document.querySelectorAll('[data-hero-slide]').forEach(function (el) {
+    var titleEl = el.querySelector('h2 a') || el.querySelector('a[href*="/anime/"]');
+    if (!titleEl) return;
+    var href = _absUrl(titleEl.getAttribute('href') || '', location.origin);
+    var title = (titleEl.textContent || '').trim();
+    if (!href || !title) return;
+    var genres = [];
+    var meta = el.querySelector('div.mb-4');
+    if (meta) {
+      var spans = meta.querySelectorAll('span');
+      var last = spans[spans.length - 1];
+      var text = last ? (last.textContent || '').trim() : '';
+      // Genres are the meta row's last span ("أكشن, مغامرة, شونين"). Skip the
+      // year/count/status spans that precede them.
+      if (text && /[A-Za-zء-ي]/.test(text) && !/[0-9]/.test(text)
+          && text.indexOf('حلق') < 0 && text.indexOf('مستمر') < 0
+          && text.indexOf('مكتمل') < 0 && text !== 'TV' && text !== 'فيلم') {
+        genres = text.split(/[,،]/).map(function (g) { return g.trim(); }).filter(Boolean);
+      }
+    }
+    var p = el.querySelector('p');
+    out.push({
+      title: title,
+      href: href,
+      image: el.querySelector('img') ? _upgradeImg(el.querySelector('img').getAttribute('src')) : null,
+      description: (p && (p.textContent || '').trim()) || null,
+      genres: genres,
+    });
+  });
+  return out;
+}
 function scrape() {
+  var hero = heroSlides();
   var siteAnimes = _siteCards().filter(function (item) { return item.href.indexOf('/anime/') >= 0; });
   var siteEpisodes = _siteEpisodes();
-  if (siteAnimes.length || siteEpisodes.length) {
+  if (hero.length || siteAnimes.length || siteEpisodes.length) {
     return {
-      featured: siteAnimes.slice(0, 5).map(function (item) {
+      featured: hero.length ? hero : siteAnimes.slice(0, 5).map(function (item) {
         return { title: item.title, href: item.href, image: item.image, description: null, genres: [] };
       }),
       animes: siteAnimes.map(function (item) {
@@ -187,7 +224,7 @@ function scrape() {
   return { featured: featured.slice(0, 5), animes: animes, episodes: episodes };
 }
 _waitFor(
-  function(){ return !!document.querySelector('a[href*="/anime/"] h3, a[href*="/watch/"] h3, .anime-card-container, .lucodeia-slider-slide-item, .episodes-card-container'); },
+  function(){ return !!document.querySelector('[data-hero-slide], a[href*="/anime/"] h3, a[href*="/watch/"] h3, .anime-card-container, .lucodeia-slider-slide-item, .episodes-card-container'); },
   function(ok, reason){ if (ok) _send('result', { data: scrape() }); else _send('error', { message: reason }); },
   15000
 );
@@ -326,8 +363,20 @@ function scrape() {
     var url = ep.url || '';
     if (url && url.indexOf('http') !== 0) url = location.origin + '/' + url.replace(/^\\//, '');
     var num = typeof ep.number === 'string' ? parseInt(ep.number, 10) : (ep.number || 0);
+    // Site data sometimes carries type="الحلقة 5" WITH number=5 — the old
+    // concat produced "الحلقة 5 5". Keep the type text when it already ends
+    // with this episode's number.
+    var typeText = (ep.type || '').trim();
+    var numText = ep.number != null && ep.number !== '' ? String(ep.number) : '';
+    var epTitle;
+    if (!typeText) epTitle = numText ? ('الحلقة ' + numText) : ('Episode ' + num);
+    else {
+      var tail = numText && typeText.slice(-numText.length) === numText;
+      var before = numText ? typeText.charAt(typeText.length - numText.length - 1) : '';
+      epTitle = (tail && !/[0-9]/.test(before)) ? typeText : (typeText + ' ' + numText).trim();
+    }
     return {
-      title: ((ep.type || '') + ' ' + (ep.number != null ? ep.number : '')).trim() || ('Episode ' + num),
+      title: epTitle,
       number: num,
       type: ep.type || '',
       screenshot: ep.screenshot || '',

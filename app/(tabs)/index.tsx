@@ -22,13 +22,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchHome } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
 import { episodeNumberFromUrl } from "../../lib/videoProviders";
-import { addFavorite, isFavorite, toAnimeUrl } from "../../lib/favorites";
+import { isEpisodeUrl, toAnimeUrl } from "../../lib/favorites";
 import { getContinueWatching, progressPercent, dismissFromContinue } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebar } from "../../components/Sidebar";
 import { Shimmer } from "../../components/Shimmer";
-import { GlassFill } from "../../components/GlassFill";
 import { SourceRail } from "../../components/SourceRail";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
@@ -37,7 +36,7 @@ import { subscribeHistory } from "../../lib/history";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { PosterCard } from "../../components/PosterCard";
 import { StateView } from "../../components/StateView";
-import { C, S, R, T, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV } from "../../lib/theme";
+import { C, S, R, T, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { checkOnline } from "../../lib/net";
 import { remoteLog, errText } from "../../lib/remoteLog";
@@ -46,7 +45,7 @@ import { posterUrl } from "../../lib/img";
 import { Rise } from "../../components/Rise";
 
 const { width: SW } = Dimensions.get("window");
-const HERO_H = 460;
+const HERO_H = 440;
 const CARD_W = 140;
 const CARD_H = 200;
 const EP_W = 200;
@@ -130,31 +129,31 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
         scrollEventThrottle={16}
       >
         {featured.map((item, i) => (
-          <View key={i} style={ss.heroSlide}>
+          <View key={item.href || i} style={ss.heroSlide}>
             {/* Mesh gradient background */}
             <View style={ss.meshBg}>
               <LinearGradient
                 colors={[C.meshViolet, "transparent"]}
                 start={{ x: 0.2, y: 0.5 }}
                 end={{ x: 0.8, y: 0.5 }}
-                style={[StyleSheet.absoluteFill, { opacity: 0.8 }]}
+                style={[ABSOLUTE_FILL, { opacity: 0.8 }]}
               />
               <LinearGradient
                 colors={[C.meshPink, "transparent"]}
                 start={{ x: 0.8, y: 0.2 }}
                 end={{ x: 0.2, y: 0.8 }}
-                style={[StyleSheet.absoluteFill, { opacity: 0.6 }]}
+                style={[ABSOLUTE_FILL, { opacity: 0.6 }]}
               />
             </View>
             {item.image && (
-              <Image source={{ uri: posterUrl(item.image, SW * 1.5, 1200) }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
+              <Image source={{ uri: posterUrl(item.image, SW * 1.5, 1200) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
             )}
             {/* Protection scrim — deepened so the title / synopsis / CTAs always
                 clear WCAG AA against the darkened plate, never against raw art. */}
             <LinearGradient
               colors={["transparent", "rgba(10,10,11,0.5)", "rgba(10,10,11,0.93)", C.bg]}
               locations={[0, 0.35, 0.72, 1]}
-              style={StyleSheet.absoluteFill}
+              style={ABSOLUTE_FILL}
             />
             {/* Hero content */}
             <View style={ss.heroContent}>
@@ -162,7 +161,6 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
               <View style={ss.chipRow}>
                 {item.genres.slice(0, 3).map((g, gi) => (
                   <View key={gi} style={ss.chip}>
-                    <GlassFill intensity={16} />
                     <Text style={ss.chipText}>{g}</Text>
                   </View>
                 ))}
@@ -176,7 +174,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
                   style={ss.btnPrimaryWrap}
                   onPress={() => {
                     if (!item.href) return;
-                    if (item.href.includes("/episode/")) {
+                    if (isEpisodeUrl(item.href)) {
                       const animeUrl = toAnimeUrl(item.href);
                       // Defer a frame so the press feedback paints before
                       // the heavy watch-screen mount blocks the thread.
@@ -193,20 +191,10 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
                     }
                   }}
                 >
-                  <LinearGradient colors={[C.accent, C.mint]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ss.btnPrimaryGrad}>
+                  <LinearGradient colors={[C.accent, C.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ss.btnPrimaryGrad}>
                     <Ionicons name="play" size={16} color={C.textOnAccent} />
                     <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
                   </LinearGradient>
-                </Pressable>
-                <Pressable
-                  style={ss.btnGlass}
-                  onPress={() => {
-                    if (!item.href) return;
-                    addFavorite({ title: item.title, href: item.href, image: item.image || "" });
-                  }}
-                >
-                  <Ionicons name="heart-outline" size={18} color={C.text} />
-                  <Text style={ss.btnGlassText}>{t.myList}</Text>
                 </Pressable>
               </View>
             </View>
@@ -424,7 +412,7 @@ export default function HomeScreen() {
       <View style={[ss.topBar, { paddingTop: insets.top + 8 }]}>
         <LinearGradient
           colors={[C.bg, "rgba(10,10,11,0.85)", "transparent"]}
-          style={StyleSheet.absoluteFill}
+          style={ABSOLUTE_FILL}
         />
         <View style={ss.topBarInner}>
           <View style={ss.logoRow}>
@@ -435,12 +423,11 @@ export default function HomeScreen() {
               premium control instead of three scattered circles. Each segment
               keeps its own 44px hit target + handler. */}
           <View style={ss.actionCluster}>
-            <GlassFill intensity={20} />
-            <Pressable style={ss.clusterBtn} onPress={() => router.push("/schedule")} hitSlop={8}>
+            <Pressable accessibilityRole="button" accessibilityLabel={t.scheduleTitle} style={ss.clusterBtn} onPress={() => router.push("/schedule")} hitSlop={8}>
               <Ionicons name="calendar-outline" size={18} color={C.text} />
             </Pressable>
             <View style={ss.clusterDivider} />
-            <Pressable style={ss.clusterBtn} onPress={() => router.push("/notifications")} hitSlop={8}>
+            <Pressable accessibilityRole="button" accessibilityLabel={t.notifications} style={ss.clusterBtn} onPress={() => router.push("/notifications")} hitSlop={8}>
               <Ionicons name={unread > 0 ? "notifications" : "notifications-outline"} size={18} color={unread > 0 ? C.accent : C.text} />
               {unread > 0 && (
                 <View style={ss.notifBadge}>
@@ -449,7 +436,7 @@ export default function HomeScreen() {
               )}
             </Pressable>
             <View style={ss.clusterDivider} />
-            <Pressable style={ss.clusterBtn} onPress={openSidebar} hitSlop={8}>
+            <Pressable accessibilityRole="button" accessibilityLabel={t.menu} style={ss.clusterBtn} onPress={openSidebar} hitSlop={8}>
               <Ionicons name="menu" size={20} color={C.text} />
             </Pressable>
           </View>
@@ -478,10 +465,8 @@ export default function HomeScreen() {
             plate. Same data + handlers as before, new hierarchy. */}
         {history.length > 0 && (
           <View style={ss.shelf}>
-            <GlassFill intensity={26} />
             <View style={ss.shelfHeader}>
               <View style={ss.sectionTitleRow}>
-                <View style={ss.sectionTick} />
                 <Text style={ss.sectionTitle}>{t.continueWatching}</Text>
               </View>
             </View>
@@ -495,7 +480,12 @@ export default function HomeScreen() {
                   key={entry.episodeHref}
                   entry={entry}
                   onRemove={(href) => {
-                    dismissFromContinue(href).then(() => getContinueWatching().then(setHistory));
+                    // Hide it immediately (optimistic) — the storage write must
+                    // not be able to leave a card the user just closed.
+                    setHistory((prev) => prev.filter((h) => h.episodeHref !== href));
+                    dismissFromContinue(href)
+                      .then(() => getContinueWatching().then(setHistory))
+                      .catch(() => {});
                   }}
                 />
               ))}
@@ -505,7 +495,9 @@ export default function HomeScreen() {
 
         {/* ── Sections ─────────────────────── */}
         {visibleSections.map((section, si) => {
-          const MAX_PREVIEW = 15;
+          // The new-episodes rail always shows the newest 10 (fuller list
+          // behind the See all button); anime rails keep the wider preview.
+          const MAX_PREVIEW = section.type === "episode" ? 10 : 15;
           const previewItems = section.items.slice(0, MAX_PREVIEW);
           const hasMore = section.items.length > MAX_PREVIEW;
           const openAll = () => {
@@ -516,7 +508,6 @@ export default function HomeScreen() {
             <Rise key={section.id} style={ss.section} delay={Math.min(si, 6) * 70}>
               <View style={ss.sectionHeader}>
                 <View style={ss.sectionTitleRow}>
-                  <View style={ss.sectionTick} />
                   <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
                 </View>
                 <Pressable style={ss.seeAllBtn} onPress={openAll}>
@@ -597,8 +588,8 @@ function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClos
   return (
     <Modal transparent visible animationType="none" onRequestClose={animateClose}>
       <View style={{ flex: 1 }}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={animateClose}>
-          <Animated.View style={[StyleSheet.absoluteFill, ss.sheetBackdrop, { opacity: backdrop }]} />
+        <Pressable style={ABSOLUTE_FILL} onPress={animateClose}>
+          <Animated.View style={[ABSOLUTE_FILL, ss.sheetBackdrop, { opacity: backdrop }]} />
         </Pressable>
         <View style={ss.sheetAnchor} pointerEvents="box-none">
           <Animated.View
@@ -676,7 +667,6 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
     <PosterCard
       image={item.image}
       title={item.title}
-      subtitle={item.type || undefined}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
       width={CARD_W}
       rank={index + 1}
@@ -702,9 +692,9 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
     >
       <View style={ss.epCard}>
         {item.image ? (
-          <Image source={{ uri }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={0} priority="high" onError={() => { if (sized !== item.image) setFailedUri(sized ?? null); }} />
+          <Image source={{ uri }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={0} priority="high" onError={() => { if (sized !== item.image) setFailedUri(sized ?? null); }} />
         ) : (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
+          <View style={[ABSOLUTE_FILL, { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" }]}>
             <Ionicons name="film-outline" size={24} color={C.textMuted} />
           </View>
         )}
@@ -716,7 +706,7 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
         {/* Play button overlay */}
         <View style={ss.epPlayOverlay}>
           <View style={ss.epPlayBtn}>
-            <Ionicons name="play" size={14} color="#fff" />
+            <Ionicons name="play" size={14} color={C.textOnAccent} />
           </View>
         </View>
         <CompletionBadge hrefs={[item.animeHref]} titles={[item.animeTitle]} />
@@ -771,6 +761,16 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
   const remainMs = entry.durationMs - entry.positionMs;
   const remainMin = Math.max(1, Math.round(remainMs / 60000));
   const epNum = episodeNumberFor(entry);
+  // Old history rows (and some sources) stored the anime name as the episode
+  // title, which made the card print the same string twice. Synthesize the
+  // episode label from the number when that happens.
+  const rawTitle = (entry.episodeTitle || "").trim();
+  const animeName = (entry.animeTitle || "").trim();
+  const epTitle = (!rawTitle || (animeName && rawTitle.toLowerCase() === animeName.toLowerCase()))
+    ? (epNum !== null ? `${t.episode} ${epNum}` : "")
+    : rawTitle;
+  const subShown = !!epTitle && !!animeName &&
+    !epTitle.toLowerCase().includes(animeName.toLowerCase());
   return (
     <Pressable
       onPress={() => {
@@ -796,18 +796,18 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
     >
       <View style={ss.epCard}>
         {entry.image ? (
-          <Image source={{ uri: entry.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={entry.episodeHref} transition={200} />
+          <Image source={{ uri: entry.image }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={entry.episodeHref} transition={200} />
         ) : (
           <LinearGradient
             colors={[C.surface, C.surfaceLight]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={StyleSheet.absoluteFill}
+            style={ABSOLUTE_FILL}
           />
         )}
         <View style={ss.epPlayOverlay}>
           <View style={ss.epPlayBtn}>
-            <Ionicons name="play" size={14} color="#fff" />
+            <Ionicons name="play" size={14} color={C.textOnAccent} />
           </View>
         </View>
         {/* Episode number badge */}
@@ -824,7 +824,9 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
         <Pressable
           onPress={(e) => { e.stopPropagation?.(); onRemove(entry.episodeHref); }}
           style={ss.deleteBtn}
-          hitSlop={6}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={t.remove}
         >
           <Ionicons name="close" size={12} color={C.white} />
         </Pressable>
@@ -833,8 +835,8 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
           <View style={[ss.progressBarFill, { width: `${Math.round(pct * 100)}%` }]} />
         </View>
       </View>
-      <Text style={ss.epTitle} numberOfLines={1}>{entry.episodeTitle || entry.animeTitle}</Text>
-      <Text style={ss.epSub} numberOfLines={1}>{entry.animeTitle}</Text>
+      <Text style={ss.epTitle} numberOfLines={1}>{epTitle || animeName}</Text>
+      {subShown && <Text style={ss.epSub} numberOfLines={1}>{animeName}</Text>}
     </Pressable>
   );
 });
@@ -909,7 +911,7 @@ const ss = StyleSheet.create({
 
   // Top bar
   topBar: {
-    position: "absolute", top: 0, left: 0, right: 0, zIndex: 50,
+    zIndex: 50, backgroundColor: C.bg,
   },
   topBarInner: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -918,10 +920,10 @@ const ss = StyleSheet.create({
   logoRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   // Editorial masthead: bone wordmark led by an ember spark mark.
   logoDot: {
-    width: 7, height: 7, borderRadius: 1.5, backgroundColor: C.ember,
+    width: 8, height: 24, borderRadius: 4, backgroundColor: C.ember,
   },
   logoText: {
-    ...T.display, fontSize: 23, letterSpacing: -0.9,
+    ...T.h2, fontSize: 24, letterSpacing: -0.6,
     color: C.bone,
   },
   // Standalone glass button — used by HomeEmpty's single menu control. 44px floor.
@@ -932,12 +934,11 @@ const ss = StyleSheet.create({
   },
   // Frosted segmented action cluster — one connected control, three 44px segments.
   actionCluster: {
-    flexDirection: "row", alignItems: "center", height: 44,
-    borderRadius: R.circle, overflow: "hidden",
-    borderWidth: 1, borderColor: C.glassBorder,
+    flexDirection: "row", alignItems: "center", height: 48,
+    borderRadius: R.md, overflow: "hidden", backgroundColor: C.surface,
   },
   clusterBtn: {
-    width: 44, height: 44, alignItems: "center", justifyContent: "center",
+    width: 44, height: 48, alignItems: "center", justifyContent: "center",
   },
   clusterDivider: { width: 1, height: 22, backgroundColor: C.glassBorder },
   notifBadge: {
@@ -952,10 +953,10 @@ const ss = StyleSheet.create({
 
   // Hero
   heroSlide: { width: SW, height: HERO_H, backgroundColor: C.surface },
-  meshBg: { ...StyleSheet.absoluteFillObject },
+  meshBg: { ...StyleSheet.flatten(ABSOLUTE_FILL) },
   heroContent: {
     position: "absolute", bottom: 0, left: 0, right: 0,
-    paddingHorizontal: PAD, paddingBottom: 58, gap: 14,
+    paddingHorizontal: PAD, paddingBottom: 50, gap: 12,
   },
   // Segmented position indicator — pinned to the hero's bottom-center, in the
   // lower padding zone below the CTAs (replaces the old dots).
@@ -965,56 +966,44 @@ const ss = StyleSheet.create({
   },
   seg: { width: 16, height: 3, borderRadius: 2, backgroundColor: C.controlDim },
   segActive: { width: 28, backgroundColor: C.accent },
-  chipRow: { flexDirection: "row", gap: 7 },
+  chipRow: { flexDirection: "row", justifyContent: "flex-end", gap: 7 },
   // Editorial outline tags — hairline border, no fill.
   chip: {
     paddingHorizontal: 11, paddingVertical: 4, borderRadius: R.sm, overflow: "hidden",
-    borderWidth: 1, borderColor: C.borderLight,
+    backgroundColor: C.overlayMedium,
   },
   chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
   heroTitle: {
-    ...TAr.display, fontSize: 36, lineHeight: 40,
-    color: C.bone,
+    ...TAr.display, fontSize: 30, lineHeight: 42,
+    color: C.bone, textAlign: "right",
   },
   heroDesc: {
-    ...TAr.body, color: C.textSecondary, maxWidth: 320,
+    ...TAr.body, color: C.textSecondary, textAlign: "right",
   },
   heroButtons: { flexDirection: "row", gap: 10, marginTop: 6 },
   btnPrimaryWrap: {
-    flex: 1, borderRadius: R.pill,
-    ...ELEVATION_GLOW,
+    flex: 1, borderRadius: R.md,
   },
   btnPrimaryGrad: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    paddingVertical: 15, borderRadius: R.pill, overflow: "hidden",
+    minHeight: 52, paddingVertical: 14, borderRadius: R.md, overflow: "hidden",
   },
   btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
-  // Editorial ghost — hairline outline, bone label (no frosted glass).
-  btnGlass: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    borderRadius: R.pill, paddingVertical: 15,
-    backgroundColor: "transparent", borderWidth: 1, borderColor: C.borderLight,
-  },
-  btnGlassText: { color: C.bone, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Resume shelf — frosted panel that sits cleanly below the hero (a small gap
   // keeps its rounded top reading as a distinct floating surface, not fused to
   // the hero art above it).
   shelf: {
-    marginTop: S.md,
-    borderTopLeftRadius: R.xl, borderTopRightRadius: R.xl,
-    overflow: "hidden", paddingTop: 18, paddingBottom: 16,
-    borderTopWidth: 1, borderColor: C.glassBorder,
-    ...ELEVATION_NAV,
+    marginTop: 12, paddingTop: 12, paddingBottom: 4,
   },
   shelfHeader: {
     paddingHorizontal: PAD, marginBottom: 14,
   },
 
   // Sections
-  section: { marginTop: S.xxl },
+  section: { marginTop: 36 },
   sectionHeader: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: PAD, marginBottom: 14,
   },
   sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
@@ -1026,7 +1015,7 @@ const ss = StyleSheet.create({
     ...TAr.h2, color: C.bone,
   },
   // "See all" stays ash — ember is reserved for the primary action.
-  seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 3 },
+  seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 3, minHeight: 44 },
   seeAllText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // "See All" tail card in horizontal list
@@ -1061,7 +1050,7 @@ const ss = StyleSheet.create({
   },
   deleteBtn: {
     position: "absolute", top: 6, right: 6,
-    width: 28, height: 28, borderRadius: R.circle,
+    width: 32, height: 32, borderRadius: R.sm,
     backgroundColor: "rgba(0,0,0,0.6)", alignItems: "center", justifyContent: "center",
   },
 
@@ -1072,7 +1061,7 @@ const ss = StyleSheet.create({
   },
   badgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "700", letterSpacing: 0.8,
-    fontFamily: "Outfit_700Bold",
+    fontFamily: "Cairo_700Bold",
   },
   epNumBadge: {
     position: "absolute", top: 8, left: 8, zIndex: 2,
@@ -1081,17 +1070,16 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
   },
   epNumBadgeText: {
-    color: "#ffffff", fontSize: 10, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.5,
+    color: C.textOnAccent, fontSize: 10, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.5,
   },
 
   // Episode cards
   epCard: {
     width: EP_W, height: EP_H, borderRadius: R.lg, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    backgroundColor: C.surface,
   },
   epPlayOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     alignItems: "center", justifyContent: "center",
     // Light veil only — the accent play button carries its own contrast now,
     // so the artwork stays bright instead of living under a permanent dim.
@@ -1101,14 +1089,13 @@ const ss = StyleSheet.create({
     width: 38, height: 38, borderRadius: R.circle,
     backgroundColor: C.ember,
     alignItems: "center", justifyContent: "center",
-    ...ELEVATION_GLOW,
   },
   epTitle: {
-    color: C.text, fontSize: 11, fontWeight: "600", lineHeight: 14,
-    marginTop: 8, width: EP_W, fontFamily: "Cairo_600SemiBold",
+    color: C.text, fontSize: 13, fontWeight: "600", lineHeight: 21,
+    marginTop: 10, width: EP_W, fontFamily: "Cairo_600SemiBold", textAlign: "right",
   },
   epSub: {
-    color: C.textMuted, fontSize: 10, lineHeight: 13, marginTop: 2, width: EP_W,
+    color: C.textMuted, fontSize: 11, lineHeight: 18, marginTop: 2, width: EP_W, textAlign: "right",
     fontFamily: "Cairo_500Medium",
   },
 

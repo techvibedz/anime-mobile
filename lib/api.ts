@@ -3,7 +3,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import PantoufaDownloads from "../modules/pantoufa-downloads";
-import { resolveWitanimeEpisode } from "./witanimeMatch";
+import { resolveWitanimeEpisode, matchWitanimeTitle, witTitleVariants } from "./witanimeMatch";
 import {
   scrapeWitanimeHome,
   scrapeEpisodesPage,
@@ -40,19 +40,23 @@ import {
   tm_seasonNum,
   extractVid3rb,
   extractMp4upload,
+  extractAnime4upCdn,
   extractStreamwish,
   extractVideas,
   extractVidea,
   extractDoodstream,
   fetchAnime4upRecentPageDirect,
   fetchWitHomeDirect,
+  fetchWitanimeAnimeSections,
   type WitHome,
+  type WitCard,
+  type MediaSubtitle,
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
 import { fuzzyScore, sourceSearchQueries } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 import { writeCloudHome } from "./homeCloudCache";
-import { loadWitanimeHome } from "./homeSourceSelection";
+import { loadWitanimeHome, mergeRecentEpisodes } from "./homeSourceSelection";
 import { remoteLog } from "./remoteLog";
 import { createRequestCache, withTimeout } from "./requestCache";
 import {
@@ -79,7 +83,7 @@ import {
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
 // detail page with a boilerplate/seasons-grid synopsis. Old cached entries
 // are simply ignored, forcing a fresh scrape with the current parsers.
-const HOME_CACHE_KEY = "@home_cache_v5";
+const HOME_CACHE_KEY = "@home_cache_v6";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -89,7 +93,7 @@ const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v8:";
+const RECENT_CACHE_PREFIX = "@recent_v9:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
 const SERVERS_CACHE_PREFIX = "@servers_v8:";
 // Resolved Witanime ANIME pages per source title (see fetchCompleteVideoServers).
@@ -400,7 +404,7 @@ function buildHomePayload(
   if (tvItems.length >= 3) sections.push({ id: "tv_series", title: "TV Series", type: "anime", items: tvItems });
   if (movieItems.length >= 2) sections.push({ id: "movies", title: "Movies", type: "anime", items: movieItems });
 
-  return { success: true, data: { featured: featured.slice(0, 5), sections } };
+  return { success: true, data: { featured: featured.slice(0, 6), sections } };
 }
 
 async function fetchHomeFresh(): Promise<HomePayload> {
@@ -421,7 +425,9 @@ async function fetchHomeFresh(): Promise<HomePayload> {
   const baseHome = home || { featured: [], animes: [], episodes: [] };
   // anime4up's recent feed wins when it loaded (it is fresher), but a
   // failed/empty anime4up page must not wipe Witanime's own recent episodes.
-  const recentEps = anime4upRecent?.episodes?.length ? anime4upRecent.episodes : baseHome.episodes;
+  // Merge instead of replace: anime4up page 1 is often one batch upload, so
+  // its per-anime de-dupe alone shrinks the rail to a couple of cards.
+  const recentEps = mergeRecentEpisodes(anime4upRecent?.episodes ?? [], baseHome.episodes);
   const result = buildHomePayload({ ...baseHome, episodes: recentEps }, []);
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
@@ -778,6 +784,99 @@ export async function fetchEpisodesUp4(
   // scrape failure and shouldn't be frozen for the full TTL.
   if (episodes4up.length > 0) void writeCache(cacheKey, result);
   return result;
+}
+
+// ── Witanime anime-page recommendation widgets ──
+// The detail page's "ذات صلة" (مقترحة) and "قد يعجبك أيضًا" rails come from the
+// Witanime anime page itself — one static GET + parse, no WebView. Pages opened
+// from another source resolve their Witanime URL by title first (memoized).
+export interface RelatedAnimeCard {
+  title: string;
+  href: string;
+  image: string | null;
+  type: string | null;
+}
+
+export interface WitanimeSections {
+  related: RelatedAnimeCard[];
+  mayLike: RelatedAnimeCard[];
+}
+
+const WIT_SECTIONS_CACHE_PREFIX = "@wit_sections_v1:";
+const WIT_SECTIONS_TTL = 6 * 60 * 60 * 1000; // 6 h
+
+const emptySections = (): WitanimeSections => ({ related: [], mayLike: [] });
+
+// Resolve a Witanime anime page by title with the SAME season-aware,
+// ambiguity-rejecting matcher the episode resolver uses. A plain cross-source
+// title search could lock onto another season/spin-off, which surfaced a
+// different anime's rail. Direct static search only — no WebView.
+async function resolveWitanimeAnimeForTitle(title: string): Promise<string | null> {
+  if (!title) return null;
+  const names = [title, ...[...title.matchAll(/[([]([^)\]]+)[)\]]/g)].map((m) => m[1])];
+  const tried = new Set<string>();
+  const cards: WitCard[] = [];
+  const find = async (queries: string[]) => {
+    for (const query of [...new Set(queries)]) {
+      if (!query || tried.has(query)) continue;
+      tried.add(query);
+      const results = await searchWitanimeDirect(query).catch(() => null);
+      if (results?.length) cards.push(...results);
+      const match = matchWitanimeTitle(names, cards, tm_seasonNum);
+      if (match) return match;
+    }
+    return null;
+  };
+  let found = await find(sourceSearchQueries(title, 4));
+  if (!found) {
+    const alt = await getAltTitles(title).catch(() => []);
+    names.push(...alt.filter((name) => !names.includes(name)).slice(0, 4));
+    found = await find(names.slice(1).flatMap((name) => sourceSearchQueries(name, 2)));
+  }
+  return found;
+}
+
+// The fetched page must really be this anime — a search result can be a
+// renamed/redirected page. Same symmetric fuzzy score the matcher uses.
+function witanimePageMatchesTitle(expected: string, pageTitle: string): boolean {
+  if (!pageTitle) return true; // unparseable title: trust the matcher's pick
+  const variants = witTitleVariants([expected]);
+  return variants.some((name) => {
+    const a = fuzzyScore(name, pageTitle);
+    const b = fuzzyScore(pageTitle, name);
+    return Math.min(a, b) >= 0.8;
+  });
+}
+
+export async function fetchWitanimeSections(
+  animeHref: string | null | undefined,
+  title: string,
+): Promise<WitanimeSections> {
+  const toCard = (card: WitCard): RelatedAnimeCard => ({
+    title: card.title,
+    href: card.href,
+    image: imgOrEmpty(card.image),
+    type: card.type,
+  });
+  const key = WIT_SECTIONS_CACHE_PREFIX + (title || animeHref || "").toLowerCase().trim();
+  if (!title && !animeHref) return emptySections();
+  const cached = await readCache<WitanimeSections>(key, WIT_SECTIONS_TTL);
+  if (cached) return cached;
+  const direct = animeHref && /witanime\./i.test(animeHref) ? animeHref : null;
+  let url = direct;
+  if (!url && title) url = await resolveWitanimeAnimeForTitle(title);
+  if (!url) return emptySections();
+  const sections = await fetchWitanimeAnimeSections(url).catch(() => null);
+  if (!sections) return emptySections();
+  // Only a page found by SEARCH needs the identity check; a page the user
+  // opened directly is authoritative.
+  if (!direct && title && !witanimePageMatchesTitle(title, sections.title)) return emptySections();
+  const payload: WitanimeSections = {
+    related: sections.related.map(toCard),
+    mayLike: sections.mayLike.map(toCard),
+  };
+  if (payload.related.length > 0 || payload.mayLike.length > 0) void writeCache(key, payload);
+  return payload;
 }
 
 // Public resolver for an anime's Witanime page (or null). The detail page only
@@ -1343,7 +1442,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     options.episodeNumber ?? "",
   ]);
   return completeVideoServerRequests.run(key, async () => {
-    const discoveryDeadline = Date.now() + 45_000;
+    const discoveryDeadline = Date.now() + 30_000;
     const primaryIsUp4 = /anime4up/i.test(episodeUrl);
     const primaryIsA3rb = /anime3rb\.com\/episode\//i.test(episodeUrl);
     const primaryPromise = primaryIsA3rb
@@ -1416,7 +1515,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     const warm = (payload: VideoServersPayload) => {
       const servers = selectWarmupServers(payload.data.servers).filter((server) => !warming.has(server.iframeUrl));
       servers.forEach((server) => warming.add(server.iframeUrl));
-      if (servers.length) void resolveDirectServerList(servers, 40_000, !!options.force, (playable) => {
+      if (servers.length) void resolveDirectServerList(servers, 25_000, !!options.force, (playable) => {
         options.onPartial?.({ ...payload, data: { ...payload.data, servers: playable, serverCount: playable.length } });
       }).catch(() => {});
     };
@@ -1562,7 +1661,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     const metadata = primary || wit || up4;
     const playable = await resolveDirectServerList(
       candidates,
-      40_000,
+      25_000,
       false,
       (playable) => emit(playable, metadata),
     );
@@ -1942,16 +2041,16 @@ export async function resolveDownloadUrl(opts: {
 
 export type ResolveVideoResult = {
   success: boolean;
-  data?: { videoUrl: string; type: string };
+  data?: { videoUrl: string; type: string; subtitles?: MediaSubtitle[] };
   error?: string;
 };
 
 export type ResolveVideoOptions = boolean | { priority?: boolean; fresh?: boolean };
 
 async function resolveVideoFresh(iframeUrl: string, provider: string, priority: boolean): Promise<ResolveVideoResult> {
-  const success = (result: { url: string; type: string } | null): ResolveVideoResult | null =>
+  const success = (result: { url: string; type: string; subtitles?: MediaSubtitle[] } | null): ResolveVideoResult | null =>
     result && validateMediaUrl(result.url, provider)
-      ? { success: true, data: { videoUrl: result.url, type: result.type } }
+      ? { success: true, data: { videoUrl: result.url, type: result.type, subtitles: result.subtitles } }
       : null;
   const policy = providerPolicy(provider);
 
@@ -1974,6 +2073,15 @@ async function resolveVideoFresh(iframeUrl: string, provider: string, priority: 
     void remoteLog("warn", "video", "mp4upload direct extraction missed; using WebView", {
       iframeUrl: iframeUrl.slice(0, 200),
     });
+  }
+  // Anime4up's featured servers (anime4up1/anime4up2) ship their token-signed
+  // HLS master in the embed page's static HTML, so one/two plain GETs resolve
+  // them at max quality where the WebView collector never recognized the host.
+  if (provider === "anime4upcdn") {
+    const r = await extractAnime4upCdn(iframeUrl).catch(() => null);
+    const resolved = success(r);
+    if (resolved) return resolved;
+    return { success: false, error: "Could not extract anime4up video URL" };
   }
   // streamwish / doodstream carry the real stream in the embed page's STATIC
   // HTML (packed JS / pass_md5 endpoint), so one or two plain GETs resolve

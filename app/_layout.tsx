@@ -186,9 +186,14 @@ function AuthGate() {
 
   // Update checks (APK first, then OTA)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  // Surface an update prompt at most once per app session, so the foreground
-  // re-check below can't nag the user every time they resume the app.
-  const updateSurfacedRef = useRef(false);
+  // Each prompt surfaces at most once per app session, so the foreground
+  // re-checks can't nag the user every time they resume the app.
+  const otaSurfacedRef = useRef(false);
+  // The APK check keeps its own flag and may OVERRIDE a pending-OTA prompt.
+  // An OTA can only patch the JS of the CURRENT native runtime — when a new
+  // APK exists (native layer changed), the APK is the only update that can
+  // land, so a pending OTA must never hide the APK prompt.
+  const apkSurfacedRef = useRef(false);
 
   // Belt-and-suspenders for the background OTA download. With
   // updates.checkAutomatically = "ON_LOAD" (app.json), expo-updates fetches a
@@ -202,8 +207,8 @@ function AuthGate() {
   // needed; "Restart now" calls Updates.reloadAsync() and applies it.
   const { isUpdatePending } = Updates.useUpdates();
   useEffect(() => {
-    if (isUpdatePending && !updateSurfacedRef.current) {
-      updateSurfacedRef.current = true;
+    if (isUpdatePending && !otaSurfacedRef.current && !apkSurfacedRef.current) {
+      otaSurfacedRef.current = true;
       setUpdateInfo({ type: "ota" });
     }
   }, [isUpdatePending]);
@@ -213,10 +218,11 @@ function AuthGate() {
     let cancelled = false;
 
     const runApkCheck = async () => {
-      if (updateSurfacedRef.current) return true;
+      if (apkSurfacedRef.current) return true;
       const apk = await checkForApkUpdate();
       if (!cancelled && apk) {
-        updateSurfacedRef.current = true;
+        apkSurfacedRef.current = true;
+        // Overrides an OTA prompt already on screen: a new APK supersedes it.
         setUpdateInfo(apk);
         return true;
       }
@@ -231,8 +237,8 @@ function AuthGate() {
       (async () => {
         if (await runApkCheck()) return;
         const ota = await checkForOtaUpdate();
-        if (!cancelled && ota) {
-          updateSurfacedRef.current = true;
+        if (!cancelled && ota && !otaSurfacedRef.current && !apkSurfacedRef.current) {
+          otaSurfacedRef.current = true;
           setUpdateInfo(ota);
         }
       })();
@@ -241,7 +247,7 @@ function AuthGate() {
     // Re-check whenever the app returns to the foreground. The cold-start check
     // misses two common cases: the user resumed from the background (no cold
     // start), or version.json was still CDN-cached at launch. Guarded to fire
-    // only until an update has been surfaced once this session.
+    // only until an APK update has been surfaced once this session.
     const sub = AppState.addEventListener("change", (s) => {
       if (s === "active") void runApkCheck();
     });

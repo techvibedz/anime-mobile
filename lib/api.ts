@@ -83,7 +83,7 @@ import {
 // merged anime3rb into the "new episodes" rail and could cache an anime3rb
 // detail page with a boilerplate/seasons-grid synopsis. Old cached entries
 // are simply ignored, forcing a fresh scrape with the current parsers.
-const HOME_CACHE_KEY = "@home_cache_v6";
+const HOME_CACHE_KEY = "@home_cache_v7";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const DETAIL_CACHE_PREFIX = "@detail_v2:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min

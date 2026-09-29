@@ -493,13 +493,42 @@ function parseHomeSlides(html: string): { featured: WitHomeFeatured[]; episodes:
   return { featured: featured.slice(0, 5), episodes };
 }
 
-// Parse the featured slider (<a class="lucodeia-slider-slide-item" …>). Static
-// HTML carries only the title/href/background-image — the genres/description
-// meta is injected by JS, so those come back empty (the hero still renders with
-// its image + title). De-duped by href since the carousel clones edge slides.
-function parseWitFeatured(html: string): WitHomeFeatured[] {
+// Parse the home hero slider. The current Laravel/Tailwind home renders a
+// server-side hero carousel ([data-hero-slide]): each block carries the banner
+// image, an h2 > /anime/<slug> link, a meta row (…, genres) and a synopsis
+// paragraph. The old WordPress slider (.lucodeia-slider-slide-item, title +
+// background-image only) stays as the fallback for cached/legacy HTML.
+export function parseWitFeatured(html: string): WitHomeFeatured[] {
   const out: WitHomeFeatured[] = [];
   const seen = new Set<string>();
+  for (const block of html.split("data-hero-slide").slice(1)) {
+    const titleM = block.match(/<h2[^>]*>[\s\S]*?<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+    if (!titleM) continue;
+    const href = htmlDecode(titleM[1]);
+    const title = htmlDecode(titleM[2].replace(/<[^>]+>/g, ""));
+    if (!href || !title || seen.has(href)) continue;
+    seen.add(href);
+    const imageM = block.match(/<img[^>]*\bsrc=["']([^"']+)["'][^>]*>/i);
+    const descM = block.match(/<p class="mb-6[^"]*">\s*([\s\S]*?)<\/p>/i);
+    // Genres are the meta row's trailing plain-text span (year/count/status are
+    // plain-but-numeric or nested, so the LAST simple span is the comma list).
+    const metaM = block.match(/<div class="mb-4[^"]*">([\s\S]*?)<\/div>\s*<p class="mb-6/i);
+    const genreText = metaM
+      ? [...metaM[1].matchAll(/<span>([^<>]+)<\/span>/g)].map((g) => htmlDecode(g[1])).pop() || ""
+      : "";
+    out.push({
+      title,
+      href,
+      image: witUpgradeImg(imageM?.[1] || null),
+      description: descM ? htmlDecode(descM[1].replace(/<[^>]+>/g, "")) : null,
+      genres: genreText
+        ? genreText.split(/[,،]/).map((g) => g.trim()).filter((g) =>
+            g && !/^\d+$/.test(g) && !/^(?:TV|TV Short|OVA|ONA|Special|Movie|فيلم|مستمر|مكتمل)$/.test(g))
+        : [],
+    });
+  }
+  if (out.length) return out;
+
   const re = /<a\b([^>]*\bclass=["'][^"']*lucodeia-slider-slide-item[^"']*["'][^>]*)>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html))) {

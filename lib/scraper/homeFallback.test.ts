@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseAnime4upHomeHtml } from "./direct";
+import { parseAnime4upHomeHtml, parseWitFeatured } from "./direct";
 import { dedupeRecentEpisodes, loadWitanimeHome, mergeRecentEpisodes } from "../homeSourceSelection";
 
 const html = `
@@ -92,6 +92,47 @@ async function main() {
     );
     assert.deepEqual(next, []);
   }
+
+  // Witanime's current hero carousel ([data-hero-slide]): banner, anime link,
+  // meta row (genres) and synopsis must come out of the static HTML — the old
+  // .lucodeia-slider-slide-item markup no longer exists on the live site, and
+  // the direct path used to fall back to plain rail cards.
+  const witHeroHtml = `
+    <div data-hero-slide class="absolute inset-y-0 left-1/2 w-full">
+      <img src="https://images.witanime.site/banners/aaa.jpg" alt="">
+      <h2 title="BLEACH: Sennen Kessen-hen - Kashin-tan -">
+        <a href="https://witanime.site/anime/bleach-sennen-kessen-hen-kashin-tan">BLEACH: Sennen Kessen-hen - Kashin-tan -</a>
+      </h2>
+      <div class="mb-4 flex flex-wrap items-center gap-x-4 text-sm text-neutral-300">
+        <span class="flex flex-wrap items-center gap-2"><span class="inline-flex">TV</span><span dir="ltr">8.8</span></span>
+        <span class="flex flex-wrap items-center gap-2">
+          <span>2026</span>
+          <span class="text-xs" aria-hidden="true">•</span>
+          <span><span class="font-medium">10</span> حلقات</span>
+          <span class="text-xs" aria-hidden="true">•</span>
+          <span><span class="font-medium">مستمر</span></span>
+          <span class="text-xs" aria-hidden="true">•</span>
+          <span>أكشن, مغامرة, شونين</span>
+        </span>
+      </div>
+      <p class="mb-6 line-clamp-3 max-w-2xl text-sm">القسم الرابع من الموسم الثاني.</p>
+      <a href="https://witanime.site/anime/bleach-sennen-kessen-hen-kashin-tan" class="group/cta"><span class="relative">شاهد الآن</span></a>
+    </div>
+    <div data-hero-slide class="absolute inset-y-0 left-1/2 w-full">
+      <img src="https://images.witanime.site/banners/bbb.jpg" alt="">
+      <h2 title="BLACK TORCH"><a href="https://witanime.site/anime/black-torch">BLACK TORCH</a></h2>
+      <p class="mb-6 line-clamp-3">قصة أخرى.</p>
+    </div>`;
+  const hero = parseWitFeatured(witHeroHtml);
+  assert.equal(hero.length, 2);
+  assert.equal(hero[0]?.title, "BLEACH: Sennen Kessen-hen - Kashin-tan -");
+  assert.equal(hero[0]?.href, "https://witanime.site/anime/bleach-sennen-kessen-hen-kashin-tan");
+  assert.equal(hero[0]?.image, "https://images.witanime.site/banners/aaa.jpg");
+  assert.equal(hero[0]?.description, "القسم الرابع من الموسم الثاني.");
+  assert.deepEqual(hero[0]?.genres, ["أكشن", "مغامرة", "شونين"]);
+  assert.equal(hero[1]?.title, "BLACK TORCH");
+  assert.equal(hero[1]?.description, "قصة أخرى.");
+  assert.deepEqual(hero[1]?.genres, []);
 
   console.log("home fallback tests passed");
 }

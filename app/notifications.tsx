@@ -87,7 +87,7 @@ export default function NotificationsScreen() {
         title={t.notifications}
         right={
           items.length > 0 ? (
-            <GlassIconButton icon="trash-outline" size={18} tint={C.textSecondary} onPress={() => clearNotifications().then(load)} />
+            <GlassIconButton label={t.remove} icon="trash-outline" size={18} tint={C.textSecondary} onPress={() => clearNotifications().then(load)} />
           ) : undefined
         }
       />
@@ -120,7 +120,6 @@ export default function NotificationsScreen() {
               onPress={() => openNotification(item)}
               style={({ pressed }) => [s.card, !item.read && s.cardUnread, pressed && s.cardPressed]}
             >
-              {!item.read ? <View style={s.unreadBar} /> : null}
 
               <View style={s.body}>
                 <View style={s.titleRow}>
@@ -145,7 +144,7 @@ export default function NotificationsScreen() {
                 )}
                 <View style={s.thumbBadge}>
                   <LinearGradient colors={[C.accent, C.violet]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
-                  <Ionicons name="play" size={12} color="#fff" />
+                  <Ionicons name="play" size={12} color={C.textOnAccent} />
                 </View>
               </View>
             </Pressable>
@@ -163,18 +162,16 @@ const s = StyleSheet.create({
   card: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 10,
-    borderRadius: R.xl,
-    backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.border,
+    padding: 16,
+    borderRadius: R.lg,
+    backgroundColor: C.surfaceContainer,
     overflow: "hidden",
-    ...ELEVATION_CARD,
   },
   cardUnread: { backgroundColor: C.surfaceLight, borderColor: C.borderAccent },
   cardPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.99 }] },
   unreadBar: { position: "absolute", right: 0, top: 10, bottom: 10, width: 3, borderRadius: 2, backgroundColor: C.accent },
 
-  thumbWrap: { width: 96, height: 58, borderRadius: R.md, overflow: "hidden", marginLeft: 12 },
+  thumbWrap: { width: 84, height: 92, borderRadius: R.sm, overflow: "hidden", marginLeft: 16 },
   thumb: { width: "100%", height: "100%" },
   thumbFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
   thumbBadge: {
@@ -189,7 +186,7 @@ const s = StyleSheet.create({
   cardTitle: { color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.accent, marginRight: 8 },
   cardMsg: {
-    color: C.text, fontSize: 14, lineHeight: 19, fontFamily: "Cairo_600SemiBold",
+    color: C.text, fontSize: 14, lineHeight: 24, fontFamily: "Cairo_600SemiBold",
     textAlign: "right", writingDirection: "rtl", marginTop: 3,
   },
   cardTime: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 4 },
@@ -197,8 +194,8 @@ const s = StyleSheet.create({
   // Empty
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 12 },
   emptyIcon: {
-    width: 84, height: 84, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    width: 88, height: 88, borderRadius: R.xl,
+    backgroundColor: C.surfaceContainer,
     alignItems: "center", justifyContent: "center", marginBottom: 4,
   },
   emptyTitle: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Cairo_700Bold" },

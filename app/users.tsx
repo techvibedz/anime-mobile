@@ -375,9 +375,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
   counterCard: {
-    borderRadius: R.xxl, padding: 18, overflow: "hidden",
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.borderAccent,
-    ...ELEVATION_CARD,
+    borderRadius: R.lg, padding: 24, overflow: "hidden",
+    backgroundColor: C.surfaceContainer,
   },
   counterRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   counterText: { alignItems: "flex-end" },
@@ -395,7 +394,7 @@ const s = StyleSheet.create({
   controls: { marginTop: 14 },
   searchBox: {
     flexDirection: "row-reverse", alignItems: "center",
-    paddingHorizontal: 14, height: 46, borderRadius: R.lg,
+    paddingHorizontal: 16, height: 56, borderRadius: R.md,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
   },
   searchInput: {
@@ -406,8 +405,8 @@ const s = StyleSheet.create({
   sortLabel: { color: C.textMuted, fontSize: 11.5, fontFamily: "Cairo_500Medium", marginLeft: 8, marginBottom: 8 },
   chip: {
     flexDirection: "row-reverse", alignItems: "center",
-    paddingHorizontal: 13, paddingVertical: 8, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    minHeight: 48, paddingHorizontal: 14, paddingVertical: 10, borderRadius: R.sm,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     marginLeft: 8, marginBottom: 8,
   },
   chipSmall: { paddingHorizontal: 11, paddingVertical: 6 },
@@ -421,9 +420,8 @@ const s = StyleSheet.create({
   listStart: { height: 18 },
   separator: { height: 10 },
   row: {
-    padding: 14, borderRadius: R.lg,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    padding: 20, borderRadius: R.lg,
+    backgroundColor: C.surfaceContainer,
   },
   rowPressed: { opacity: 0.6 },
   rowChevron: { marginRight: 2 },
@@ -459,8 +457,7 @@ const s = StyleSheet.create({
   // no longer overflows the way the old 4-column row did.
   stat: {
     width: "48.5%", marginBottom: 9,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    borderRadius: R.lg, paddingVertical: 9, paddingHorizontal: 11,
+    paddingVertical: 12, paddingHorizontal: 4,
     alignItems: "flex-end",
   },
   statHead: { flexDirection: "row-reverse", alignItems: "center" },

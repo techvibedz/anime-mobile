@@ -242,7 +242,9 @@ const LogCard = memo(function LogCard({
   return (
     <Pressable
       onPress={() => onToggle(row.id)}
-      style={[s.card, ELEVATION_CARD, { borderLeftColor: tint.bar }]}
+      style={s.card}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: open }}
     >
       {/* Head row: level + tag + time */}
       <View style={s.cardHead}>
@@ -315,11 +317,11 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
   summary: {
-    flexDirection: "row", alignItems: "center", gap: 14,
+    flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 14,
     borderRadius: R.xl, paddingVertical: 14, paddingHorizontal: 16,
     marginBottom: 16, position: "relative", overflow: "hidden",
     backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
-    height: 64,
+    minHeight: 72,
   },
   pill: { flexDirection: "row", alignItems: "center", gap: 6 },
   pillIcon: {
@@ -327,28 +329,28 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   pillNum: { fontSize: 18, fontWeight: "900", fontFamily: "Outfit_800ExtraBold" },
-  pillLabel: { color: C.textSecondary, fontSize: 11, fontFamily: "Outfit_600SemiBold" },
+  pillLabel: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_600SemiBold" },
   healthy: {
     marginLeft: "auto", flexDirection: "row", alignItems: "center", gap: 5,
     paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
     backgroundColor: C.successSoft,
   },
-  healthyText: { color: C.success, fontSize: 11, fontWeight: "700", fontFamily: "Outfit_700Bold" },
+  healthyText: { color: C.success, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
-  chips: { flexDirection: "row", gap: 8, marginBottom: 16 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 24 },
   chip: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: R.pill,
+    minHeight: 48, paddingHorizontal: 14, paddingVertical: 10, borderRadius: R.md,
     backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
   },
   chipActive: { backgroundColor: C.accentSoft, borderColor: C.accent },
   chipText: {
     color: C.textSecondary, fontSize: 13, fontWeight: "600",
-    fontFamily: "Outfit_600SemiBold",
+    fontFamily: "Cairo_600SemiBold",
   },
   chipTextActive: { color: C.accent },
   chipCount: {
-    color: C.textFaint, fontSize: 11, fontWeight: "700",
+    color: C.textMuted, fontSize: 11, fontWeight: "700",
     fontFamily: "Outfit_700Bold", minWidth: 18, textAlign: "center",
   },
   chipCountActive: { color: C.accent },
@@ -361,17 +363,16 @@ const s = StyleSheet.create({
   },
   emptyTitle: {
     color: C.text, fontSize: 17, fontWeight: "700",
-    fontFamily: "Outfit_700Bold", marginBottom: 6,
+    fontFamily: "Cairo_700Bold", marginBottom: 6,
   },
   emptySub: {
     color: C.textSecondary, fontSize: 13, textAlign: "center",
-    fontFamily: "Outfit_500Medium", paddingHorizontal: 32, lineHeight: 20,
+    fontFamily: "Cairo_500Medium", paddingHorizontal: 32, lineHeight: 24,
   },
 
   card: {
-    backgroundColor: C.surfaceCard, borderRadius: R.lg,
-    borderWidth: 1, borderColor: C.border, borderLeftWidth: 3,
-    padding: 14, marginBottom: 10,
+    backgroundColor: C.surfaceContainer, borderRadius: R.lg,
+    padding: 18, marginBottom: 12,
   },
   cardHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
   levelBadge: {
@@ -390,12 +391,12 @@ const s = StyleSheet.create({
     borderRadius: R.pill, overflow: "hidden",
   },
   timeText: {
-    color: C.textFaint, fontSize: 11, marginLeft: "auto",
-    fontFamily: "Outfit_500Medium",
+    color: C.textMuted, fontSize: 11, marginLeft: "auto",
+    fontFamily: "Cairo_500Medium",
   },
   msgText: {
     color: C.textSoft, fontSize: 14, lineHeight: 21,
-    fontFamily: "Outfit_500Medium", marginBottom: 10,
+    fontFamily: "Cairo_500Medium", marginBottom: 12,
   },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   metaChip: {

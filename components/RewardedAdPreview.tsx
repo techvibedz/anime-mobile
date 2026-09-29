@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AR, S } from "../lib/theme";
+import { AR, S, ABSOLUTE_FILL } from "../lib/theme";
 import { useReducedMotion } from "../lib/motion";
 
 type Props = {
@@ -79,12 +79,12 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
           accessibilityLabel="إغلاق نافذة الإعلان"
           accessibilityRole="button"
           onPress={onClose}
-          style={StyleSheet.absoluteFill}
+          style={ABSOLUTE_FILL}
         />
         <LinearGradient
           pointerEvents="none"
           colors={["rgba(3,3,7,0.84)", "rgba(9,5,14,0.76)", "rgba(3,3,7,0.9)"]}
-          style={StyleSheet.absoluteFill}
+          style={ABSOLUTE_FILL}
         />
 
         <Animated.View
@@ -122,7 +122,7 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
               },
             ]}
           >
-            <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+            <View pointerEvents="none" style={ABSOLUTE_FILL}>
               <Image resizeMode="stretch" source={background} style={s.backgroundArtwork} />
             </View>
 
@@ -175,7 +175,7 @@ export function RewardedAdPreview({ visible, onClose, onWatchAd }: Props) {
                 colors={["rgba(255,255,255,0.25)", "rgba(255,255,255,0)", "rgba(111,16,150,0.18)"]}
                 end={{ x: 1, y: 1 }}
                 start={{ x: 0, y: 0 }}
-                style={StyleSheet.absoluteFill}
+                style={ABSOLUTE_FILL}
               />
               <View pointerEvents="none" style={s.watchContent}>
                 <View style={s.watchPlay}>
@@ -347,7 +347,7 @@ const s = StyleSheet.create({
     textShadowRadius: 3,
   },
   artworkLayer: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     zIndex: 7,
     overflow: "visible",
   },

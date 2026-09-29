@@ -245,15 +245,14 @@ export default function WatchPartyScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
-  intro: { color: C.textSecondary, fontSize: 14, lineHeight: 22, textAlign: "right", fontFamily: "Cairo_500Medium", marginBottom: 22 },
+  intro: { color: C.textSecondary, fontSize: 16, lineHeight: 28, textAlign: "right", fontFamily: "Cairo_500Medium", marginBottom: 32 },
 
   codeCard: {
-    borderRadius: R.xxl, padding: 22, overflow: "hidden", alignItems: "center",
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.borderAccent,
-    ...ELEVATION_CARD,
+    borderRadius: R.lg, padding: 28, overflow: "hidden", alignItems: "center",
+    backgroundColor: C.surface,
   },
   codeLabel: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_600SemiBold" },
-  codeText: { color: C.accent, fontSize: 44, letterSpacing: 8, fontFamily: "Outfit_900Black", marginTop: 6 },
+  codeText: { color: C.accent, fontSize: 40, letterSpacing: 5, fontFamily: "Outfit_700Bold", marginTop: 12 },
   codeHint: { color: C.textMuted, fontSize: 12, marginTop: 10, textAlign: "center", fontFamily: "Cairo_500Medium" },
 
   waitRow: { flexDirection: "row-reverse", alignItems: "center", marginTop: 22, marginBottom: 4 },
@@ -263,8 +262,7 @@ const s = StyleSheet.create({
   list: { marginTop: 12, gap: 8 },
   row: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    padding: 12, borderRadius: R.lg,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: C.borderSoft,
   },
   rowBody: { flex: 1, marginHorizontal: 12, alignItems: "flex-end" },
   rowName: { color: C.text, fontSize: 15, fontFamily: "Cairo_700Bold", textAlign: "right" },
@@ -284,7 +282,7 @@ const s = StyleSheet.create({
 
   primaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    height: S.inputHeight, borderRadius: R.pill, backgroundColor: C.accent, marginTop: 24,
+    height: S.inputHeight, borderRadius: R.md, backgroundColor: C.accent, marginTop: 24,
   },
   primaryBtnText: { color: C.black, fontSize: 15, fontFamily: "Cairo_700Bold" },
   startHint: { color: C.textMuted, fontSize: 12, textAlign: "center", marginTop: 10, fontFamily: "Cairo_500Medium" },
@@ -304,14 +302,14 @@ const s = StyleSheet.create({
   divider: { flex: 1, height: 1, backgroundColor: C.border },
   orText: { color: C.textMuted, fontSize: 12, fontFamily: "Cairo_500Medium" },
 
-  joinCard: { flexDirection: "row", alignItems: "center", gap: 10 },
+  joinCard: { alignItems: "stretch", gap: 14 },
   codeInput: {
-    flex: 1, height: S.inputHeight, borderRadius: R.lg,
+    height: 64, borderRadius: R.md,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderLight,
     color: C.text, fontSize: 18, letterSpacing: 4, fontFamily: "Outfit_700Bold",
   },
   joinBtn: {
-    height: S.inputHeight, paddingHorizontal: 22, borderRadius: R.lg,
+    height: S.inputHeight, paddingHorizontal: 22, borderRadius: R.md,
     backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.borderAccent,
     alignItems: "center", justifyContent: "center",
   },

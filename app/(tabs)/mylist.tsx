@@ -7,7 +7,6 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Dimensions,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,7 +15,9 @@ import { getFavorites, removeFavorite } from "../../lib/favorites";
 import type { FavoriteAnime, FavoriteList } from "../../lib/favorites";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
-import { PosterCard, PosterPill, PosterCornerBtn } from "../../components/PosterCard";
+import { PosterCard, PosterPill, PosterCornerBtn, INLINE_POSTER_BADGE } from "../../components/PosterCard";
+import { CardLayoutControl } from "../../components/CardLayoutControl";
+import { useCardLayout, type CardLayout } from "../../lib/cardLayout";
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
 import { useAuth } from "../../lib/auth";
@@ -26,13 +27,11 @@ import { t } from "../../lib/i18n";
 
 type ListFilter = "all" | FavoriteList;
 
-const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
 const GAP = S.gapRelaxed;
-const NUM_COLS = 2;
-const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
 export default function MyListScreen() {
+  const cards = useCardLayout("mylist", GAP);
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { openSidebar } = useSidebar();
@@ -75,13 +74,16 @@ export default function MyListScreen() {
       {/* ── Collection header — one cohesive surface lifted over the grid ── */}
       <View style={ss.headerSurface}>
         <Rise style={ss.header}>
-          <View style={ss.headerTitleWrap}>
-            <Text style={ss.heading}>{t.myListTitle}</Text>
-            {user?.email && <Text style={ss.userEmail} numberOfLines={1}>{user.email}</Text>}
-          </View>
-          <Pressable onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
+          <View style={ss.headerActions}>
+          <Pressable accessibilityRole="button" accessibilityLabel={t.menu} onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
             <Ionicons name="menu" size={20} color={C.text} />
           </Pressable>
+          <CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />
+          </View>
+          <View style={ss.headerTitleWrap}>
+            <Text style={ss.heading}>{t.myListTitle}</Text>
+            <Text style={ss.userEmail}>{t.currentlyWatching} · {watchingCount}     {t.planToWatch} · {plannedCount}</Text>
+          </View>
         </Rise>
 
         {/* Filter pills — horizontally scrollable so long labels never clip */}
@@ -92,7 +94,7 @@ export default function MyListScreen() {
           contentContainerStyle={ss.filterRow}
         >
           {filters.map((f) => (
-            <Pressable key={f.key} onPress={() => setFilter(f.key)}>
+            <Pressable key={f.key} accessibilityRole="button" accessibilityState={{ selected: filter === f.key }} onPress={() => setFilter(f.key)}>
               <View style={[ss.filterPill, filter === f.key && ss.filterPillActive]}>
                 {/* Label first (leading), count last (trailing). The label uses the
                     Cairo Arabic font so its glyphs are measured correctly and stay
@@ -118,11 +120,13 @@ export default function MyListScreen() {
           variant="empty"
           title={t.emptyList}
           message={t.emptyListSub}
+          primary={{ label: t.discover, icon: "search", onPress: () => router.push("/(tabs)/search") }}
         />
       ) : (
         <FlatList
+          key={`${cards.layout}-${cards.columns}`}
           data={visible}
-          numColumns={NUM_COLS}
+          numColumns={cards.columns}
           keyExtractor={(item) => item.href}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
@@ -130,8 +134,8 @@ export default function MyListScreen() {
           maxToRenderPerBatch={6}
           windowSize={7}
           updateCellsBatchingPeriod={50}
-          contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100 }}
-          columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
+          contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100, rowGap: GAP }}
+          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -141,7 +145,7 @@ export default function MyListScreen() {
               progressBackgroundColor={C.surface}
             />
           }
-          renderItem={({ item }) => <MyListCard item={item} onRemove={handleRemove} />}
+          renderItem={({ item }) => <MyListCard item={item} onRemove={handleRemove} width={cards.cardWidth} layout={cards.layout} />}
         />
       )}
     </View>
@@ -152,9 +156,13 @@ export default function MyListScreen() {
 const MyListCard = memo(function MyListCard({
   item,
   onRemove,
+  width,
+  layout,
 }: {
   item: FavoriteAnime;
   onRemove: (href: string) => void;
+  width: number;
+  layout: CardLayout;
 }) {
   const watching = item.list === "watching";
   return (
@@ -163,25 +171,27 @@ const MyListCard = memo(function MyListCard({
       title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
       onLongPress={() => onRemove(item.href)}
-      width={CARD_W}
+      width={width}
+      layout={layout}
+
       recyclingKey={item.href}
       titleLines={2}
-      topLeft={
-        <PosterPill tint={watching ? "rgba(74,222,128,0.92)" : "rgba(110,119,230,0.94)"}>
-          <Ionicons name={watching ? "play-circle" : "bookmark"} size={11} color="#fff" />
-          <Text style={ss.statusBadgeText}>
+      topLeft={(
+        <PosterPill>
+          <Ionicons name={watching ? "play-circle" : "bookmark"} size={11} color={watching ? C.mint : C.accent} />
+          {layout !== "compact" ? <Text style={ss.statusBadgeText}>
             {watching ? t.currentlyWatching : t.planToWatch}
-          </Text>
+          </Text> : null}
         </PosterPill>
-      }
+       )}
       topRight={<PosterCornerBtn icon="close" onPress={() => onRemove(item.href)} />}
-      bottomLeft={<MalCardBadge title={item.title} style={{ top: undefined as any, right: undefined as any, bottom: 8, left: 8 }} />}
-      bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} />}
-      centerOverlay={
+      bottomLeft={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
+      bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} style={INLINE_POSTER_BADGE} />}
+      centerOverlay={layout !== "compact" ? (
         <View style={ss.playHint}>
-          <Ionicons name="play" size={14} color="#fff" />
+          <Ionicons name="play" size={14} color={C.textOnAccent} />
         </View>
-      }
+      ) : null}
     />
   );
 });
@@ -193,23 +203,22 @@ const ss = StyleSheet.create({
   // over the scrolling grid (matches the search console for cross-tab coherence).
   headerSurface: {
     backgroundColor: C.bg, zIndex: 10,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
   },
   headerEdge: { height: 0.5, backgroundColor: C.line },
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: S.paddingContent, paddingTop: 16, paddingBottom: 8,
   },
-  headerTitleWrap: { flex: 1, marginRight: 12 },
+  headerTitleWrap: { flex: 1, marginLeft: 12, alignItems: "flex-end" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   heading: {
-    ...TAr.h1, color: C.bone,
+    ...TAr.h1, lineHeight: 44, color: C.bone,
   },
-  userEmail: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "Cairo_500Medium", maxWidth: 200 },
+  userEmail: { color: C.textMuted, fontSize: 12, lineHeight: 22, marginTop: 4, fontFamily: "Cairo_500Medium", textAlign: "right" },
   // 44px touch target (PRODUCT.md ≥44px floor).
   menuBtn: {
-    width: 44, height: 44, borderRadius: R.circle,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    width: 48, height: 48, borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     alignItems: "center", justifyContent: "center",
   },
 
@@ -221,9 +230,9 @@ const ss = StyleSheet.create({
   },
   filterPill: {
     flexDirection: "row", alignItems: "center", flexShrink: 0,
-    marginHorizontal: 3, height: 36,
-    paddingHorizontal: 14, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.borderLight,
+    marginHorizontal: 3, height: 48,
+    paddingHorizontal: 14, borderRadius: R.sm,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
   filterPillActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
   filterText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0, includeFontPadding: false, textAlignVertical: "center" },

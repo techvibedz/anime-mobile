@@ -424,9 +424,8 @@ const s = StyleSheet.create({
 
   profileCard: {
     flexDirection: "row", alignItems: "center",
-    borderRadius: R.xxl, padding: 16, overflow: "hidden",
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.borderAccent,
-    ...ELEVATION_CARD,
+    borderRadius: R.lg, padding: 24, overflow: "hidden",
+    backgroundColor: C.surfaceContainer,
   },
   profileBody: { flex: 1, marginRight: 14, alignItems: "flex-end" },
   profileName: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Cairo_700Bold", textAlign: "right" },
@@ -444,10 +443,9 @@ const s = StyleSheet.create({
   },
   summaryCell: {
     width: "48.5%", marginBottom: 9,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    borderRadius: R.lg, paddingVertical: 12, paddingHorizontal: 12,
+    borderBottomWidth: 1, borderBottomColor: C.borderSoft,
+    paddingVertical: 18, paddingHorizontal: 8,
     alignItems: "flex-end",
-    ...ELEVATION_CARD,
   },
   summaryHead: { flexDirection: "row-reverse", alignItems: "center" },
   summaryLabel: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", marginRight: 5 },
@@ -456,8 +454,8 @@ const s = StyleSheet.create({
 
   chatBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9,
-    marginTop: 12, height: 52, borderRadius: R.pill,
-    backgroundColor: C.accent, ...ELEVATION_GLOW,
+    marginTop: 16, height: 56, borderRadius: R.md,
+    backgroundColor: C.accent,
   },
   chatBtnPressed: { transform: [{ scale: 0.98 }] },
   chatBtnBusy: { opacity: 0.7 },
@@ -479,9 +477,7 @@ const s = StyleSheet.create({
 
   list: { marginTop: 8, gap: 8 },
   dayRow: {
-    padding: 14, borderRadius: R.lg,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: C.borderSoft,
   },
   dayHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   dayTime: { color: C.accent, fontSize: 14, fontWeight: "800", fontFamily: "Cairo_700Bold" },

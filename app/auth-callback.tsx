@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
+import { View, StyleSheet } from "react-native";
 import { router } from "expo-router";
 import { supabase } from "../lib/supabase";
 import { C } from "../lib/theme";
+import { StateView } from "../components/StateView";
+import { t } from "../lib/i18n";
 
 // Visual landing screen for the auth-callback deep link.
 // The actual URL parsing + setSession happens in AuthProvider (lib/auth.tsx)
@@ -10,7 +12,6 @@ import { C } from "../lib/theme";
 // to appear and routes accordingly.
 export default function AuthCallback() {
   const [status, setStatus] = useState<"working" | "err">("working");
-  const [message, setMessage] = useState("Finalizing sign-in…");
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +41,6 @@ export default function AuthCallback() {
         clearInterval(iv);
         if (cancelled) return;
         setStatus("err");
-        setMessage("Sign-in did not complete. Please try again.");
         setTimeout(() => router.replace("/(auth)/welcome"), 2000);
       }
     }, 500);
@@ -54,13 +54,11 @@ export default function AuthCallback() {
 
   return (
     <View style={ss.root}>
-      {status === "working" && <ActivityIndicator size="large" color={C.accent} />}
-      <Text style={[ss.msg, status === "err" && { color: "#ff6b6b" }]}>{message}</Text>
+      <StateView icon="log-in-outline" variant={status === "working" ? "loading" : "error"} title={status === "working" ? t.loading : t.signInFailed} message={status === "working" ? undefined : t.authErrors.unknown} />
     </View>
   );
 }
 
 const ss = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
-  msg: { color: C.textSecondary, fontSize: 13, textAlign: "center", fontFamily: "Cairo_500Medium" },
+  root: { flex: 1, backgroundColor: C.bg },
 });

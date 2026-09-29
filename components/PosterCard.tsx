@@ -20,9 +20,15 @@ import { View, Text, Pressable, StyleSheet, ActivityIndicator } from "react-nati
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import { C, R, ELEVATION_CARD, TAr } from "../lib/theme";
+import { C, R, TAr, ABSOLUTE_FILL } from "../lib/theme";
 import { posterUrl } from "../lib/img";
 import { t } from "../lib/i18n";
+import type { CardLayout } from "../lib/cardLayout";
+
+export const INLINE_POSTER_BADGE = { position: "relative" as const, top: 0, right: 0, bottom: 0, left: 0 };
+
+/** Height of the overlaid title band at the bottom of a grid poster. */
+export const GRID_TITLE_BAND = 48;
 
 export interface PosterCardProps {
   image?: string | null;
@@ -30,6 +36,7 @@ export interface PosterCardProps {
   onPress: () => void;
   onLongPress?: () => void;
   width: number;
+  layout?: CardLayout;
   /** Poster aspect ratio. Defaults to 2/3 (standard anime poster). */
   aspectRatio?: number;
   /** Editorial rank numeral overlaid bottom-left (home trending). */
@@ -49,9 +56,9 @@ export interface PosterCardProps {
   loading?: boolean;
   /** Disable press (no source href yet). */
   disabled?: boolean;
-  /** Title line clamp. Defaults to 2. */
+  /** Title line clamp in list layout; grid titles always fit two poster lines. */
   titleLines?: number;
-  /** Optional muted subtitle below the title (type / format). */
+  /** Muted subtitle under the title — rendered in list layout only. */
   subtitle?: string;
   /** Recycling key for expo-image caching. */
   recyclingKey?: string;
@@ -63,6 +70,7 @@ export const PosterCard = memo(function PosterCard({
   onPress,
   onLongPress,
   width,
+  layout = "comfortable",
   aspectRatio = 2 / 3,
   rank,
   newBadge,
@@ -82,24 +90,55 @@ export const PosterCard = memo(function PosterCard({
   // URL if the sized fetch errors. failedUri self-resets on recycle because a
   // new `image` prop yields a new `sized` that won't match the stale value.
   const [failedUri, setFailedUri] = useState<string | null>(null);
-  const sized = posterUrl(image, width);
+  const row = layout === "list";
+  const plateWidth = row ? 84 : width;
+  const sized = posterUrl(image, plateWidth);
   const uri = failedUri === sized ? image ?? undefined : sized;
+  // List layout keeps a readable inline caption; grid layouts carry the title
+  // ON the poster, so a grid cell is exactly one artwork and no caption can
+  // ever add space between rows.
+  const caption = (
+    <View style={s.listBody}>
+      <Text style={s.title} numberOfLines={Math.min(titleLines, 2)} ellipsizeMode="tail">{title}</Text>
+      {subtitle ? <Text style={s.subtitle} numberOfLines={1}>{subtitle}</Text> : null}
+      <View style={s.listMeta}>{topLeft}{topRight}{bottomLeft}{bottomRight}</View>
+      {footer}
+    </View>
+  );
+  const gridTitle = (
+    <View style={s.titleBand} pointerEvents="none">
+      <Text
+        style={[s.gridTitle, layout === "compact" && s.gridTitleCompact]}
+        numberOfLines={2}
+        ellipsizeMode="tail"
+        maxFontSizeMultiplier={1.2}
+      >
+        {title}
+      </Text>
+    </View>
+  );
   return (
     <Pressable
       disabled={disabled}
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={300}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityHint={subtitle}
+      accessibilityState={{ disabled, busy: loading }}
       style={({ pressed }) => [
         { width },
+        row && s.listCard,
         pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] },
       ]}
     >
-      <View style={[s.plate, { width, aspectRatio }]}>
+      {row ? caption : null}
+      <View style={[s.plate, { width: plateWidth, aspectRatio }]}>
         {uri ? (
           <Image
             source={{ uri }}
-            style={StyleSheet.absoluteFill}
+            style={ABSOLUTE_FILL}
             contentFit="cover"
             cachePolicy="memory-disk"
             recyclingKey={recyclingKey}
@@ -107,7 +146,7 @@ export const PosterCard = memo(function PosterCard({
             onError={() => { if (sized && sized !== image) setFailedUri(sized); }}
           />
         ) : (
-          <View style={[StyleSheet.absoluteFill, s.fallback]}>
+          <View style={[ABSOLUTE_FILL, s.fallback]}>
             <Ionicons name="image-outline" size={26} color={C.textMuted} />
           </View>
         )}
@@ -132,12 +171,13 @@ export const PosterCard = memo(function PosterCard({
         )}
 
         {/* Slot furniture */}
-        {topLeft && !newBadge ? <View style={s.topLeft}>{topLeft}</View> : null}
-        {topRight ? <View style={s.topRight}>{topRight}</View> : null}
-        {bottomLeft ? <View style={s.bottomLeft}>{bottomLeft}</View> : null}
-        {bottomRight ? <View style={s.bottomRight}>{bottomRight}</View> : null}
+        {!row && topLeft && !newBadge ? <View style={s.topLeft}>{topLeft}</View> : null}
+        {!row && topRight ? <View style={s.topRight}>{topRight}</View> : null}
+        {!row && bottomLeft ? <View style={s.bottomLeft}>{bottomLeft}</View> : null}
+        {!row && bottomRight ? <View style={s.bottomRight}>{bottomRight}</View> : null}
         {centerOverlay ? <View style={s.center}>{centerOverlay}</View> : null}
-        {footer}
+        {!row ? footer : null}
+        {!row ? gridTitle : null}
 
         {loading && (
           <View style={s.loadingOverlay} pointerEvents="none">
@@ -145,8 +185,6 @@ export const PosterCard = memo(function PosterCard({
           </View>
         )}
       </View>
-      <Text style={[s.title, { width }]} numberOfLines={titleLines}>{title}</Text>
-      {subtitle ? <Text style={[s.subtitle, { width }]} numberOfLines={1}>{subtitle}</Text> : null}
     </Pressable>
   );
 });
@@ -201,7 +239,7 @@ export function PosterCornerBtn({
 export function PosterPlayHint() {
   return (
     <View style={s.playHint}>
-      <Ionicons name="play" size={14} color="#fff" />
+      <Ionicons name="play" size={14} color={C.textOnAccent} />
     </View>
   );
 }
@@ -211,12 +249,6 @@ const s = StyleSheet.create({
     borderRadius: R.lg,
     overflow: "hidden",
     backgroundColor: C.surface,
-    borderWidth: 1,
-    borderColor: C.border,
-    // Holo rim-light: the top edge catches the ambient light, lifting the
-    // poster off the void (visionOS glass vocabulary). One token, every card.
-    borderTopColor: C.borderLight,
-    ...ELEVATION_CARD,
   },
   fallback: {
     alignItems: "center",
@@ -232,7 +264,7 @@ const s = StyleSheet.create({
   // Rank — oversized editorial numeral, bottom-left, behind furniture.
   rank: {
     position: "absolute",
-    bottom: -8, left: -4,
+    bottom: GRID_TITLE_BAND - 2, left: -4,
     fontSize: 48, fontWeight: "900", lineHeight: 48, letterSpacing: -1.5,
     color: "#ffffff",
     fontFamily: "Outfit_900Black",
@@ -250,16 +282,16 @@ const s = StyleSheet.create({
   },
   newBadgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "700", letterSpacing: 0.8,
-    fontFamily: "Outfit_700Bold",
+    fontFamily: "Cairo_700Bold",
   },
 
   // Slot anchors
   topLeft: { position: "absolute", top: 8, left: 8, zIndex: 3 },
   topRight: { position: "absolute", top: 8, right: 8, zIndex: 3 },
-  bottomLeft: { position: "absolute", bottom: 8, left: 8, zIndex: 3 },
-  bottomRight: { position: "absolute", bottom: 8, right: 8, zIndex: 3 },
+  bottomLeft: { position: "absolute", bottom: GRID_TITLE_BAND + 8, left: 8, zIndex: 3 },
+  bottomRight: { position: "absolute", bottom: GRID_TITLE_BAND + 8, right: 8, zIndex: 3 },
   center: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     alignItems: "center", justifyContent: "center",
     zIndex: 2,
   },
@@ -272,7 +304,7 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
   },
   cornerBtn: {
-    width: 28, height: 28, borderRadius: R.circle,
+    width: 36, height: 36, borderRadius: R.sm,
     backgroundColor: "rgba(0,0,0,0.6)",
     alignItems: "center", justifyContent: "center",
   },
@@ -283,16 +315,39 @@ const s = StyleSheet.create({
   },
 
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     alignItems: "center", justifyContent: "center",
     backgroundColor: "rgba(10,10,11,0.55)",
   },
 
-  // Title — Arabic, right-aligned, Cairo.
+  // Grid poster title — overlaid on the artwork above the scrim. The band is a
+  // fixed height so bottom badges stay put and no title can grow the card.
+  titleBand: {
+    position: "absolute", left: 0, right: 0, bottom: 0,
+    height: GRID_TITLE_BAND, justifyContent: "flex-end",
+    paddingHorizontal: 8, paddingBottom: 6,
+  },
+  gridTitle: {
+    fontFamily: "Cairo_600SemiBold", fontWeight: "600" as const,
+    fontSize: 12, lineHeight: 17, color: "#FFFFFF",
+    textAlign: "right", includeFontPadding: false,
+    textShadowColor: "rgba(0,0,0,0.65)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  gridTitleCompact: { fontSize: 11, lineHeight: 16 },
+
+  // List layout caption.
+  listCard: { flexDirection: "row", alignItems: "center", padding: 12, borderRadius: R.lg, backgroundColor: C.surfaceContainer },
+  listBody: { flex: 1, marginRight: 14, minWidth: 0 },
+  listMeta: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: 12 },
   title: {
     ...TAr.bodySmall,
+    fontSize: 16,
+    lineHeight: 26,
+    flexShrink: 1,
+    includeFontPadding: false,
     color: C.text,
-    marginTop: 8,
     textAlign: "right",
   },
   subtitle: {

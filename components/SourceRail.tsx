@@ -18,7 +18,7 @@ import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 
 const PAD = S.paddingContent;
-const CARD_W = 118;
+const CARD_W = 140;
 const RAIL_SHOW = 18;
 
 function toCard(item: RailItem): CatalogCardData {
@@ -61,7 +61,6 @@ export const SourceRail = memo(function SourceRail({
     <View style={s.section}>
       <View style={s.header}>
         <View style={s.titleRow}>
-          <View style={s.tick} />
           <Text style={s.title}>{title}</Text>
         </View>
         <Pressable style={s.seeAllBtn} onPress={goAll}>
@@ -88,7 +87,7 @@ export const SourceRail = memo(function SourceRail({
 const s = StyleSheet.create({
   section: { marginTop: S.xxl },
   header: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: PAD, marginBottom: 14,
   },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 9 },
@@ -96,7 +95,7 @@ const s = StyleSheet.create({
     width: 3, height: 16, borderRadius: 2, backgroundColor: C.accent,
   },
   title: { color: C.text, fontSize: 20, fontWeight: "700", fontFamily: "Cairo_700Bold" },
-  seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+  seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44 },
   seeAllText: { color: C.accent, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   seeAllCard: {
     width: CARD_W, height: CARD_W * 1.5, borderRadius: R.lg,

@@ -85,8 +85,10 @@ function baseTitle(title: string): string {
 
 // How well a candidate's various titles match any of the query forms (the full
 // scraped title and its stripped base). Exact (normalized) match scores
-// highest; a containment match (one is a substring of the other) scores partial.
-function titleScore(c: any, queries: string[]): number {
+// highest; a candidate whose title STARTS WITH the query is a real same-series
+// match ("… 4th Season"); a mere containment ("Boruto: Naruto Next
+// Generations" for query "naruto") is too weak to trust with a countdown.
+export function titleScore(c: any, queries: string[]): number {
   const titles: string[] = [
     c?.title?.romaji,
     c?.title?.english,
@@ -98,7 +100,8 @@ function titleScore(c: any, queries: string[]): number {
     if (!q) continue;
     for (const nt of titles) {
       if (nt === q) score = Math.max(score, 1000);
-      else if (nt.includes(q) || q.includes(nt)) score = Math.max(score, 500);
+      else if (nt.startsWith(q)) score = Math.max(score, 500);
+      else if (nt.includes(q)) score = Math.max(score, 300);
     }
   }
   return score;
@@ -122,29 +125,29 @@ async function searchCandidates(search: string): Promise<any[]> {
   return json?.data?.Page?.media || [];
 }
 
-// From a candidate pool, return the airing episode of the best title match,
-// preferring well-matching entries but falling back to AniList's own ordering
-// when nothing matches cleanly (e.g. a romaji-vs-Arabic title mismatch).
-function pickAiring(candidates: any[], queries: string[]): NextAiring | null {
+// From a candidate pool, return the airing episode of the best title match.
+// ONLY exact/prefix matches are trusted: falling back to AniList's raw ordering
+// (or to weak containment matches) is how a finished "Naruto" page ended up
+// showing "Boruto" episode numbers. No trustworthy match = no countdown.
+export function pickAiring(candidates: any[], queries: string[]): NextAiring | null {
   if (candidates.length === 0) return null;
   const ranked = candidates
     .map((c) => ({ c, s: titleScore(c, queries) }))
+    .filter((x) => x.s >= 500)
     .sort((a, b) => b.s - a.s);
-  const good = ranked.filter((x) => x.s >= 500);
-  const pool = (good.length ? good : ranked).map((x) => x.c);
-  for (const c of pool) {
-    const n = validAiring(c.nextAiringEpisode);
+  for (const x of ranked) {
+    const n = validAiring(x.c.nextAiringEpisode);
     if (n) return n;
   }
   return null;
 }
 
 function rankedCandidates(candidates: any[], queries: string[]): any[] {
-  const ranked = candidates
+  return candidates
     .map((c) => ({ c, s: titleScore(c, queries) }))
-    .sort((a, b) => b.s - a.s);
-  const good = ranked.filter((x) => x.s >= 500);
-  return (good.length ? good : ranked).map((x) => x.c);
+    .filter((x) => x.s >= 500)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.c);
 }
 
 function pickFinished(candidates: any[], queries: string[], lastKnownEp?: number | null): boolean | null {
@@ -229,7 +232,13 @@ async function doFetchFinished(title: string, lastKnownEp?: number | null): Prom
 export async function fetchNextAiring(title: string): Promise<NextAiring | null> {
   if (!title || !title.trim()) return null;
   const key = title.toLowerCase().trim();
-  if (mem.has(key)) return mem.get(key)!;
+  if (mem.has(key)) {
+    const hit = mem.get(key);
+    // A memoized result whose airing time has passed is stale — the next
+    // episode must be resolved instead of showing the just-aired one forever.
+    if (!hit || hit.airingAt * 1000 > Date.now()) return hit!;
+    mem.delete(key);
+  }
   const pending = inflight.get(key);
   if (pending) return pending;
 

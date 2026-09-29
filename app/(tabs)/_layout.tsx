@@ -1,9 +1,8 @@
 import { Tabs } from "expo-router";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { GlassFill } from "../../components/GlassFill";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { C, R, AR, ELEVATION_NAV } from "../../lib/theme";
+import { C, R, AR } from "../../lib/theme";
 
 const TABS = [
   { name: "index", icon: "home" as const, label: "الرئيسية" },
@@ -36,29 +35,31 @@ export default function TabLayout() {
 
 function FloatingNav({ state, navigation }: any) {
   const insets = useSafeAreaInsets();
-  // Lift the pill above the phone's on-screen system navigation bar (gesture
-  // pill / 3-button) so it isn't overlapped/hidden by it. Falls back to the
-  // fixed 16px gap on devices with no inset.
+   // Keep the labeled navigation above both gesture and three-button system bars.
   return (
-    <View style={[ss.navWrap, { bottom: 16 + insets.bottom }]} pointerEvents="box-none">
+    <View style={[ss.navWrap, { paddingBottom: Math.max(insets.bottom, 10) }]} pointerEvents="box-none">
       <View style={ss.navPill}>
-        <GlassFill intensity={30} androidColor="rgba(10,10,11,0.94)" />
         <View style={ss.navInner}>
           {TABS.map((tab, i) => {
             const active = state.index === i;
             return (
               <Pressable
                 key={tab.name}
-                onPress={() => navigation.navigate(state.routes[i].name)}
+                accessibilityRole="tab"
+                accessibilityLabel={tab.label}
+                accessibilityState={{ selected: active }}
+                onPress={() => {
+                  const event = navigation.emit({ type: "tabPress", target: state.routes[i].key, canPreventDefault: true });
+                  if (!active && !event.defaultPrevented) navigation.navigate(state.routes[i].name);
+                }}
                 style={[ss.navItem, active && ss.navItemActive]}
               >
                 <Ionicons
                   name={active ? tab.icon : (`${tab.icon}-outline` as any)}
-                  size={19}
+                  size={22}
                   color={active ? C.ember : C.textMuted}
                 />
-                {active && <Text style={ss.navLabel}>{tab.label}</Text>}
-                {active && <View style={ss.navSpark} />}
+                <Text style={[ss.navLabel, active && { color: C.accent }]}>{tab.label}</Text>
               </Pressable>
             );
           })}
@@ -71,48 +72,42 @@ function FloatingNav({ state, navigation }: any) {
 const ss = StyleSheet.create({
   navWrap: {
     position: "absolute",
+    bottom: 0,
     left: 0,
     right: 0,
     alignItems: "center",
     zIndex: 100,
+    backgroundColor: C.bg,
+    borderTopWidth: 1,
+    borderTopColor: C.borderSoft,
   },
   navPill: {
-    borderRadius: R.pill,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: C.line,
-    ...ELEVATION_NAV,
+    width: "100%",
+    maxWidth: 600,
   },
   navInner: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
   },
   navItem: {
-    flexDirection: "row",
+    flex: 1,
+    flexDirection: "column",
     alignItems: "center",
-    gap: 7,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    borderRadius: R.pill,
+    justifyContent: "center",
+    minHeight: 56,
+    paddingVertical: 6,
+    borderRadius: R.md,
   },
-  // Active: a quiet ink-high chip carries the label; the EMBER is the icon, the
-  // label tint, and a small spark dot — not a filled accent blob.
+   // Selection gets a tonal panel; every destination keeps its label visible.
   navItemActive: {
-    backgroundColor: C.inkHigh,
-    paddingHorizontal: 17,
+    backgroundColor: C.accentSoft,
   },
   navLabel: {
     fontSize: 11,
-    color: C.ember,
+    color: C.textMuted,
+    marginTop: 3,
     fontFamily: AR.semibold,
-  },
-  navSpark: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: C.ember,
   },
 });

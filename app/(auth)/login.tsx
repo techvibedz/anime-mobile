@@ -224,15 +224,15 @@ export default function Login() {
             disabled={loading || !email || !password}
           >
             <LinearGradient
-              colors={[C.ember, C.emberDeep]}
+              colors={[C.accent, C.accent]}
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               style={ss.submitBtn}
             >
               {loading ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color={C.textOnAccent} />
               ) : (
                 <>
-                  <Ionicons name="log-in-outline" size={16} color="#fff" />
+                  <Ionicons name="log-in-outline" size={16} color={C.textOnAccent} />
                   <Text style={ss.submitText}>{t.signIn}</Text>
                 </>
               )}
@@ -254,28 +254,26 @@ export default function Login() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  scroll: { flexGrow: 1, paddingHorizontal: S.paddingContent },
+  scroll: { flexGrow: 1, paddingHorizontal: 28 },
   // The form floats as one cohesive glass card over the Aurora backdrop.
   authCard: {
-    borderRadius: R.xxl, padding: 18, marginTop: 4,
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    marginTop: 4,
   },
-  header: { flexDirection: "row", marginBottom: 24 },
+  header: { flexDirection: "row", marginBottom: 40 },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    width: 48, height: 48, borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     alignItems: "center", justifyContent: "center",
   },
   body: { flex: 1, paddingTop: 8 },
   heading: {
-    color: C.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5,
+    color: C.text, fontSize: 34, lineHeight: 50, fontWeight: "700",
     fontFamily: "Cairo_700Bold", textAlign: "right",
     writingDirection: "rtl",
   },
   sub: {
     color: C.textSecondary, fontSize: 14, marginTop: 8, marginBottom: 28,
-    fontFamily: "Cairo_500Medium", lineHeight: 20, textAlign: "right",
+    fontFamily: "Cairo_500Medium", lineHeight: 24, textAlign: "right",
     writingDirection: "rtl",
   },
   warnBanner: {
@@ -285,11 +283,11 @@ const ss = StyleSheet.create({
   },
   warnText: { color: C.gold, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium" },
 
-  googleWrap: { borderRadius: R.pill, marginBottom: 20, ...ELEVATION_GLOW },
+  googleWrap: { borderRadius: R.md, marginBottom: 24, overflow: "hidden" },
   googleBtn: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 10,
-    borderRadius: R.pill, paddingVertical: 15,
+    minHeight: 56, borderRadius: R.md, paddingVertical: 15,
   },
   googleBtnText: { color: "#111", fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 
@@ -303,9 +301,9 @@ const ss = StyleSheet.create({
     fontFamily: "Cairo_600SemiBold", textAlign: "right", writingDirection: "rtl",
   },
   inputBox: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", gap: 10,
-    backgroundColor: C.inkHigh, borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     borderRadius: R.md, paddingHorizontal: 14, height: S.inputHeight,
   },
   input: {
@@ -313,7 +311,7 @@ const ss = StyleSheet.create({
     fontFamily: "Cairo_500Medium",
   },
 
-  forgotBtn: { alignSelf: "flex-start", paddingVertical: 6 },
+  forgotBtn: { alignSelf: "flex-start", minHeight: 48, justifyContent: "center" },
   forgotText: { color: C.accent, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   errorBox: {
@@ -344,13 +342,13 @@ const ss = StyleSheet.create({
   },
   noticeText: { color: C.text, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
-  submitWrap: { borderRadius: R.pill, marginTop: 16, ...ELEVATION_GLOW },
+  submitWrap: { borderRadius: R.md, marginTop: 16, overflow: "hidden" },
   submitBtn: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 8,
-    borderRadius: R.pill, paddingVertical: 16,
+    minHeight: 56, borderRadius: R.md, paddingVertical: 16,
   },
-  submitText: { color: "#fff", fontSize: 16, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+  submitText: { color: C.textOnAccent, fontSize: 16, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 24 },
   footerText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_500Medium" },

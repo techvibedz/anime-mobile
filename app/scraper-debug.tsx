@@ -5,7 +5,7 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { scrapeWitanimeHome, extractVideoUrl } from "../lib/scraper";
 import { diagnoseAnime3rb } from "../lib/api";
-import { C } from "../lib/theme";
+import { C, R, F } from "../lib/theme";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
 
@@ -118,7 +118,7 @@ export default function ScraperDebug() {
             value={a3rbTitle}
             onChangeText={setA3rbTitle}
             placeholder="Anime title"
-            placeholderTextColor="#666"
+            placeholderTextColor={C.textMuted}
             style={ss.input}
             autoCapitalize="none"
             autoCorrect={false}
@@ -127,7 +127,7 @@ export default function ScraperDebug() {
             value={a3rbEp}
             onChangeText={setA3rbEp}
             placeholder="Episode #"
-            placeholderTextColor="#666"
+            placeholderTextColor={C.textMuted}
             style={ss.input}
             keyboardType="number-pad"
           />
@@ -136,7 +136,7 @@ export default function ScraperDebug() {
             onPress={runA3rb}
             disabled={a3rbStatus === "running"}
           >
-            {a3rbStatus === "running" ? <ActivityIndicator color="#fff" /> : <Text style={ss.btnText}>Run anime3rb test</Text>}
+            {a3rbStatus === "running" ? <ActivityIndicator color={C.textOnAccent} /> : <Text style={ss.btnText}>Run anime3rb test</Text>}
           </Pressable>
           {!!a3rbResult && <Text style={[ss.result, a3rbStatus === "err" && { color: "#ff6b6b" }, a3rbStatus === "ok" && { color: "#51cf66" }]}>{a3rbResult}</Text>}
         </View>
@@ -150,7 +150,7 @@ export default function ScraperDebug() {
             onPress={runHome}
             disabled={homeStatus === "running"}
           >
-            {homeStatus === "running" ? <ActivityIndicator color="#fff" /> : <Text style={ss.btnText}>Run home scrape</Text>}
+            {homeStatus === "running" ? <ActivityIndicator color={C.textOnAccent} /> : <Text style={ss.btnText}>Run home scrape</Text>}
           </Pressable>
           {homeMs !== null && <Text style={ss.meta}>{homeMs} ms · {homeStatus.toUpperCase()}</Text>}
           {!!homeResult && <Text style={[ss.result, homeStatus === "err" && { color: "#ff6b6b" }]}>{homeResult}</Text>}
@@ -164,7 +164,7 @@ export default function ScraperDebug() {
             value={embedUrl}
             onChangeText={setEmbedUrl}
             placeholder="Paste embed URL (https://...)"
-            placeholderTextColor="#666"
+            placeholderTextColor={C.textMuted}
             style={ss.input}
             autoCapitalize="none"
             autoCorrect={false}
@@ -174,7 +174,7 @@ export default function ScraperDebug() {
             onPress={runVideo}
             disabled={videoStatus === "running"}
           >
-            {videoStatus === "running" ? <ActivityIndicator color="#fff" /> : <Text style={ss.btnText}>Extract video URL</Text>}
+            {videoStatus === "running" ? <ActivityIndicator color={C.textOnAccent} /> : <Text style={ss.btnText}>Extract video URL</Text>}
           </Pressable>
           {videoMs !== null && <Text style={ss.meta}>{videoMs} ms · {videoStatus.toUpperCase()}</Text>}
           {!!videoResult && <Text style={[ss.result, videoStatus === "err" && { color: "#ff6b6b" }]}>{videoResult}</Text>}
@@ -188,28 +188,28 @@ const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg, paddingHorizontal: 16 },
   header: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16 },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    width: 48, height: 48, borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     alignItems: "center", justifyContent: "center",
   },
-  title: { color: C.text, fontSize: 20, fontWeight: "700" },
-  body: { gap: 16, paddingBottom: 40 },
+  title: { color: C.text, fontSize: 26, fontFamily: F.heading },
+  body: { gap: 24, paddingBottom: 40 },
   card: {
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    borderRadius: 16, padding: 16, gap: 10,
+    backgroundColor: C.surfaceContainer,
+    borderRadius: R.lg, padding: 20, gap: 14,
   },
-  cardTitle: { color: C.text, fontSize: 16, fontWeight: "700" },
-  cardSub: { color: C.textSecondary, fontSize: 12, lineHeight: 16 },
+  cardTitle: { color: C.text, fontSize: 18, fontFamily: F.heading },
+  cardSub: { color: C.textSecondary, fontSize: 14, lineHeight: 22 },
   input: {
-    backgroundColor: "#0008", color: C.text, fontSize: 12,
-    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10,
-    borderWidth: 1, borderColor: C.glassBorder,
+    backgroundColor: C.bg, color: C.text, fontSize: 14,
+    minHeight: 56, borderRadius: R.md, paddingHorizontal: 14, paddingVertical: 12,
+    borderWidth: 1, borderColor: C.border,
   },
   btn: {
-    backgroundColor: C.accent, borderRadius: 999, paddingVertical: 12,
+    backgroundColor: C.accent, borderRadius: R.md, minHeight: 52, justifyContent: "center", paddingVertical: 12,
     alignItems: "center", marginTop: 4,
   },
-  btnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  btnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700" },
   meta: { color: C.textMuted, fontSize: 11, marginTop: 4 },
   result: {
     color: C.text, fontSize: 11, marginTop: 8, lineHeight: 16,

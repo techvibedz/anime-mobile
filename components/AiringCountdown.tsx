@@ -22,7 +22,7 @@ function parts(msLeft: number) {
   };
 }
 
-export function AiringCountdown({ title }: { title: string | null | undefined }) {
+export function AiringCountdown({ title, lastEpisode }: { title: string | null | undefined; lastEpisode?: number | null }) {
   const [info, setInfo] = useState<NextAiring | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -34,6 +34,18 @@ export function AiringCountdown({ title }: { title: string | null | undefined })
     fetchNextAiring(title).then((n) => { if (!cancelled) setInfo(n); });
     return () => { cancelled = true; };
   }, [title]);
+
+  // Once the target time passes, re-resolve: the just-aired episode rolls over
+  // to the one after it instead of sticking on the old number.
+  const aired = !!info && info.airingAt * 1000 <= now;
+  useEffect(() => {
+    if (!title || !aired) return;
+    let cancelled = false;
+    const refetch = setTimeout(() => {
+      fetchNextAiring(title).then((n) => { if (!cancelled) setInfo(n); });
+    }, 2000);
+    return () => { cancelled = true; clearTimeout(refetch); };
+  }, [title, aired]);
 
   // Tick every second while we have an upcoming episode. Stops once it airs so
   // we don't keep a needless interval alive in the background.
@@ -74,6 +86,9 @@ export function AiringCountdown({ title }: { title: string | null | undefined })
   }, [info]);
 
   if (!info) return null;
+  // Never advertise an episode the page already carries (a season-mismatched
+  // AniList entry used to show a wrong/lower number here).
+  if (lastEpisode != null && lastEpisode > 0 && info.episode <= lastEpisode) return null;
 
   const msLeft = info.airingAt * 1000 - now;
 
@@ -115,16 +130,14 @@ export function AiringCountdown({ title }: { title: string | null | undefined })
 const styles = StyleSheet.create({
   card: {
     marginTop: 16,
-    alignSelf: "center",
+    alignSelf: "stretch",
     flexDirection: "row",
-    alignItems: "center",
+    flexWrap: "wrap", justifyContent: "space-between", alignItems: "center",
     gap: 12,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 16,
     borderRadius: R.lg,
-    backgroundColor: C.violetSoft,
-    borderWidth: 1,
-    borderColor: C.borderViolet,
+    backgroundColor: C.surfaceContainer,
   },
   header: { flexDirection: "row", alignItems: "center", gap: 5 },
   label: {
@@ -135,10 +148,10 @@ const styles = StyleSheet.create({
   seg: {
     minWidth: 34, alignItems: "center",
     paddingHorizontal: 6, paddingVertical: 4,
-    borderRadius: R.sm, backgroundColor: "rgba(139,147,255,0.18)",
+    borderRadius: R.sm,
   },
   segValue: {
-    color: C.text, fontSize: 15, fontWeight: "800",
+    color: C.text, fontSize: 20, fontWeight: "700",
     fontFamily: "Outfit_700Bold", fontVariant: ["tabular-nums"],
   },
   segUnit: {

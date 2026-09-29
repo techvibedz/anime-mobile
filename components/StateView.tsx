@@ -55,6 +55,8 @@ export function StateView({
         <Pressable
           style={({ pressed }) => [s.primaryBtn, pressed && { opacity: 0.9 }]}
           onPress={primary.onPress}
+          accessibilityRole="button"
+          accessibilityLabel={primary.label}
         >
           {primary.icon ? <Ionicons name={primary.icon} size={16} color={C.textOnAccent} /> : null}
           <Text style={s.primaryText}>{primary.label}</Text>
@@ -64,6 +66,8 @@ export function StateView({
         <Pressable
           style={({ pressed }) => [s.secondaryBtn, pressed && { opacity: 0.85 }]}
           onPress={secondary.onPress}
+          accessibilityRole="button"
+          accessibilityLabel={secondary.label}
         >
           {secondary.icon ? <Ionicons name={secondary.icon} size={15} color={C.text} /> : null}
           <Text style={s.secondaryText}>{secondary.label}</Text>
@@ -77,13 +81,12 @@ export function StateView({
 const s = StyleSheet.create({
   wrap: {
     flex: 1, alignItems: "center", justifyContent: "center",
-    paddingHorizontal: 32, paddingTop: 72, paddingBottom: 40, gap: 12,
+    paddingHorizontal: 32, paddingTop: 40, paddingBottom: 40, gap: 16,
   },
   disc: {
-    width: 80, height: 80, borderRadius: R.circle,
-    alignItems: "center", justifyContent: "center", marginBottom: 4,
-    backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.border,
+    width: 88, height: 88, borderRadius: R.xl,
+    alignItems: "center", justifyContent: "center", marginBottom: 8,
+    backgroundColor: C.surfaceContainer,
   },
   title: { ...TAr.h2, color: C.text, textAlign: "center" },
   message: {
@@ -91,14 +94,14 @@ const s = StyleSheet.create({
   },
   primaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.ember, borderRadius: R.pill,
-    paddingHorizontal: 24, paddingVertical: 13, marginTop: 8,
+    backgroundColor: C.ember, borderRadius: R.md,
+    minHeight: 52, paddingHorizontal: 28, paddingVertical: 14, marginTop: 12,
   },
   primaryText: { ...TAr.bodySmall, color: C.textOnAccent, fontWeight: "700" },
   secondaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    borderRadius: R.pill, paddingHorizontal: 22, paddingVertical: 11,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    minHeight: 48, borderRadius: R.md, paddingHorizontal: 24, paddingVertical: 12,
   },
   secondaryText: { ...TAr.bodySmall, color: C.text },
 });

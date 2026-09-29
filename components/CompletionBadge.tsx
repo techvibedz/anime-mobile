@@ -29,7 +29,7 @@ export const CompletionBadge = memo(function CompletionBadge({
   const finished = rec.finished;
   return (
     <View style={[s.badge, finished ? s.finished : s.caughtUp, style]} pointerEvents="none">
-      <Ionicons name={finished ? "checkmark-done" : "checkmark"} size={10} color="#fff" />
+      <Ionicons name={finished ? "checkmark-done" : "checkmark"} size={10} color={C.textOnAccent} />
       <Text style={s.text} numberOfLines={1}>
         {finished ? t.completedBadge : t.caughtUpBadge}
       </Text>
@@ -47,7 +47,7 @@ const s = StyleSheet.create({
   finished: { backgroundColor: C.success },
   caughtUp: { backgroundColor: C.cyan },
   text: {
-    color: "#fff", fontSize: 9, fontWeight: "800",
+    color: C.textOnAccent, fontSize: 10, fontWeight: "700",
     fontFamily: "Cairo_700Bold",
   },
 });

@@ -14,9 +14,10 @@ import {
   getDownloads, subscribeDownloads, deleteDownload, retryDownload, formatBytes,
   type DownloadItem,
 } from "../lib/downloads";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R, ELEVATION_CARD, ABSOLUTE_FILL } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
+import { StateView } from "../components/StateView";
 
 const PAD = S.paddingContent;
 
@@ -76,11 +77,7 @@ export default function DownloadsScreen() {
             ) : null
           }
           ListEmptyComponent={
-            <View style={s.empty}>
-              <View style={s.emptyIcon}><Ionicons name="download-outline" size={32} color={C.accent} /></View>
-              <Text style={s.emptyTitle}>{t.downloadsEmpty}</Text>
-              <Text style={s.emptySub}>{t.downloadsEmptySub}</Text>
-            </View>
+            <StateView icon="download-outline" title={t.downloadsEmpty} message={t.downloadsEmptySub} primary={{ label: t.discover, icon: "search", onPress: () => router.push("/(tabs)/search") }} />
           }
           renderItem={({ item }) => (
             <DownloadRow item={item} onPlay={() => playOffline(item)} onDelete={() => onDelete(item)} onRetry={() => retryDownload(item.id)} />
@@ -119,9 +116,9 @@ function DownloadRow({
     >
       <View style={s.thumb}>
         {item.image ? (
-          <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" transition={150} />
+          <Image source={{ uri: item.image }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={150} />
         ) : (
-          <View style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center" }]}>
+          <View style={[ABSOLUTE_FILL, { alignItems: "center", justifyContent: "center" }]}>
             <Ionicons name="film-outline" size={20} color={C.textMuted} />
           </View>
         )}
@@ -165,16 +162,15 @@ const s = StyleSheet.create({
 
   row: {
     flexDirection: "row", alignItems: "center", gap: 12,
-    padding: 10, marginBottom: 10, borderRadius: R.lg,
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    paddingVertical: 16, marginBottom: 4,
+    borderBottomWidth: 1, borderBottomColor: C.borderSoft,
   },
   thumb: {
-    width: 92, height: 56, borderRadius: R.md, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    width: 104, height: 68, borderRadius: R.sm, overflow: "hidden",
+    backgroundColor: C.surface,
   },
   thumbOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.32)",
   },
   meta: { flex: 1, alignItems: "flex-end" },
@@ -184,7 +180,7 @@ const s = StyleSheet.create({
   status: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium" },
   barBg: { width: "100%", height: 4, borderRadius: 2, backgroundColor: C.surfaceLight, marginTop: 6, overflow: "hidden" },
   barFill: { height: 4, borderRadius: 2, backgroundColor: C.accent },
-  deleteBtn: { padding: 6 },
+  deleteBtn: { width: 48, height: 48, alignItems: "center", justifyContent: "center" },
 
   empty: { alignItems: "center", justifyContent: "center", paddingTop: 90, gap: 10 },
   emptyIcon: {

@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 import { favoriteKey, isAnimeDetailUrl, toAnimeUrl } from "./favoritesIdentity";
 
-export { favoriteKey, isAnimeDetailUrl, toAnimeUrl } from "./favoritesIdentity";
+export { favoriteKey, isAnimeDetailUrl, isEpisodeUrl, toAnimeUrl } from "./favoritesIdentity";
 
 const KEY = "anime_favorites";
 

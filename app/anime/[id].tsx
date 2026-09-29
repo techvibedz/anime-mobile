@@ -22,8 +22,8 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, findAnime3rbAnimeUrl, findWitanimeAnimeUrl, findAnime4upAnimeUrl, searchAnime } from "../../lib/api";
-import type { AnimeDetail, Episode, SearchResult } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, findAnime3rbAnimeUrl, findWitanimeAnimeUrl, findAnime4upAnimeUrl, fetchWitanimeSections, searchAnime } from "../../lib/api";
+import type { AnimeDetail, Episode, RelatedAnimeCard, SearchResult } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, type CompletedSets } from "../../lib/history";
@@ -38,8 +38,10 @@ import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
 import { GlassFill } from "../../components/GlassFill";
 import { DownloadPicker } from "../../components/DownloadPicker";
-import { PosterCard } from "../../components/PosterCard";
-import { C, R, S, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV } from "../../lib/theme";
+import { PosterCard, INLINE_POSTER_BADGE, GRID_TITLE_BAND } from "../../components/PosterCard";
+import { CardLayoutControl } from "../../components/CardLayoutControl";
+import { useCardLayout } from "../../lib/cardLayout";
+import { C, R, S, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV, ABSOLUTE_FILL } from "../../lib/theme";
 import { posterUrl } from "../../lib/img";
 import { t } from "../../lib/i18n";
 import { Rise } from "../../components/Rise";
@@ -58,7 +60,7 @@ const BANNER_H = 360;
 const PAD = S.paddingContent;
 const EP_CARD_WIDTH = (SW - PAD * 2 - 10) / 2;
 
-type TabKey = "episodes" | "related" | "info";
+type TabKey = "episodes" | "related" | "maylike" | "info";
 
 export default function AnimeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -80,9 +82,14 @@ export default function AnimeDetailScreen() {
   const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map() });
   const [malScore, setMalScore] = useState<number | null>(null);
   // Related anime (sequels, prequels, side stories, spin-offs) from AniList —
-  // the source sites carry no related section, so these are resolved by title.
+  // the source sites carry no related graph, so these are resolved by title.
   const [relations, setRelations] = useState<RelatedAnimeEntry[]>([]);
   const [relationsLoading, setRelationsLoading] = useState(true);
+  // "You may like" — the Witanime anime page's own قد يعجبك أيضًا rail. The
+  // anime page is resolved by title (season-aware, ambiguity-rejecting) when
+  // this page was opened from another source.
+  const [mayLike, setMayLike] = useState<RelatedAnimeCard[]>([]);
+  const [mayLikeLoading, setMayLikeLoading] = useState(true);
   const [titleCopied, setTitleCopied] = useState(false);
   const [posterOpen, setPosterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -179,6 +186,20 @@ export default function AnimeDetailScreen() {
       if (!cancelled) setRelations(r);
     }).finally(() => {
       if (!cancelled) setRelationsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [data?.title, animeHref]);
+
+  // Resolve the Witanime "قد يعجبك أيضًا" rail for the may-like tab. One static
+  // GET once the anime page is resolved; runs after the UI is showing.
+  useEffect(() => {
+    if (!data?.title) return;
+    let cancelled = false;
+    setMayLikeLoading(true);
+    fetchWitanimeSections(animeHref, data.title).then((sections) => {
+      if (!cancelled) setMayLike(sections.mayLike);
+    }).finally(() => {
+      if (!cancelled) setMayLikeLoading(false);
     });
     return () => { cancelled = true; };
   }, [data?.title, animeHref]);
@@ -373,6 +394,7 @@ export default function AnimeDetailScreen() {
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "episodes", label: t.tabEpisodes, count: data.totalEpisodes },
     { key: "related", label: t.tabRelated, count: relationsLoading ? undefined : relations.length },
+    { key: "maylike", label: t.mayLikeTab, count: mayLikeLoading ? undefined : mayLike.length },
     { key: "info", label: t.tabInfo },
   ];
 
@@ -405,7 +427,7 @@ export default function AnimeDetailScreen() {
           <LinearGradient
             colors={["rgba(10,10,11,0.35)", "transparent", "rgba(10,10,11,0.6)", C.bg]}
             locations={[0, 0.28, 0.62, 1]}
-            style={StyleSheet.absoluteFill}
+            style={ABSOLUTE_FILL}
           />
         </View>
 
@@ -462,7 +484,7 @@ export default function AnimeDetailScreen() {
           </View>
 
           {/* Next-episode countdown — only shows for currently-airing anime */}
-          <AiringCountdown title={data.title} />
+          <AiringCountdown title={data.title} lastEpisode={maxNum} />
 
           {/* Synopsis */}
           {shouldShowSynopsis(animeHref, synopsis) ? (
@@ -478,7 +500,6 @@ export default function AnimeDetailScreen() {
           <View style={ss.chipRow}>
             {data.genres.map((g, i) => (
               <View key={i} style={ss.chip}>
-                <GlassFill intensity={16} />
                 <Text style={ss.chipText}>{g}</Text>
               </View>
             ))}
@@ -498,7 +519,7 @@ export default function AnimeDetailScreen() {
                 onPress={() => setActiveTab(tab.key)}
                 style={[ss.tabItem, active && ss.tabItemActive]}
               >
-                <Text style={[ss.tabText, active && ss.tabTextActive]}>{tab.label}</Text>
+                <Text style={[ss.tabText, active && ss.tabTextActive]} numberOfLines={1}>{tab.label}</Text>
                 {tab.count != null && (
                   <View style={[ss.tabCount, active && ss.tabCountActive]}>
                     <Text style={[ss.tabCountText, active && ss.tabCountTextActive]}>{tab.count}</Text>
@@ -529,6 +550,7 @@ export default function AnimeDetailScreen() {
             />
           )}
           {activeTab === "related" && <RelatedTab items={relations} loading={relationsLoading} />}
+          {activeTab === "maylike" && <MayLikeTab items={mayLike} loading={mayLikeLoading} />}
           {activeTab === "info" && <InfoTab data={data} isMainSource={isMainSource} />}
         </View>
       </ScrollView>
@@ -546,7 +568,7 @@ export default function AnimeDetailScreen() {
           style={ss.actionPlayWrap}
           onPress={() => firstPlayable?.href && router.push(`/watch/${encodeURIComponent(firstPlayable.href)}`)}
         >
-          <LinearGradient colors={[C.accent, C.mint]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ss.actionPlayGrad}>
+           <LinearGradient colors={[C.accent, C.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ss.actionPlayGrad}>
             <Ionicons name="play" size={16} color={C.textOnAccent} />
             <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
           </LinearGradient>
@@ -634,8 +656,8 @@ function ListPickerSheet({ title, onPick, onClose }: { title: string; onPick: (l
   return (
     <Modal transparent visible animationType="none" onRequestClose={animateClose}>
       <View style={{ flex: 1 }}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={animateClose}>
-          <Animated.View style={[StyleSheet.absoluteFill, ss.sheetBackdrop, { opacity: backdrop }]} />
+        <Pressable style={ABSOLUTE_FILL} onPress={animateClose}>
+          <Animated.View style={[ABSOLUTE_FILL, ss.sheetBackdrop, { opacity: backdrop }]} />
         </Pressable>
         <View style={ss.sheetAnchor} pointerEvents="box-none">
           <Animated.View
@@ -1147,9 +1169,9 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
     >
       <View style={[ss.epCardThumb, watched && ss.epCardThumbWatched]}>
         {ep.screenshot ? (
-          <Image source={{ uri: ep.screenshot }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+          <Image source={{ uri: ep.screenshot }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
         ) : poster ? (
-          <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+          <Image source={{ uri: poster }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
         ) : null}
         {watched && <View style={ss.watchedDim} />}
         <LinearGradient
@@ -1204,7 +1226,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
   );
 });
 
-/* ── Tab: Related ───────────────────────────── */
+/* ── Tab: Related (AniList) ─────────────────── */
 
 // Score how well a search result's title matches the wanted related title.
 // Latin-folded equality/containment first, then token overlap, with a
@@ -1300,6 +1322,7 @@ function bestRelatedLookupMatch(entry: RelatedLookupEntry, gotTitle: string): nu
 const MIN_RELATED_TITLE_SCORE = 60;
 
 function RelatedTab({ items, loading }: { items: RelatedAnimeEntry[]; loading: boolean }) {
+  const cards = useCardLayout("related");
   // AniList knows the related anime by name only — the source sites don't link
   // them — so tapping a card resolves the title to a playable source URL via
   // the same cross-source search the search screen uses, then opens its detail
@@ -1416,14 +1439,15 @@ function RelatedTab({ items, loading }: { items: RelatedAnimeEntry[]; loading: b
     );
   }
   return (
-    <View style={ss.relatedGrid}>
+    <View>
+      <View style={ss.cardToolbar}>
+        <CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />
+        <Text style={ss.epCount}>{t.scheduleCount(items.length)}</Text>
+      </View>
+      <View style={ss.relatedGrid}>
       {items.map((item) => {
         const resolving = resolvingId === item.anilistId;
         const notFound = notFoundId === item.anilistId;
-        // 2 columns — bigger, more readable posters than the old 3-col grid,
-        // and a partial last row leaves a far smaller gap on the trailing
-        // (left, in RTL) edge.
-        const cardW = (SW - PAD * 2 - 12) / 2;
         return (
           <PosterCard
             key={item.anilistId}
@@ -1431,12 +1455,13 @@ function RelatedTab({ items, loading }: { items: RelatedAnimeEntry[]; loading: b
             title={item.title}
             subtitle={item.format || undefined}
             onPress={() => openRelated(item)}
-            width={cardW}
+            width={cards.cardWidth}
+            layout={cards.layout}
             recyclingKey={String(item.anilistId)}
             titleLines={2}
-            topRight={<MalCardBadge title={item.title} />}
+            topRight={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
             footer={
-              <View style={ss.relationBadge}>
+              <View style={[ss.relationBadge, cards.layout === "list" && { position: "relative", bottom: 0, marginTop: 8, borderRadius: R.sm }]}>
                 <Text style={ss.relationBadgeText} numberOfLines={1}>{item.relation}</Text>
               </View>
             }
@@ -1457,6 +1482,55 @@ function RelatedTab({ items, loading }: { items: RelatedAnimeEntry[]; loading: b
           />
         );
       })}
+      </View>
+    </View>
+  );
+}
+
+/* ── Tab: You may like (Witanime قد يعجبك أيضًا) ── */
+
+// Cards come straight from the Witanime anime page's own recommendation rail
+// and link to the exact anime page they came from — no title search/guess.
+function MayLikeTab({ items, loading }: { items: RelatedAnimeCard[]; loading: boolean }) {
+  const cards = useCardLayout("related");
+  if (loading) {
+    return (
+      <View style={ss.emptyTab}>
+        <ActivityIndicator color={C.accent} />
+        <Text style={ss.emptyTabText}>{t.loading}</Text>
+      </View>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <View style={ss.emptyTab}>
+        <Ionicons name="film-outline" size={40} color={C.textMuted} />
+        <Text style={ss.emptyTabText}>{t.noRelated}</Text>
+      </View>
+    );
+  }
+  return (
+    <View>
+      <View style={ss.cardToolbar}>
+        <CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />
+        <Text style={ss.epCount}>{t.scheduleCount(items.length)}</Text>
+      </View>
+      <View style={ss.relatedGrid}>
+      {items.map((item) => (
+        <PosterCard
+          key={item.href}
+          image={item.image}
+          title={item.title}
+          subtitle={item.type || undefined}
+          onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+          width={cards.cardWidth}
+          layout={cards.layout}
+          recyclingKey={item.href}
+          titleLines={2}
+          topRight={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
+        />
+      ))}
+      </View>
     </View>
   );
 }
@@ -1541,13 +1615,13 @@ const ss = StyleSheet.create({
 
   // Banner
   banner: { width: SW, height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
-  meshBg: { ...StyleSheet.absoluteFillObject },
+  meshBg: { ...ABSOLUTE_FILL },
 
   // Hero — poster overlaps the banner base, title/meta beside it (RTL).
-  hero: { marginTop: -88, paddingHorizontal: PAD },
+  hero: { marginTop: -64, paddingHorizontal: PAD },
   heroRow: { flexDirection: "row-reverse", alignItems: "flex-end" },
   heroPoster: {
-    width: 112, aspectRatio: 2 / 3, borderRadius: R.lg,
+    width: 104, aspectRatio: 2 / 3, borderRadius: R.md,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderLight,
     ...ELEVATION_CARD,
   },
@@ -1583,7 +1657,7 @@ const ss = StyleSheet.create({
   // layout without using `gap` (RN 0.81 gap + row-reverse Yoga bug).
   heroText: { flex: 1, marginRight: 14, alignItems: "flex-end", paddingBottom: 4 },
   title: {
-    ...TAr.h1, fontSize: 28, lineHeight: 33,
+    ...TAr.h1, fontSize: 26, lineHeight: 38,
     color: C.bone, textAlign: "right", writingDirection: "rtl",
   },
   copiedPill: {
@@ -1606,9 +1680,8 @@ const ss = StyleSheet.create({
 
   // Error-state primary button (also the "go back" action).
   btnPrimary: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 15,
-    ...ELEVATION_GLOW,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    backgroundColor: C.accent, borderRadius: R.md, minHeight: 52, paddingHorizontal: 28, paddingVertical: 15,
   },
   btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
@@ -1620,26 +1693,26 @@ const ss = StyleSheet.create({
     borderTopWidth: 1, borderColor: C.glassBorder,
     ...ELEVATION_NAV,
   },
-  actionPlayWrap: { flex: 1, borderRadius: R.pill, ...ELEVATION_GLOW },
+  actionPlayWrap: { flex: 1, borderRadius: R.md },
   actionPlayGrad: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    paddingVertical: 14, borderRadius: R.pill, overflow: "hidden",
+    minHeight: 52, paddingVertical: 14, borderRadius: R.md, overflow: "hidden",
   },
   actionIcon: {
     width: 52, height: 50, alignItems: "center", justifyContent: "center",
-    borderRadius: R.pill, backgroundColor: C.surfaceGlass,
-    borderWidth: 1, borderColor: C.glassBorder,
+    borderRadius: R.md, backgroundColor: C.surface,
+    borderWidth: 1, borderColor: C.borderSoft,
   },
 
   // Synopsis
-  synopsis: { color: C.textSoft, fontSize: 14, lineHeight: 23, marginTop: 20, fontFamily: "Cairo_500Medium" },
-  readMore: { color: C.accent, fontSize: 11, fontWeight: "600", marginTop: 6, fontFamily: "Cairo_600SemiBold" },
+  synopsis: { color: C.textSecondary, fontSize: 14, lineHeight: 26, marginTop: 24, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  readMore: { color: C.accent, fontSize: 12, fontWeight: "600", marginTop: 8, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
 
   // Chips
-  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 16 },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8, marginTop: 20 },
   chip: {
     paddingHorizontal: 11, paddingVertical: 5, borderRadius: R.sm, overflow: "hidden",
-    borderWidth: 1, borderColor: C.borderLight,
+    backgroundColor: C.surface,
   },
   chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
 
@@ -1657,10 +1730,10 @@ const ss = StyleSheet.create({
   },
   tabItem: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    paddingVertical: 13, borderBottomWidth: 2, borderBottomColor: "transparent", marginBottom: -1,
+     minHeight: 56, flexWrap: "wrap", paddingVertical: 13, borderBottomWidth: 2, borderBottomColor: "transparent", marginBottom: -1,
   },
   tabItemActive: { borderBottomColor: C.ember },
-  tabText: { color: C.textMuted, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  tabText: { color: C.textMuted, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
   tabTextActive: { color: C.bone, fontFamily: "Cairo_700Bold" },
   tabCount: {
     backgroundColor: C.glass, borderRadius: R.pill,
@@ -1681,7 +1754,7 @@ const ss = StyleSheet.create({
   epToolbarLeft: { flexDirection: "row", gap: 8 },
   sortChip: {
     flexDirection: "row", alignItems: "center", gap: 4,
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: R.pill,
+    minHeight: 48, paddingHorizontal: 12, paddingVertical: 10, borderRadius: R.sm,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
   },
   sortChipActive: { backgroundColor: C.accent, borderColor: "transparent" },
@@ -1701,14 +1774,14 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6,
   },
   episodeJumpInput: {
-    flex: 1, minHeight: 42, borderRadius: R.lg, paddingHorizontal: 14,
+    flex: 1, minHeight: 48, borderRadius: R.md, paddingHorizontal: 14,
     color: C.text, backgroundColor: C.surfaceLight,
     borderWidth: 1, borderColor: C.border,
     fontFamily: "Outfit_600SemiBold", fontSize: 14, textAlign: "left",
   },
   episodeJumpInputError: { borderColor: C.error },
   episodeJumpButton: {
-    minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
     paddingHorizontal: 14, borderRadius: R.lg, backgroundColor: C.accent,
   },
   episodeJumpButtonText: {
@@ -1730,7 +1803,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     position: "relative",
   },
-  epCardGradient: { ...StyleSheet.absoluteFillObject },
+  epCardGradient: { ...ABSOLUTE_FILL },
   epCardPlayBtn: {
     position: "absolute", left: "50%", top: "50%",
     width: 36, height: 36, borderRadius: 18, marginLeft: -18, marginTop: -18,
@@ -1761,7 +1834,7 @@ const ss = StyleSheet.create({
   },
   epCardThumbWatched: { borderColor: C.accent },
   watchedDim: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     backgroundColor: "rgba(0,0,0,0.55)",
   },
   watchedBadge: {
@@ -1771,7 +1844,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.accent,
   },
   watchedBadgeText: {
-    color: "#fff", fontSize: 9, fontWeight: "800",
+    color: C.textOnAccent, fontSize: 9, fontWeight: "800",
     fontFamily: "Cairo_700Bold",
   },
   latestBadge: {
@@ -1781,18 +1854,20 @@ const ss = StyleSheet.create({
     backgroundColor: C.ember,
   },
   latestBadgeText: {
-    color: "#fff", fontSize: 8, fontWeight: "800",
+    color: C.textOnAccent, fontSize: 8, fontWeight: "800",
     fontFamily: "Cairo_700Bold",
   },
   epCardTitle: {
-    color: C.textSecondary, fontSize: 11, fontWeight: "600",
-    marginTop: 6, fontFamily: "Cairo_600SemiBold",
+    color: C.text, fontSize: 12, lineHeight: 20, fontWeight: "600",
+    marginTop: 10, fontFamily: "Cairo_600SemiBold", textAlign: "right",
   },
 
   // Related — 2 columns, relaxed gap.
   relatedGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  cardToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
+  // Grid: sits just above the overlaid poster title; list renders it inline.
   relationBadge: {
-    position: "absolute", bottom: 0, left: 0, right: 0,
+    position: "absolute", bottom: GRID_TITLE_BAND, left: 0, right: 0,
     paddingHorizontal: 6, paddingVertical: 3,
     backgroundColor: C.ember, alignItems: "center",
   },
@@ -1801,7 +1876,7 @@ const ss = StyleSheet.create({
     fontFamily: "Cairo_700Bold", writingDirection: "rtl",
   },
   relatedOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...ABSOLUTE_FILL,
     backgroundColor: "rgba(10,10,11,0.72)",
     alignItems: "center", justifyContent: "center", gap: 6,
   },
@@ -1822,7 +1897,7 @@ const ss = StyleSheet.create({
     flexDirection: "row", justifyContent: "space-between",
   },
   glassCircle: {
-    width: 40, height: 40, borderRadius: R.circle, overflow: "hidden",
+    width: 48, height: 48, borderRadius: R.md, overflow: "hidden",
     alignItems: "center", justifyContent: "center",
     borderWidth: 1, borderColor: C.glassBorder,
   },

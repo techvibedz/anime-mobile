@@ -65,7 +65,7 @@ export default function Register() {
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
           style={ss.confirmCircle}
         >
-          <Ionicons name="mail-unread" size={40} color="#fff" />
+          <Ionicons name="mail-unread" size={40} color={C.textOnAccent} />
         </LinearGradient>
         <Text style={ss.confirmTitle}>{t.checkInbox}</Text>
         <Text style={ss.confirmText}>{t.confirmEmailSent(email)}</Text>
@@ -85,7 +85,7 @@ export default function Register() {
           onPress={() => router.replace("/(auth)/login")}
         >
           <LinearGradient
-            colors={[C.ember, C.emberDeep]}
+            colors={[C.accent, C.accent]}
             start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
             style={ss.submitBtn}
           >
@@ -219,13 +219,13 @@ export default function Register() {
             disabled={loading || !email || !password || !confirm}
           >
             <LinearGradient
-              colors={[C.ember, C.emberDeep]}
+              colors={[C.accent, C.accent]}
               start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
               style={ss.submitBtn}
             >
-              {loading ? <ActivityIndicator color="#fff" /> : (
+              {loading ? <ActivityIndicator color={C.textOnAccent} /> : (
                 <>
-                  <Ionicons name="sparkles" size={16} color="#fff" />
+                  <Ionicons name="sparkles" size={16} color={C.textOnAccent} />
                   <Text style={ss.submitText}>{t.createAccount}</Text>
                 </>
               )}
@@ -247,27 +247,25 @@ export default function Register() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  scroll: { flexGrow: 1, paddingHorizontal: S.paddingContent },
+  scroll: { flexGrow: 1, paddingHorizontal: 28 },
   // The form floats as one cohesive glass card over the Aurora backdrop.
   authCard: {
-    borderRadius: R.xxl, padding: 18, marginTop: 4,
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    marginTop: 4,
   },
-  header: { flexDirection: "row", marginBottom: 24 },
+  header: { flexDirection: "row", marginBottom: 32 },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    width: 48, height: 48, borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     alignItems: "center", justifyContent: "center",
   },
   body: { flex: 1, paddingTop: 8 },
   heading: {
-    color: C.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5,
+    color: C.text, fontSize: 34, lineHeight: 50, fontWeight: "700",
     fontFamily: "Cairo_700Bold", textAlign: "right", writingDirection: "rtl",
   },
   sub: {
     color: C.textSecondary, fontSize: 14, marginTop: 8, marginBottom: 28,
-    fontFamily: "Cairo_500Medium", lineHeight: 20, textAlign: "right", writingDirection: "rtl",
+    fontFamily: "Cairo_500Medium", lineHeight: 24, textAlign: "right", writingDirection: "rtl",
   },
 
   warnBanner: {
@@ -277,11 +275,11 @@ const ss = StyleSheet.create({
   },
   warnText: { color: C.gold, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium" },
 
-  googleWrap: { borderRadius: R.pill, marginBottom: 20, ...ELEVATION_GLOW },
+  googleWrap: { borderRadius: R.md, marginBottom: 24, overflow: "hidden" },
   googleBtn: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 10,
-    borderRadius: R.pill, paddingVertical: 15,
+    minHeight: 56, borderRadius: R.md, paddingVertical: 15,
   },
   googleBtnText: { color: "#111", fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 
@@ -295,9 +293,9 @@ const ss = StyleSheet.create({
     fontFamily: "Cairo_600SemiBold", textAlign: "right", writingDirection: "rtl",
   },
   inputBox: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", gap: 10,
-    backgroundColor: C.inkHigh, borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     borderRadius: R.md, paddingHorizontal: 14, height: S.inputHeight,
   },
   input: { flex: 1, color: C.text, fontSize: 14, height: S.inputHeight, fontFamily: "Cairo_500Medium" },
@@ -309,13 +307,13 @@ const ss = StyleSheet.create({
   },
   errorText: { color: C.accent, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
-  submitWrap: { borderRadius: R.pill, marginTop: 16, ...ELEVATION_GLOW },
+  submitWrap: { borderRadius: R.md, marginTop: 16, overflow: "hidden" },
   submitBtn: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 8,
-    borderRadius: R.pill, paddingVertical: 16,
+    minHeight: 56, borderRadius: R.md, paddingVertical: 16,
   },
-  submitText: { color: "#fff", fontSize: 16, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+  submitText: { color: C.textOnAccent, fontSize: 16, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 24 },
   footerText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_500Medium" },
@@ -323,9 +321,8 @@ const ss = StyleSheet.create({
 
   // Confirmation state
   confirmCircle: {
-    width: 96, height: 96, borderRadius: 48,
+    width: 88, height: 88, borderRadius: R.xl,
     alignItems: "center", justifyContent: "center", marginBottom: 24,
-    ...ELEVATION_GLOW,
   },
   confirmTitle: {
     color: C.text, fontSize: 28, fontWeight: "800", marginBottom: 12,

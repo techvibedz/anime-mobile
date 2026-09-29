@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View, Text, Pressable, FlatList, ScrollView, RefreshControl,
-  Dimensions, StyleSheet,
+  StyleSheet,
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,18 +22,18 @@ import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
 import { Shimmer } from "../components/Shimmer";
 import { useOnlineStatus } from "../lib/net";
+import { CardLayoutControl } from "../components/CardLayoutControl";
+import { useCardLayout } from "../lib/cardLayout";
 
-const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
 const GAP = S.gapRelaxed;
-const NUM_COLS = 3;
-const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
 function toCard(item: CatalogAnime): CatalogCardData {
   return { id: item.id, title: item.title, image: item.image, score: item.score, badge: item.format, href: item.sourceHref };
 }
 
 export default function SeasonsScreen() {
+  const cards = useCardLayout("seasons", GAP);
   const insets = useSafeAreaInsets();
   const { online } = useOnlineStatus();
   const options = useMemo(() => seasonOptions(8), []);
@@ -85,7 +85,7 @@ export default function SeasonsScreen() {
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <Aurora />
-      <ScreenHeader title={t.seasonsTitle} />
+      <ScreenHeader title={t.seasonsTitle} right={<CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />} />
 
       {/* Season selector rail */}
       <View style={s.railWrap}>
@@ -107,8 +107,9 @@ export default function SeasonsScreen() {
       </View>
 
       <FlatList
+        key={`${cards.layout}-${cards.columns}`}
         data={items ?? []}
-        numColumns={NUM_COLS}
+        numColumns={cards.columns}
         keyExtractor={(item) => String(item.id)}
         showsVerticalScrollIndicator={false}
         removeClippedSubviews
@@ -116,8 +117,8 @@ export default function SeasonsScreen() {
         maxToRenderPerBatch={9}
         windowSize={7}
         updateCellsBatchingPeriod={50}
-        contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4 }}
-        columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
+        contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4, rowGap: GAP }}
+        columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
         }
@@ -131,7 +132,7 @@ export default function SeasonsScreen() {
           showSkeleton ? (
             <View style={s.skeletonGrid}>
               {Array.from({ length: 12 }).map((_, i) => (
-                <Shimmer key={i} style={{ width: CARD_W, height: CARD_W * 1.5, marginBottom: GAP }} borderRadius={R.lg} />
+                <Shimmer key={i} style={{ width: cards.cardWidth, height: cards.layout === "list" ? 150 : cards.cardWidth * 1.5, marginBottom: GAP }} borderRadius={R.lg} />
               ))}
             </View>
           ) : error ? (
@@ -144,7 +145,7 @@ export default function SeasonsScreen() {
             </View>
           )
         }
-        renderItem={({ item }) => <CatalogCard item={toCard(item)} width={CARD_W} onPress={openItem} />}
+        renderItem={({ item }) => <CatalogCard item={toCard(item)} width={cards.cardWidth} layout={cards.layout} onPress={openItem} />}
       />
     </View>
   );
@@ -153,14 +154,14 @@ export default function SeasonsScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
-  railWrap: { paddingBottom: 10 },
+  railWrap: { paddingBottom: 24 },
   rail: { paddingHorizontal: PAD, gap: 8 },
   pill: {
-    paddingHorizontal: 16, paddingVertical: 9, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    minHeight: 48, paddingHorizontal: 18, paddingVertical: 10, borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     overflow: "hidden", alignItems: "center", justifyContent: "center",
   },
-  pillActive: { borderColor: "transparent", ...ELEVATION_CARD },
+  pillActive: { borderColor: "transparent" },
   pillText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
   pillTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
 

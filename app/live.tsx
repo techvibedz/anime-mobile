@@ -142,9 +142,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
   counterCard: {
-    borderRadius: R.xxl, padding: 18, overflow: "hidden",
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.borderAccent,
-    ...ELEVATION_CARD,
+    borderRadius: R.lg, padding: 24, overflow: "hidden",
+    backgroundColor: C.surfaceContainer,
   },
   counterRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   counterText: { alignItems: "flex-end" },
@@ -163,9 +162,8 @@ const s = StyleSheet.create({
   list: { marginTop: 18, gap: 8 },
   row: {
     flexDirection: "row", alignItems: "center",
-    padding: 12, borderRadius: R.lg,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    paddingVertical: 18,
+    borderBottomWidth: 1, borderBottomColor: C.borderSoft,
   },
   rowMeta: { alignItems: "flex-start", gap: 6, minWidth: 56 },
   rowTime: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium" },

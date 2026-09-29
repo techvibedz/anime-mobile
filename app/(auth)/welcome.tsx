@@ -1,4 +1,4 @@
-import { View, Text, Pressable, StyleSheet, I18nManager } from "react-native";
+import { View, Text, Pressable, ScrollView, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -15,14 +15,13 @@ export default function Welcome() {
           two-hue wash, no orbs / blobs. */}
       <Aurora />
 
-      <View style={[ss.content, { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 18 }]}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[ss.content, { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 24 }]}>
         {/* Brand — solid ember mark, bone wordmark, no glow */}
         <View style={ss.brand}>
           <View style={ss.logoMark}>
-            <Ionicons name="play" size={38} color={C.bone} style={{ marginLeft: 4 }} />
+            <Ionicons name="play" size={32} color={C.textOnAccent} style={{ marginLeft: 4 }} />
           </View>
           <View style={ss.wordmarkRow}>
-            <View style={ss.spark} />
             <Text style={ss.appName}>{t.appName}</Text>
           </View>
           <Text style={ss.tagline}>{t.welcomeTagline}</Text>
@@ -40,6 +39,7 @@ export default function Welcome() {
                 <Ionicons name={f.icon} size={17} color={C.ember} />
               </View>
               <Text style={ss.featureText}>{f.text}</Text>
+              <Ionicons name="checkmark" size={17} color={C.mint} />
             </View>
           ))}
         </View>
@@ -49,75 +49,77 @@ export default function Welcome() {
           <Pressable
             style={({ pressed }) => [ss.btnPrimary, pressed && { transform: [{ scale: 0.98 }], opacity: 0.92 }]}
             onPress={() => router.push("/(auth)/register")}
+            accessibilityRole="button"
           >
-            <Ionicons name="sparkles" size={16} color={C.bone} />
             <Text style={ss.btnPrimaryText}>{t.ctaCreate}</Text>
+            <Ionicons name="arrow-back" size={20} color={C.bone} />
           </Pressable>
 
           <Pressable
             style={({ pressed }) => [ss.btnSecondary, pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
             onPress={() => router.push("/(auth)/login")}
+            accessibilityRole="button"
           >
             <Ionicons name="log-in-outline" size={16} color={C.bone} />
             <Text style={ss.btnSecondaryText}>{t.ctaHaveAccount}</Text>
           </Pressable>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  content: { flex: 1, paddingHorizontal: S.paddingContent, justifyContent: "space-between" },
+  content: { flexGrow: 1, paddingHorizontal: 28, justifyContent: "space-between" },
 
-  brand: { alignItems: "center", marginTop: 40, gap: 18 },
+  brand: { alignItems: "flex-end", marginTop: 40, marginBottom: 36 },
   logoMark: {
-    width: 92, height: 92, borderRadius: 26,
+    width: 72, height: 72, borderRadius: 20, marginBottom: 28,
     alignItems: "center", justifyContent: "center",
     backgroundColor: C.ember,
   },
-  wordmarkRow: { flexDirection: "row", alignItems: "center", gap: 9, marginTop: 4 },
+  wordmarkRow: { flexDirection: "row", alignItems: "center", marginTop: 4 },
   spark: { width: 8, height: 8, borderRadius: 2, backgroundColor: C.ember },
   appName: {
-    color: C.bone, fontSize: 42, fontWeight: "900",
-    letterSpacing: -1.0, fontFamily: "Cairo_700Bold",
+    color: C.bone, fontSize: 46, lineHeight: 68, fontWeight: "700",
+    fontFamily: "Cairo_700Bold",
   },
   tagline: {
-    color: C.textSecondary, fontSize: 15,
+    color: C.textSecondary, fontSize: 17, lineHeight: 30, marginTop: 8,
     fontFamily: "Cairo_500Medium",
-    writingDirection: "rtl", textAlign: "center",
+    writingDirection: "rtl", textAlign: "right",
   },
 
-  features: { gap: 16, marginVertical: 24, paddingHorizontal: 4 },
-  featureRow: { flexDirection: I18nManager.isRTL ? "row" : "row-reverse", alignItems: "center", gap: 14 },
+  features: { marginBottom: 40 },
+  featureRow: { flexDirection: "row", alignItems: "center", paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: C.borderSoft },
   featureIcon: {
-    width: 42, height: 42, borderRadius: R.md,
+    width: 44, height: 44, borderRadius: R.md, marginRight: 16,
     alignItems: "center", justifyContent: "center",
-    backgroundColor: C.inkHigh, borderWidth: 1, borderColor: C.line,
+    backgroundColor: C.surface,
   },
   featureText: {
-    color: C.textSoft, fontSize: 14, flex: 1, lineHeight: 20,
+    color: C.textSoft, fontSize: 14, flex: 1, lineHeight: 24, marginRight: 16,
     fontFamily: "Cairo_500Medium", textAlign: "right",
     writingDirection: "rtl",
   },
 
   cta: { gap: 12 },
   btnPrimary: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 8,
-    borderRadius: R.pill, paddingVertical: 17,
+    minHeight: 56, borderRadius: R.md, paddingVertical: 16,
     backgroundColor: C.ember,
   },
   btnPrimaryText: {
-    color: C.bone, fontSize: 16, fontWeight: "800",
+    color: C.bone, fontSize: 16, fontWeight: "700",
     fontFamily: "Cairo_700Bold", letterSpacing: 0.2,
   },
   btnSecondary: {
-    flexDirection: I18nManager.isRTL ? "row" : "row-reverse",
+    flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 8,
-    paddingVertical: 15, borderRadius: R.pill,
-    backgroundColor: "transparent",
+    minHeight: 56, paddingVertical: 15, borderRadius: R.md,
+    backgroundColor: C.surface,
     borderWidth: 1, borderColor: C.borderLight,
   },
   btnSecondaryText: {

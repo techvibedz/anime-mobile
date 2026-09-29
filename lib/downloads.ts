@@ -16,7 +16,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import PantoufaDownloads from "pantoufa-downloads";
 import { resolveDownloadUrl } from "./api";
-import { mapNativeDownload } from "./downloadStatus";
+import { mapNativeDownload, isMp4Header } from "./downloadStatus";
 
 export type DownloadStatus = "resolving" | "downloading" | "completed" | "failed";
 
@@ -150,10 +150,30 @@ async function isMp4File(fileUri: string): Promise<boolean> {
       position: 0,
       length: 12,
     });
-    return header.includes("ZnR5cA"); // ASCII "ftyp" in an MP4 file header.
+    return isMp4Header(header);
   } catch {
     return false;
   }
+}
+
+/**
+ * A JS-side (non-DownloadManager) download that completed while the app was
+ * killed writes its file but never records `completed`. Adopt the finished file
+ * instead of marking the download failed.
+ */
+async function adoptFinishedFile(item: DownloadItem): Promise<boolean> {
+  const fileUri = item.fileUri || `${DIR}${item.id}.mp4`;
+  if (!(await isMp4File(fileUri))) return false;
+  const info = await FileSystem.getInfoAsync(fileUri);
+  const size = info.exists && "size" in info ? info.size ?? 0 : 0;
+  patch(item.id, {
+    status: "completed",
+    fileUri,
+    progress: 1,
+    bytes: size,
+    totalBytes: Math.max(item.totalBytes, size),
+  });
+  return true;
 }
 
 function updateMonitor() {
@@ -192,8 +212,10 @@ async function reconcileDownloads(): Promise<void> {
             changed = true;
           }
         } else if ((item.status === "resolving" || item.status === "downloading") && !pending.has(item.id)) {
-          patch(item.id, { status: "failed" });
-          changed = true;
+          // The app may have been killed after the bytes were written but
+          // before the completion was persisted — keep a valid finished file.
+          if (await adoptFinishedFile(item)) changed = true;
+          else { patch(item.id, { status: "failed" }); changed = true; }
         }
         continue;
       }
@@ -208,9 +230,10 @@ async function reconcileDownloads(): Promise<void> {
           if (!info.exists || !("size" in info) || !info.size) status = "failed";
         }
       }
-      if (status === "failed" && job.status === 8) {
-        await PantoufaDownloads.remove(job.id).catch(() => 0);
-      }
+      // A single failed header probe (transient read error, one bad poll) used
+      // to fail the download AND delete the finished file. Do not remove the
+      // DownloadManager row here: the next sync re-checks the header and can
+      // flip it back to completed, and a retry/delete still cleans it up.
       if (
         item.status !== status || item.progress !== mapped.progress ||
         item.bytes !== job.bytes || item.totalBytes !== Math.max(0, job.totalBytes) ||

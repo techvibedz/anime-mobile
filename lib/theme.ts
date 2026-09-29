@@ -1,15 +1,6 @@
-// Pantoufa "HOLO SPATIAL" Design System — visionOS Glass & Depth
-// A from-scratch identity replacing "SUMI — Ink & Ember". The vibe is Apple
-// Vision Pro / visionOS: a neutral near-black void with translucent LIGHT glass
-// panels floating in depth, heavy blur, soft periwinkle→mint iridescence, and
-// generous rounding. Where Sumi was flat editorial print (hairlines, no glow),
-// Holo is spatial and dimensional — layered frosted glass, gentle colored bloom,
-// big soft corners. See DESIGN.md / PRODUCT.md.
-//
-// Token NAMES are kept stable from the Sumi/Void eras so every screen adopts Holo
-// via cascade; only the VALUES changed. The `ember`/`violet` aliases now resolve
-// to the Holo periwinkle accent so old call sites stay coherent. New Holo-native
-// aliases (mint, glass tokens) are added alongside for new code to read intent.
+// Pantoufa screening-room design system. All existing color values are pinned.
+// Tonal surfaces, artwork-led browsing, readable Arabic type and quiet controls.
+// Legacy ember/violet/glass aliases remain compatible. See DESIGN.md.
 
 export const C = {
   // Backgrounds — neutral near-black "void" the glass floats over
@@ -129,13 +120,13 @@ export const AR = {
  * Mirrors T's size/lineHeight/letterSpacing steps but swaps the family to Cairo,
  * because Outfit can't render Arabic. Letter-spacing is 0 (Arabic doesn't track). */
 export const TAr = {
-  display: { fontSize: 36, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 40, letterSpacing: 0 },
-  h1: { fontSize: 30, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 34, letterSpacing: 0 },
-  h2: { fontSize: 22, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 26, letterSpacing: 0 },
-  h3: { fontSize: 16, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 21, letterSpacing: 0 },
-  body: { fontSize: 14, fontFamily: AR.medium, fontWeight: "500" as const, lineHeight: 23, letterSpacing: 0 },
-  bodySmall: { fontSize: 13, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 18, letterSpacing: 0 },
-  caption: { fontSize: 11, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 14, letterSpacing: 0 },
+  display: { fontSize: 36, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 52, letterSpacing: 0 },
+  h1: { fontSize: 30, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 44, letterSpacing: 0 },
+  h2: { fontSize: 22, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 34, letterSpacing: 0 },
+  h3: { fontSize: 16, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 26, letterSpacing: 0 },
+  body: { fontSize: 14, fontFamily: AR.medium, fontWeight: "500" as const, lineHeight: 24, letterSpacing: 0 },
+  bodySmall: { fontSize: 13, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 21, letterSpacing: 0 },
+  caption: { fontSize: 11, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 18, letterSpacing: 0 },
   label: { fontSize: 15, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 20, letterSpacing: 0 },
 } as const;
 
@@ -180,8 +171,8 @@ export const S = {
   push: 30,
   xxl: 32,
   xxxl: 44,
-  touchTarget: 44,
-  inputHeight: 50,
+  touchTarget: 48,
+  inputHeight: 56,
   navHeight: 64,
   tabBarHeight: 72,
 } as const;
@@ -236,3 +227,9 @@ export const ELEVATION_NAV = {
   shadowRadius: 28,
   elevation: 14,
 } as const;
+
+// Absolute-fill token. A plain object rather than StyleSheet.absoluteFill /
+// absoluteFillObject: absoluteFill can't be spread under the SDK 54 typings and
+// absoluteFillObject no longer exists under the SDK 57 typings, so one explicit
+// token keeps the same source valid in both trees.
+export const ABSOLUTE_FILL = { position: "absolute" as const, top: 0, right: 0, bottom: 0, left: 0 };

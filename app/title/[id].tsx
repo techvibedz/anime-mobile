@@ -20,6 +20,9 @@ import { GlassFill } from "../../components/GlassFill";
 import { MalBadge, MalCardBadge, useMalRating } from "../../components/MalRating";
 import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { PosterCard, INLINE_POSTER_BADGE } from "../../components/PosterCard";
+import { CardLayoutControl } from "../../components/CardLayoutControl";
+import { useCardLayout } from "../../lib/cardLayout";
 
 const { width: SW } = Dimensions.get("window");
 const BANNER_H = 300;
@@ -40,6 +43,7 @@ function fmtDate(startAt: number | null): string | null {
 }
 
 export default function TitleDetailScreen() {
+  const cards = useCardLayout("title");
   const { id, title: titleParam, img, banner: bannerParam, kitsu } = useLocalSearchParams<{
     id: string; title?: string; img?: string; banner?: string; kitsu?: string;
   }>();
@@ -226,27 +230,23 @@ export default function TitleDetailScreen() {
           {/* Related */}
           {data && data.relations.length > 0 && (
             <View style={ss.section}>
-              <Text style={ss.sectionTitle}>{t.titleRelated}</Text>
+              <View style={ss.cardToolbar}>
+                <CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />
+                <Text style={[ss.sectionTitle, { marginBottom: 0 }]}>{t.titleRelated}</Text>
+              </View>
               <View style={ss.relGrid}>
                 {data.relations.map((r) => (
-                  <Pressable
+                  <PosterCard
                     key={r.id}
-                    style={ss.relCard}
+                    width={cards.cardWidth}
+                    layout={cards.layout}
+                    image={r.image}
+                    title={r.title}
+                    subtitle={arFormat(r.format) || undefined}
+                    recyclingKey={String(r.id)}
+                    topRight={<MalCardBadge title={r.title} style={INLINE_POSTER_BADGE} />}
                     onPress={() => router.push({ pathname: `/title/${r.id}`, params: { title: encodeURIComponent(r.title), img: r.image ? encodeURIComponent(r.image) : "", kitsu: r.kitsuId ? String(r.kitsuId) : "" } })}
-                  >
-                    <View style={ss.relImgWrap}>
-                      {r.image ? (
-                        <Image source={{ uri: r.image }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" recyclingKey={String(r.id)} transition={200} />
-                      ) : (
-                        <View style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center" }]}>
-                          <Ionicons name="image-outline" size={22} color={C.textMuted} />
-                        </View>
-                      )}
-                      <MalCardBadge title={r.title} />
-                    </View>
-                    <Text style={ss.relTitle} numberOfLines={2}>{r.title}</Text>
-                    {r.format ? <Text style={ss.relFmt}>{arFormat(r.format)}</Text> : null}
-                  </Pressable>
+                  />
                 ))}
               </View>
             </View>
@@ -272,15 +272,15 @@ const ss = StyleSheet.create({
   banner: { width: SW, height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
   body: { paddingHorizontal: PAD, marginTop: -40 },
 
-  title: { color: C.text, fontSize: 22, lineHeight: 30, fontFamily: "Cairo_700Bold", textAlign: "center" },
+  title: { color: C.text, fontSize: 30, lineHeight: 42, fontFamily: "Cairo_700Bold", textAlign: "right" },
   soonPill: {
-    flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "center", marginTop: 10,
+    flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-end", marginTop: 14,
     paddingHorizontal: 12, paddingVertical: 5, borderRadius: R.pill,
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
   },
   soonText: { color: C.accent, fontSize: 11, fontFamily: "Cairo_700Bold" },
 
-  metaRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 12 },
+  metaRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 12, marginTop: 16 },
   scorePill: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: C.goldSoft, borderRadius: R.pill, paddingHorizontal: 10, paddingVertical: 4 },
   scoreText: { color: C.gold, fontSize: 12, fontWeight: "800", fontFamily: "Outfit_700Bold" },
   metaText: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium" },
@@ -288,17 +288,17 @@ const ss = StyleSheet.create({
   actions: { flexDirection: "row", gap: 10, marginTop: 18 },
   btnPrimary: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.accent, borderRadius: R.pill, paddingVertical: 14, ...ELEVATION_GLOW,
+    backgroundColor: C.accent, borderRadius: R.md, minHeight: 56, paddingVertical: 14,
   },
   btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontFamily: "Cairo_700Bold" },
   btnGlass: {
-    width: 52, alignItems: "center", justifyContent: "center", borderRadius: R.pill,
-    backgroundColor: C.surfaceGlass, borderWidth: 1, borderColor: C.glassBorder,
+    width: 56, alignItems: "center", justifyContent: "center", borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
   },
 
-  section: { marginTop: 24 },
-  sectionTitle: { color: C.text, fontSize: 16, fontFamily: "Cairo_700Bold", textAlign: "right", marginBottom: 10 },
-  synopsis: { color: C.textSecondary, fontSize: 14, lineHeight: 23, fontFamily: "Cairo_500Medium", textAlign: "right", writingDirection: "rtl" },
+  section: { marginTop: 32 },
+  sectionTitle: { color: C.text, fontSize: 20, fontFamily: "Cairo_700Bold", textAlign: "right", marginBottom: 14 },
+  synopsis: { color: C.textSecondary, fontSize: 14, lineHeight: 27, fontFamily: "Cairo_500Medium", textAlign: "right", writingDirection: "rtl" },
   readMore: { color: C.accent, fontSize: 11, fontFamily: "Cairo_600SemiBold", marginTop: 6, textAlign: "right" },
   translating: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 8, paddingVertical: 6 },
   translatingText: { color: C.textMuted, fontSize: 12, fontFamily: "Cairo_500Medium" },
@@ -319,14 +319,11 @@ const ss = StyleSheet.create({
   infoValue: { color: C.textSecondary, fontSize: 13, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "left", writingDirection: "rtl" },
 
   relGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  relCard: { width: (SW - PAD * 2 - 24) / 3 },
-  relImgWrap: { width: "100%", aspectRatio: 2 / 3, borderRadius: R.lg, overflow: "hidden", backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, ...ELEVATION_CARD },
-  relTitle: { color: C.text, fontSize: 11, fontFamily: "Cairo_600SemiBold", marginTop: 6, textAlign: "right" },
-  relFmt: { color: C.textMuted, fontSize: 10, fontFamily: "Cairo_500Medium", marginTop: 2, textAlign: "right" },
+  cardToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
 
   topBar: { position: "absolute", left: PAD, right: PAD, flexDirection: "row", justifyContent: "space-between" },
   glassCircle: {
-    width: 40, height: 40, borderRadius: R.circle, overflow: "hidden",
+    width: 48, height: 48, borderRadius: R.md, overflow: "hidden",
     alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: C.glassBorder,
   },
 });

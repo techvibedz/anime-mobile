@@ -13,6 +13,11 @@ export const ar = {
   episode: "الحلقة",
   episodes: "الحلقات",
   episodeCount: (n: number) => `${n} ${n === 1 ? "حلقة" : "حلقات"}`,
+  cardLayout: "طريقة عرض الأنمي",
+  cardLayoutCompact: "مصغّر",
+  cardLayoutComfortable: "كبير",
+  cardLayoutList: "قائمة",
+  cardLayoutHint: "اضغط للتبديل إلى طريقة العرض التالية",
 
   // Auth — welcome
   welcomeTagline: "أنمي بلا حدود.",
@@ -92,6 +97,7 @@ export const ar = {
   railMovies: "أفلام الأنمي",
   watchNow: "شاهد الآن",
   myList: "قائمتي",
+  inMyList: "في قائمتي",
   newBadge: "جديد",
   minLeft: (m: number) => `${m} د متبقّية`,
   homeEmptyTitle: "تعذّر تحميل المحتوى",
@@ -108,6 +114,8 @@ export const ar = {
   openAnimePage: "افتح صفحة الأنمي",
   tabEpisodes: "الحلقات",
   tabRelated: "ذات صلة",
+  mayLike: "قد يعجبك أيضًا",
+  mayLikeTab: "قد يعجبك",
   tabInfo: "تفاصيل",
   readMore: "اقرأ المزيد",
   showLess: "عرض أقل",

@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  View, Text, FlatList, RefreshControl, ActivityIndicator, Dimensions, StyleSheet,
+  View, Text, FlatList, RefreshControl, ActivityIndicator, StyleSheet,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,12 +16,11 @@ import { C, S, R } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../../components/ScreenChrome";
 import { useOnlineStatus } from "../../lib/net";
+import { CardLayoutControl } from "../../components/CardLayoutControl";
+import { useCardLayout } from "../../lib/cardLayout";
 
-const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
 const GAP = S.gapRelaxed;
-const NUM_COLS = 3;
-const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
 const VALID: RailKind[] = ["movies", "season"];
 
@@ -34,6 +33,7 @@ function toCard(item: RailItem): CatalogCardData {
 }
 
 export default function PopularScreen() {
+  const cards = useCardLayout("popular", GAP);
   const insets = useSafeAreaInsets();
   const { online } = useOnlineStatus();
   const { kind: kindParam, title: titleParam } = useLocalSearchParams<{ kind: string; title?: string }>();
@@ -61,14 +61,15 @@ export default function PopularScreen() {
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <Aurora />
-      <ScreenHeader title={heading} />
+      <ScreenHeader title={heading} right={<CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />} />
 
       {items === null ? (
         <View style={s.center}><ActivityIndicator size="large" color={C.accent} /></View>
       ) : (
         <FlatList
+          key={`${cards.layout}-${cards.columns}`}
           data={data}
-          numColumns={NUM_COLS}
+          numColumns={cards.columns}
           keyExtractor={(item) => String(item.id)}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
@@ -76,8 +77,8 @@ export default function PopularScreen() {
           maxToRenderPerBatch={9}
           windowSize={7}
           updateCellsBatchingPeriod={50}
-          contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4 }}
-          columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
+          contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4, rowGap: GAP }}
+          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
           }
@@ -90,7 +91,8 @@ export default function PopularScreen() {
           renderItem={({ item }) => (
             <CatalogCard
               item={toCard(item)}
-              width={CARD_W}
+              width={cards.cardWidth}
+              layout={cards.layout}
               onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
             />
           )}
@@ -105,9 +107,8 @@ const s = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40 },
   listHead: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", marginBottom: 14, marginTop: 2 },
   listHeadCount: {
-    color: C.accent, fontSize: 12, fontFamily: "Cairo_600SemiBold",
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
-    borderRadius: R.pill, paddingHorizontal: 10, paddingVertical: 3, overflow: "hidden",
+    color: C.textSecondary, fontSize: 14, fontFamily: "Cairo_600SemiBold",
+    paddingVertical: 8,
   },
   empty: { alignItems: "center", justifyContent: "center", paddingTop: 70, gap: 10 },
   emptyIcon: {

@@ -15,12 +15,15 @@ function load(file) {
   }).outputText;
   new Function('require', 'exports', code)((name) => {
     if (name === 'react') return react;
-    if (name === '@react-native-async-storage/async-storage') return { default: {
+    if (name === '@react-native-async-storage/async-storage') return { __esModule: true, default: {
       getItem: async key => storage.get(key) ?? null,
       setItem: async (key, value) => { storage.set(key, value); },
       removeItem: async key => { storage.delete(key); },
     } };
     if (name === './supabase') return { isSupabaseConfigured: false };
+    if (name === './continueWatching') return load('lib/continueWatching.ts');
+    if (name === './historyMerge') return load('lib/historyMerge.ts');
+    if (name === './storageMaintenance') return load('lib/storageMaintenance.ts');
     if (name === './history') return load('lib/history.ts');
     throw Error(name);
   }, exports);

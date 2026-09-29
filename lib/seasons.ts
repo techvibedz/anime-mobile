@@ -329,18 +329,20 @@ async function fetchPage(query: string, variables: Record<string, unknown>): Pro
 type Cached = { ts: number; data: CatalogAnime[] };
 const inflight = new Map<string, Promise<CatalogAnime[]>>();
 
-async function loadCatalog(cacheKey: string, fetcher: () => Promise<CatalogAnime[]>): Promise<CatalogAnime[]> {
+async function loadCatalog(cacheKey: string, fetcher: () => Promise<CatalogAnime[]>, force = false): Promise<CatalogAnime[]> {
   const pending = inflight.get(cacheKey);
   if (pending) return pending;
-  try {
-    const raw = await AsyncStorage.getItem(CACHE_PREFIX + cacheKey);
-    if (raw) {
-      const parsed: Cached = JSON.parse(raw);
-      if (Date.now() - parsed.ts < TTL && Array.isArray(parsed.data) && parsed.data.length > 0) {
-        return parsed.data;
+  if (!force) {
+    try {
+      const raw = await AsyncStorage.getItem(CACHE_PREFIX + cacheKey);
+      if (raw) {
+        const parsed: Cached = JSON.parse(raw);
+        if (Date.now() - parsed.ts < TTL && Array.isArray(parsed.data) && parsed.data.length > 0) {
+          return parsed.data;
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   const p = (async () => {
     try {
@@ -415,9 +417,9 @@ async function fetchKitsuUpcomingPage(page: number): Promise<CatalogAnime[]> {
 }
 
 /** One page of announced, not-yet-released anime in popularity order. */
-export async function fetchUpcomingAnimePage(page: number): Promise<{ items: CatalogAnime[]; hasNext: boolean }> {
+export async function fetchUpcomingAnimePage(page: number, force = false): Promise<{ items: CatalogAnime[]; hasNext: boolean }> {
   const safePage = Math.max(1, Math.floor(page));
-  const items = await loadCatalog(`upcoming-v3-${safePage}`, () => fetchKitsuUpcomingPage(safePage));
+  const items = await loadCatalog(`upcoming-v3-${safePage}`, () => fetchKitsuUpcomingPage(safePage), force);
   return { items, hasNext: items.length > 0 };
 }
 

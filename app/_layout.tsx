@@ -9,6 +9,7 @@ import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit
 // Latin fonts under-measure Arabic glyphs and the text spilled out of tight rows
 // (e.g. filter pills overlapping their count badges).
 import { Cairo_500Medium, Cairo_600SemiBold, Cairo_700Bold } from "@expo-google-fonts/cairo";
+import { DMSans_400Regular, DMSans_500Medium, DMSans_600SemiBold, DMSans_700Bold } from "@expo-google-fonts/dm-sans";
 import { View, ActivityIndicator, I18nManager, InteractionManager, AppState } from "react-native";
 import * as Updates from "expo-updates";
 import * as SplashScreen from "expo-splash-screen";
@@ -40,6 +41,7 @@ if (I18nManager.isRTL) {
 import { AuthProvider, useAuth } from "../lib/auth";
 import { pullFavoritesFromCloud } from "../lib/favorites";
 import { pullHistoryFromCloud } from "../lib/history";
+import { pruneExpiredCaches } from "../lib/storageMaintenance";
 import { pullCompletionFromCloud } from "../lib/completion";
 import { checkForApkUpdate, checkForOtaUpdate } from "../lib/updater";
 import type { UpdateInfo } from "../lib/updater";
@@ -337,6 +339,10 @@ export default function RootLayout() {
     Cairo_500Medium,
     Cairo_600SemiBold,
     Cairo_700Bold,
+    DMSans_400Regular,
+    DMSans_500Medium,
+    DMSans_600SemiBold,
+    DMSans_700Bold,
   });
 
   // Kick off the ad SDK once the UI is interactive (no-op until ad IDs are
@@ -344,6 +350,14 @@ export default function RootLayout() {
   useEffect(() => {
     const task = InteractionManager.runAfterInteractions(() => { initAds(); });
     return () => task.cancel();
+  }, []);
+
+  // Housekeeping: drop expired AsyncStorage cache entries so the (Android-
+  // capped) DB never fills up — a full DB silently fails EVERY write, which
+  // stopped watch history and Continue Watching dismissals from persisting.
+  useEffect(() => {
+    const timer = setTimeout(() => { void pruneExpiredCaches(); }, 8000);
+    return () => clearTimeout(timer);
   }, []);
 
   // Hand off from the native splash to the first real frame the moment fonts
@@ -358,7 +372,7 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" translucent backgroundColor="transparent" />
+      <StatusBar style="light" />
       <AuthProvider>
         <CompletionProvider>
           <SidebarProvider>

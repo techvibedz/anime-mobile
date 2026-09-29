@@ -2,7 +2,7 @@
 // remains scrollable. Cards open the metadata detail page before release.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, Pressable, FlatList, RefreshControl, ActivityIndicator, Dimensions, StyleSheet } from "react-native";
+import { View, Text, Pressable, FlatList, RefreshControl, ActivityIndicator, StyleSheet } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -13,14 +13,13 @@ import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
 import { useOnlineStatus } from "../lib/net";
+import { CardLayoutControl } from "../components/CardLayoutControl";
+import { useCardLayout } from "../lib/cardLayout";
 
 type SortMode = "popular" | "soon";
 
-const { width: SCREEN_W } = Dimensions.get("window");
 const PAD = S.paddingContent;
 const GAP = S.gapRelaxed;
-const NUM_COLS = 3;
-const CARD_W = (SCREEN_W - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
 
 const DAY = 24 * 60 * 60;
 
@@ -53,56 +52,71 @@ function makeOpener(items: CatalogAnime[]) {
 }
 
 export default function UpcomingScreen() {
+  const cards = useCardLayout("upcoming", GAP);
   const insets = useSafeAreaInsets();
   const { online } = useOnlineStatus();
   const [items, setItems] = useState<CatalogAnime[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  // Pagination + dedupe juggling lives in refs, NOT in the loadMore closure:
+  // state updates commit a frame later, so a fast second onEndReached used to
+  // re-enter with a stale page and refetch/append the same items. `gen` marks a
+  // refresh so an in-flight append from the previous generation can't clobber
+  // the fresh page-1 list.
+  const itemsRef = useRef<CatalogAnime[] | null>(null);
+  const pageRef = useRef(1);
+  const hasMoreRef = useRef(true);
   const loadingMoreRef = useRef(false);
+  const genRef = useRef(0);
   // Default to "most popular" — the filter the user asked for.
   const [sort, setSort] = useState<SortMode>("popular");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
+    const gen = ++genRef.current;
     try {
-      const result = await fetchUpcomingAnimePage(1);
+      const result = await fetchUpcomingAnimePage(1, force);
+      if (genRef.current !== gen) return;
+      itemsRef.current = result.items;
+      pageRef.current = 1;
+      hasMoreRef.current = result.hasNext && result.items.length > 0;
       setItems(result.items);
-      setPage(1);
-      setHasMore(result.hasNext);
     } catch {
-      setItems([]);
+      // A failed refresh keeps the already-loaded list instead of wiping it.
+      if (genRef.current === gen && itemsRef.current === null) setItems([]);
     } finally {
-      setRefreshing(false);
+      if (genRef.current === gen) setRefreshing(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  const onRefresh = useCallback(() => { setRefreshing(true); load(); }, [load]);
+  const onRefresh = useCallback(() => { setRefreshing(true); void load(true); }, [load]);
 
   const loadMore = useCallback(async () => {
-    if (loadingMoreRef.current || !hasMore || items === null) return;
+    if (loadingMoreRef.current || !hasMoreRef.current || itemsRef.current === null) return;
     loadingMoreRef.current = true;
     setLoadingMore(true);
-    const nextPage = page + 1;
+    const gen = genRef.current;
+    const nextPage = pageRef.current + 1;
     try {
       const result = await fetchUpcomingAnimePage(nextPage);
-      if (result.items.length === 0) {
-        setHasMore(false);
-        return;
+      if (genRef.current !== gen) return;
+      if (result.items.length === 0) { hasMoreRef.current = false; return; }
+      const current = itemsRef.current || [];
+      const seen = new Set(current.map((item) => item.id));
+      const fresh = result.items.filter((item) => !seen.has(item.id));
+      if (fresh.length > 0) {
+        const merged = pageRef.current === nextPage ? [...current, ...fresh] : current;
+        itemsRef.current = merged;
+        setItems(merged);
       }
-      setItems((current) => {
-        const seen = new Set((current || []).map((item) => item.id));
-        return [...(current || []), ...result.items.filter((item) => !seen.has(item.id))];
-      });
-      setPage(nextPage);
-      setHasMore(result.hasNext);
+      pageRef.current = nextPage;
+      hasMoreRef.current = result.hasNext;
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  }, [hasMore, items, page]);
+  }, []);
 
   const sorted = useMemo(() => (items ? sortUpcomingAnime(items, sort) : []), [items, sort]);
 
@@ -134,25 +148,30 @@ export default function UpcomingScreen() {
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <Aurora />
-      <ScreenHeader title={t.upcomingTitle} />
+      <ScreenHeader title={t.upcomingTitle} right={<CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />} />
 
       {items === null ? (
         <View style={s.center}><ActivityIndicator size="large" color={C.accent} /></View>
       ) : (
         <FlatList
+          key={`${cards.layout}-${cards.columns}`}
           data={sorted}
-          numColumns={NUM_COLS}
+          numColumns={cards.columns}
           keyExtractor={(item) => String(item.id)}
           showsVerticalScrollIndicator={false}
-          removeClippedSubviews
+          // Appending a page re-sorts the whole list (Kitsu's feed order isn't
+          // the client sort order), which used to shift cards in above the
+          // viewport and make the grid "jump back". Keep the visible content
+          // anchored while items are inserted.
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           initialNumToRender={12}
           maxToRenderPerBatch={9}
           windowSize={7}
           updateCellsBatchingPeriod={50}
           onEndReached={loadMore}
           onEndReachedThreshold={0.6}
-          contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24 }}
-          columnWrapperStyle={{ gap: GAP, marginBottom: GAP }}
+          contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, rowGap: GAP }}
+          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
           ListHeaderComponent={
             <View>
               <Text style={s.intro}>{t.upcomingSub}</Text>
@@ -164,7 +183,7 @@ export default function UpcomingScreen() {
           }
           ListEmptyComponent={<OfflineNotice offline={online === false} onRetry={onRefresh} />}
           ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ marginVertical: 20 }} /> : null}
-          renderItem={({ item }) => <CatalogCard item={toCard(item)} width={CARD_W} onPress={openItem} />}
+          renderItem={({ item }) => <CatalogCard item={toCard(item)} width={cards.cardWidth} layout={cards.layout} onPress={openItem} />}
         />
       )}
     </View>
@@ -175,17 +194,17 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40 },
   intro: {
-    color: C.textSecondary, fontSize: 12.5, lineHeight: 19, textAlign: "right",
+    color: C.textSecondary, fontSize: 14, lineHeight: 25, textAlign: "right",
     fontFamily: "Cairo_500Medium", marginBottom: 12, marginTop: 2,
   },
-  filterRow: { flexDirection: "row", gap: 8, marginBottom: 16 },
+  filterRow: { flexDirection: "row", gap: 8, marginBottom: 24 },
   filterChip: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    flex: 1, minHeight: 48, justifyContent: "center", paddingHorizontal: 12, paddingVertical: 10, borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     overflow: "hidden",
   },
-  filterChipActive: { borderColor: "transparent", ...ELEVATION_CARD },
+  filterChipActive: { borderColor: "transparent" },
   filterText: { color: C.textSecondary, fontSize: 12.5, fontFamily: "Cairo_600SemiBold" },
   filterTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
   empty: { alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 10 },

@@ -352,19 +352,17 @@ const s = StyleSheet.create({
 
   bubble: {
     borderRadius: R.lg,
-    paddingHorizontal: 14, paddingVertical: 10,
+    paddingHorizontal: 16, paddingVertical: 12,
     maxWidth: "84%",
   },
   bubbleMine: {
     alignSelf: "flex-end",
     backgroundColor: C.accentSoft,
-    borderWidth: 1, borderColor: C.borderAccent,
     borderBottomRightRadius: 5,
   },
   bubbleTheirs: {
     alignSelf: "flex-start",
-    backgroundColor: C.surfaceLight,
-    borderWidth: 1, borderColor: C.glassBorder,
+    backgroundColor: C.surface,
     borderBottomLeftRadius: 5,
   },
   bubblePhoto: {
@@ -375,7 +373,7 @@ const s = StyleSheet.create({
   bubbleImage: {
     width: 220, height: 220, borderRadius: Math.max(R.lg - 3, 10),
   },
-  bubbleBody: { fontSize: 14.5, lineHeight: 20, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  bubbleBody: { fontSize: 15, lineHeight: 25, fontFamily: "Cairo_500Medium", textAlign: "right" },
   bubbleBodyMine: { color: C.text, fontWeight: "600" },
   bubbleBodyTheirs: { color: C.text },
   bubbleTime: { color: C.textMuted, fontSize: 10, marginTop: 4, fontFamily: "Cairo_500Medium", alignSelf: "flex-start" },
@@ -400,7 +398,7 @@ const s = StyleSheet.create({
 
   statusBtn: {
     flexDirection: "row-reverse", alignItems: "center", gap: 6,
-    paddingHorizontal: 11, paddingVertical: 7, borderRadius: R.pill,
+    minHeight: 48, paddingHorizontal: 11, paddingVertical: 10, borderRadius: R.md,
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
   },
   statusBtnPressed: { opacity: 0.7 },
@@ -410,31 +408,30 @@ const s = StyleSheet.create({
 
   composer: {
     flexDirection: "row", direction: "ltr", alignItems: "flex-end",
-    paddingHorizontal: S.md, paddingTop: 12,
-    backgroundColor: C.surfaceContainer,
-    borderTopWidth: 1, borderTopColor: C.glassBorder,
+    paddingHorizontal: 16, paddingTop: 12,
+    backgroundColor: C.bg,
+    borderTopWidth: 1, borderTopColor: C.borderSoft,
   },
   input: {
     flex: 1, minHeight: 52, maxHeight: 120,
     paddingHorizontal: 16, paddingVertical: 11,
-    borderRadius: R.xl,
-    backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.glassBorder,
+    borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     color: C.text, fontSize: 14, lineHeight: 20, fontFamily: "Cairo_500Medium",
   },
   inputDisabled: { borderColor: "rgba(255,255,255,0.06)", backgroundColor: C.surfaceLight },
   attachBtn: {
-    width: 52, height: 52, borderRadius: R.circle,
-    backgroundColor: C.mintSoft, borderWidth: 1, borderColor: C.mint,
+    width: 48, height: 52, borderRadius: R.md,
+    backgroundColor: C.surface,
     alignItems: "center", justifyContent: "center",
-    marginLeft: 18,
+    marginLeft: 8,
   },
   attachBtnPressed: { transform: [{ scale: 0.94 }], opacity: 0.7 },
   attachBtnDisabled: { opacity: 0.35 },
   sendBtn: {
-    width: 52, height: 52, borderRadius: R.circle,
-    backgroundColor: C.mintSoft, borderWidth: 1, borderColor: C.mint,
-    alignItems: "center", justifyContent: "center", marginLeft: 14,
-    ...ELEVATION_GLOW,
+    width: 48, height: 52, borderRadius: R.md,
+    backgroundColor: C.mintSoft,
+    alignItems: "center", justifyContent: "center", marginLeft: 8,
   },
   sendBtnPressed: { transform: [{ scale: 0.94 }] },
   sendBtnDisabled: { opacity: 0.35 },

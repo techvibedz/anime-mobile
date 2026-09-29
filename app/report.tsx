@@ -208,14 +208,14 @@ const s = StyleSheet.create({
     color: C.textSecondary, fontSize: 14, lineHeight: 21, textAlign: "right",
     fontFamily: "Cairo_500Medium", marginBottom: 20,
   },
-  sectionGap: { height: 22 },
+  sectionGap: { height: 28 },
 
   // Category chips
   catWrap: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 },
   catChip: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    paddingHorizontal: 14, paddingVertical: 9, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    minHeight: 48, paddingHorizontal: 16, paddingVertical: 10, borderRadius: R.md,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
   catChipActive: { backgroundColor: C.accent, borderColor: C.accent },
   catText: { color: C.textSecondary, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
@@ -223,13 +223,12 @@ const s = StyleSheet.create({
 
   // Inputs
   textArea: {
-    minHeight: 130, borderRadius: R.xl, padding: 16,
+    minHeight: 180, borderRadius: R.md, padding: 18,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     color: C.text, fontSize: 14, lineHeight: 21, fontFamily: "Cairo_500Medium",
-    ...ELEVATION_CARD,
   },
   input: {
-    height: 52, borderRadius: R.lg, paddingHorizontal: 16,
+    height: 56, borderRadius: R.md, paddingHorizontal: 16,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     color: C.text, fontSize: 14, fontFamily: "Cairo_500Medium",
   },
@@ -257,8 +256,8 @@ const s = StyleSheet.create({
   // Submit
   submitBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9,
-    marginTop: 28, height: 54, borderRadius: R.pill,
-    backgroundColor: C.accent, ...ELEVATION_GLOW,
+    marginTop: 32, height: 56, borderRadius: R.md,
+    backgroundColor: C.accent,
   },
   submitText: { color: C.textOnAccent, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 

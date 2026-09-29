@@ -178,13 +178,14 @@ export default function ProfileScreen() {
       <Aurora />
       <ScreenHeader
         title={editing ? t.editProfileTitle : t.profileTitle}
+        showMenu={false}
         right={
           editing ? (
-            <GlassIconButton icon="close" size={19} tint={C.textSecondary} onPress={cancelEdit} />
+             <GlassIconButton label={t.profileCancel} icon="close" size={19} tint={C.textSecondary} onPress={cancelEdit} />
           ) : (
             <View style={s.headerActions}>
-              <GlassIconButton icon="create-outline" size={19} tint={C.text} onPress={beginEdit} />
-              <GlassIconButton icon="settings-outline" size={19} tint={C.textSecondary} onPress={() => router.push("/settings")} />
+              <GlassIconButton label={t.editProfileTitle} icon="create-outline" size={19} tint={C.text} onPress={beginEdit} />
+              <GlassIconButton label={t.settingsTitle} icon="settings-outline" size={19} tint={C.textSecondary} onPress={() => router.push("/settings")} />
             </View>
           )
         }
@@ -376,10 +377,10 @@ const s = StyleSheet.create({
   // Shared horizontal spacer between equal-width cards (margins, not row gap).
   colSpace: { marginLeft: 10 },
 
-  hero: { alignItems: "center", paddingVertical: 20, paddingHorizontal: S.paddingContent },
+  hero: { alignItems: "center", paddingTop: 12, paddingBottom: 32, paddingHorizontal: S.paddingContent },
   avatarRing: {
-    width: 102, height: 102, borderRadius: R.circle,
-    alignItems: "center", justifyContent: "center", padding: 3,
+    width: 96, height: 96, borderRadius: R.circle,
+    alignItems: "center", justifyContent: "center", padding: 2,
   },
   avatar: { width: "100%", height: "100%", borderRadius: R.circle },
   avatarFallback: { backgroundColor: C.bgDeep, alignItems: "center", justifyContent: "center" },
@@ -392,7 +393,7 @@ const s = StyleSheet.create({
   },
   // Name now wraps (was numberOfLines={1} → long Arabic names truncated).
   name: {
-    color: C.text, fontSize: 23, fontWeight: "800", fontFamily: "Cairo_700Bold",
+    color: C.text, fontSize: 28, lineHeight: 42, fontWeight: "700", fontFamily: "Cairo_700Bold",
     marginTop: 16, textAlign: "center", paddingHorizontal: S.paddingContent,
   },
   email: { color: C.textSecondary, fontSize: 13, marginTop: 5, fontFamily: "Cairo_500Medium" },
@@ -412,7 +413,7 @@ const s = StyleSheet.create({
     textAlign: "right", marginBottom: 8,
   },
   input: {
-    height: 52, borderRadius: R.lg, paddingHorizontal: 16,
+    height: 56, borderRadius: R.md, paddingHorizontal: 16,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     color: C.text, fontSize: 14, fontFamily: "Cairo_500Medium",
   },
@@ -424,12 +425,12 @@ const s = StyleSheet.create({
   editActions: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 22 },
   saveBtn: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    height: 52, borderRadius: R.pill, backgroundColor: C.accent, ...ELEVATION_GLOW,
+    height: 56, borderRadius: R.md, backgroundColor: C.accent,
   },
   saveText: { color: C.textOnAccent, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold" },
   cancelBtn: {
     paddingHorizontal: 22, height: 52, alignItems: "center", justifyContent: "center",
-    borderRadius: R.pill, backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    borderRadius: R.md, backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
   cancelText: { color: C.textSecondary, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
@@ -444,15 +445,14 @@ const s = StyleSheet.create({
   statsPanel: {
     marginHorizontal: S.paddingContent, marginTop: 8,
     borderRadius: R.xl, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    backgroundColor: C.surfaceContainer,
   },
   statsPrimaryRow: { flexDirection: "row", alignItems: "stretch", paddingVertical: 18 },
   statsSecondaryRow: { flexDirection: "row", alignItems: "stretch", paddingVertical: 14 },
   statCol: { flex: 1, alignItems: "center", paddingHorizontal: 6 },
   statColIcon: { width: 36, height: 36, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginBottom: 8 },
   statColValue: { color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  statColLabel: { color: C.textSecondary, fontSize: 10, textAlign: "center", marginTop: 4, fontFamily: "Cairo_500Medium" },
+  statColLabel: { color: C.textSecondary, fontSize: 11, textAlign: "center", marginTop: 6, fontFamily: "Cairo_500Medium" },
   secIcon: { width: 28, height: 28, borderRadius: R.circle, alignItems: "center", justifyContent: "center", marginBottom: 6 },
   secValue: { color: C.text, fontSize: 15, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
   secLabel: { color: C.textMuted, fontSize: 10, textAlign: "center", marginTop: 3, fontFamily: "Cairo_500Medium" },
@@ -463,13 +463,13 @@ const s = StyleSheet.create({
 
   recentList: { paddingHorizontal: S.paddingContent },
   recentItem: {
-    flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 8,
-    borderRadius: R.lg, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    flexDirection: "row", alignItems: "center", paddingVertical: 16,
+    borderBottomWidth: 1, borderBottomColor: C.borderSoft,
   },
   recentItemPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.99 }] },
   recentCheck: { marginRight: 12 },
   recentBody: { flex: 1, marginRight: 12 },
-  recentThumb: { width: 64, height: 40, borderRadius: R.sm },
+  recentThumb: { width: 88, height: 56, borderRadius: R.sm },
   recentThumbFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
   recentTitle: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   recentSub: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "Cairo_500Medium", textAlign: "right" },

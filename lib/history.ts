@@ -1,5 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
+import { groupContinueWatching } from "./continueWatching";
+import { mergeHistory } from "./historyMerge";
+import { pruneCacheStorage } from "./storageMaintenance";
 
 const KEY = "watch_history";
 const MAX_ITEMS = 200;
@@ -9,8 +12,31 @@ export function subscribeHistory(cb: () => void): () => void {
   historyListeners.add(cb);
   return () => { historyListeners.delete(cb); };
 }
+
+let localWriteFailureLogged = false;
 async function saveHistory(list: WatchEntry[]) {
-  await AsyncStorage.setItem(KEY, JSON.stringify(list));
+  const payload = JSON.stringify(list);
+  try {
+    await AsyncStorage.setItem(KEY, payload);
+  } catch (first) {
+    // The Android AsyncStorage DB is capped (6 MB by default) and this app
+    // caches heavily; when it fills EVERY write fails and history silently
+    // stops persisting. Drop the re-fetchable caches and retry once — losing
+    // metadata caches is recoverable, losing watch progress is not.
+    const pruned = await pruneCacheStorage();
+    try {
+      await AsyncStorage.setItem(KEY, payload);
+      console.info(`[history] write recovered after pruning ${pruned} cache keys`);
+    } catch (second) {
+      if (!localWriteFailureLogged) {
+        localWriteFailureLogged = true;
+        console.warn("[history] local write failed:", second);
+        void import("./remoteLog").then(({ remoteLog }) =>
+          remoteLog("error", "app", "history local write failed", { pruned, error: String(second) }),
+        ).catch(() => {});
+      }
+    }
+  }
   for (const cb of historyListeners) cb();
 }
 
@@ -42,6 +68,7 @@ function autoCompleted(e: WatchEntry): boolean {
 }
 
 /** Push a single history entry to Supabase (fire-and-forget; logs on failure). */
+let cloudPushFailureLogged = false;
 async function pushToCloud(entry: WatchEntry) {
   if (!isSupabaseConfigured) return;
   const user = await getSessionUser();
@@ -60,7 +87,16 @@ async function pushToCloud(entry: WatchEntry) {
     completed: entry.completed ?? autoCompleted(entry),
     dismissed: entry.dismissed ?? false,
   }, { onConflict: "user_id,episode_href" });
-  if (error) console.warn("[history] cloud sync failed:", error.message);
+  if (error) {
+    console.warn("[history] cloud sync failed:", error.message);
+    // One log per session — this fires on every 5s progress save otherwise.
+    if (!cloudPushFailureLogged) {
+      cloudPushFailureLogged = true;
+      void import("./remoteLog").then(({ remoteLog }) =>
+        remoteLog("warn", "app", "watch_history upsert failed", { message: error.message }),
+      ).catch(() => {});
+    }
+  }
 }
 
 async function deleteFromCloud(episodeHref: string) {
@@ -72,7 +108,15 @@ async function deleteFromCloud(episodeHref: string) {
     .eq("episode_href", episodeHref);
 }
 
-/** Hydrate local cache from Supabase (called after sign-in). */
+/**
+ * Hydrate local cache from Supabase (called after sign-in).
+ *
+ * MERGE, never replace: this used to overwrite local storage with whatever the
+ * cloud had. A single failed push (offline save, expired session, a row the
+ * server rejected) meant the next cold start wiped the user's progress and
+ * Continue Watching row — "it doesn't save what I watched". Local entries the
+ * cloud doesn't know about are kept; for shared hrefs the newer updatedAt wins.
+ */
 export async function pullHistoryFromCloud() {
   if (!isSupabaseConfigured) return;
   const user = await getSessionUser();
@@ -84,7 +128,7 @@ export async function pullHistoryFromCloud() {
     .limit(MAX_ITEMS);
   if (error) { console.warn("[history] pull failed:", error.message); return; }
   if (!data) return;
-  const local: WatchEntry[] = data.map((row: any) => ({
+  const remote: WatchEntry[] = data.map((row: any) => ({
     episodeHref: row.episode_href,
     episodeTitle: row.episode_title,
     animeTitle: row.anime_title,
@@ -97,7 +141,8 @@ export async function pullHistoryFromCloud() {
     completed: !!row.completed,
     dismissed: !!row.dismissed,
   }));
-  await saveHistory(local);
+  const local = await getHistory();
+  await saveHistory(mergeHistory(local, remote, MAX_ITEMS));
 }
 
 export async function getHistory(): Promise<WatchEntry[]> {
@@ -144,20 +189,7 @@ export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
  * instead of seeing every episode they've watched.
  */
 export async function getContinueWatching(): Promise<WatchEntry[]> {
-  const list = await getHistory();
-  // list is already sorted newest-first; keep the first seen per anime.
-  const seen = new Set<string>();
-  const out: WatchEntry[] = [];
-  for (const e of list) {
-    const key = e.animeHref || e.animeTitle;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    // The most-recent episode of this anime was dismissed from the row — hide
-    // the whole series, but keep its progress (it stays in history).
-    if (e.dismissed) continue;
-    out.push(e);
-  }
-  return out;
+  return groupContinueWatching(await getHistory());
 }
 
 export async function getProgress(episodeHref: string): Promise<WatchEntry | null> {
@@ -181,10 +213,27 @@ export async function dismissFromContinue(episodeHref: string) {
   const list = await getHistory();
   const idx = list.findIndex((e) => e.episodeHref === episodeHref);
   if (idx < 0) return;
-  const next: WatchEntry = { ...list[idx], dismissed: true };
-  list[idx] = next;
+  // Dismiss EVERY entry of this anime — the row groups by anime, so hiding a
+  // single episode would just reveal the previous one (see groupContinueWatching).
+  // Match by href-key AND by normalized title: the same anime can be stored
+  // under different animeHref values (episode URL vs anime URL) and would
+  // otherwise leave a second card behind.
+  const target = list[idx];
+  const key = target.animeHref || target.animeTitle;
+  const titleKey = animeTitleKey(target.animeTitle);
+  const touched: WatchEntry[] = [];
+  for (const entry of list) {
+    const sameAnime = (entry.animeHref || entry.animeTitle) === key ||
+      (!!titleKey && animeTitleKey(entry.animeTitle) === titleKey);
+    if (!sameAnime) continue;
+    entry.dismissed = true;
+    // Bump the timestamp so the dismissal beats any older cloud row on the
+    // next merge-pull (and stays the newest entry, keeping the anime hidden).
+    entry.updatedAt = Date.now();
+    touched.push(entry);
+  }
   await saveHistory(list);
-  pushToCloud(next).catch(() => {});
+  void Promise.all(touched.map((entry) => pushToCloud(entry).catch(() => {})));
 }
 
 export function formatProgress(entry: WatchEntry): string {

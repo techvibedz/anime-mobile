@@ -151,7 +151,6 @@ function NewsCard({ item, onPress }: { item: NewsItem; onPress: (n: NewsItem) =>
           <Ionicons name="arrow-back" size={14} color={C.ember} />
         </View>
       </View>
-      <View style={s.edge} pointerEvents="none" />
     </Pressable>
   );
 }
@@ -166,13 +165,12 @@ const s = StyleSheet.create({
   },
 
   card: {
-    borderRadius: R.xl, marginBottom: 16, overflow: "hidden",
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    marginBottom: 32, overflow: "hidden",
+    borderBottomWidth: 1, borderBottomColor: C.borderSoft, paddingBottom: 24,
   },
   cardPressed: { transform: [{ scale: 0.99 }], borderColor: C.borderAccent },
 
-  thumbWrap: { height: 168, backgroundColor: C.surfaceLight },
+  thumbWrap: { height: 210, borderRadius: R.lg, overflow: "hidden", backgroundColor: C.surfaceLight },
   thumb: { width: "100%", height: "100%" },
   thumbTag: {
     position: "absolute", top: 10, right: 10, flexDirection: "row", alignItems: "center", gap: 6,
@@ -181,14 +179,14 @@ const s = StyleSheet.create({
   },
   thumbTagText: { color: C.bone, fontSize: 11, fontFamily: F.bodySemi },
 
-  body: { padding: 15 },
+  body: { paddingTop: 16 },
   meta: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 10, marginBottom: 8 },
   metaTime: { color: C.ember, fontSize: 11, fontFamily: AR.semibold },
   metaSource: { color: C.textMuted, fontSize: 11, fontFamily: AR.medium, flexShrink: 1 },
 
-  headline: { color: C.bone, fontSize: 16, lineHeight: 24, fontFamily: AR.bold, textAlign: "right" },
+  headline: { color: C.bone, fontSize: 21, lineHeight: 33, fontFamily: AR.bold, textAlign: "right" },
 
-  readRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, marginTop: 12 },
+  readRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 6, marginTop: 16, minHeight: 40 },
   readText: { color: C.ember, fontSize: 12.5, fontFamily: AR.bold },
 
   // Ember hairline pinned to the reading (right) edge — the SUMI accent tick.

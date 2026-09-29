@@ -201,7 +201,7 @@ const s = StyleSheet.create({
 
   backBtn: {
     position: "absolute", left: S.paddingContent, zIndex: 40, elevation: 40,
-    width: 42, height: 42, borderRadius: R.circle,
+    width: 48, height: 48, borderRadius: R.md,
     backgroundColor: C.overlayMedium, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
@@ -215,11 +215,11 @@ const s = StyleSheet.create({
   metaDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.textFaint },
   metaSource: { color: C.textMuted, fontSize: 12, fontFamily: AR.medium, flexShrink: 1 },
 
-  headline: { color: C.bone, fontSize: 24, lineHeight: 34, fontFamily: AR.bold, textAlign: "right", letterSpacing: -0.3 },
+  headline: { color: C.bone, fontSize: 28, lineHeight: 43, fontFamily: AR.bold, textAlign: "right" },
 
-  divider: { height: 1, backgroundColor: C.border, marginVertical: 18 },
+  divider: { height: 1, backgroundColor: C.borderSoft, marginVertical: 28 },
 
-  paragraph: { color: C.textSoft, fontSize: 15, lineHeight: 29, fontFamily: AR.medium, textAlign: "right", marginBottom: 14 },
+  paragraph: { color: C.textSecondary, fontSize: 16, lineHeight: 32, fontFamily: AR.medium, textAlign: "right", marginBottom: 24 },
   bodyImage: { width: "100%", borderRadius: R.lg, backgroundColor: C.surfaceLight, marginVertical: 8 },
   bodyVideo: { width: "100%", aspectRatio: 16 / 9, borderRadius: R.lg, overflow: "hidden", backgroundColor: "#000", marginVertical: 8 },
   bodyVideoInner: { flex: 1, backgroundColor: "transparent" },

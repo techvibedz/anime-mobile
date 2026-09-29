@@ -188,9 +188,8 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
   introCard: {
-    borderRadius: R.xxl, padding: 18, overflow: "hidden",
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.borderAccent,
-    ...ELEVATION_CARD,
+    borderRadius: R.lg, padding: 20, overflow: "hidden",
+    backgroundColor: C.surfaceContainer,
   },
   introRow: { flexDirection: "row", alignItems: "center" },
   introIcon: {
@@ -205,12 +204,11 @@ const s = StyleSheet.create({
   listStart: { height: 16 },
   separator: { height: 10 },
   row: {
-    flexDirection: "row", alignItems: "center", padding: 14, borderRadius: R.lg,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    ...ELEVATION_CARD,
+    flexDirection: "row", alignItems: "center", paddingVertical: 18,
+    borderBottomWidth: 1, borderBottomColor: C.borderSoft,
   },
   rowPressed: { opacity: 0.6 },
-  rowClosed: { opacity: 0.65 },
+  rowClosed: {},
   rowChevron: { marginRight: 2 },
   rowBody: { flex: 1, marginRight: 12, alignItems: "flex-end" },
   rowName: { color: C.text, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },

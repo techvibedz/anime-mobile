@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Modal, View, Text, Pressable, StyleSheet } from "react-native";
+import { Modal, View, Text, Pressable, ScrollView, StyleSheet } from "react-native";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -52,26 +52,33 @@ export function UpdateModal({ info, onClose }: Props) {
     <Modal transparent animationType="fade" visible onRequestClose={info.isForce ? undefined : onClose}>
       <BlurView intensity={40} tint="dark" style={ss.backdrop}>
         <View style={ss.sheet}>
-          <View style={ss.iconContainer}>
-            <LinearGradient
-              colors={[C.accent, C.violet]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={ss.iconGrad}
-            >
-              <Ionicons name="cloud-download-outline" size={32} color="#fff" />
-            </LinearGradient>
-          </View>
-          
-          <Text style={ss.title}>{title}</Text>
-          <Text style={ss.subtitle}>{subtitle}</Text>
-
-          {info.releaseNotes ? (
-            <View style={ss.notesContainer}>
-              <Text style={ss.notesTitle}>ما الجديد:</Text>
-              <Text style={ss.notesText}>{info.releaseNotes}</Text>
+          {/* Long release notes must not push the action buttons off-screen. */}
+          <ScrollView
+            style={ss.scroll}
+            contentContainerStyle={ss.scrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={ss.iconContainer}>
+              <LinearGradient
+                colors={[C.accent, C.violet]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={ss.iconGrad}
+              >
+                <Ionicons name="cloud-download-outline" size={32} color={C.textOnAccent} />
+              </LinearGradient>
             </View>
-          ) : null}
+
+            <Text style={ss.title}>{title}</Text>
+            <Text style={ss.subtitle}>{subtitle}</Text>
+
+            {info.releaseNotes ? (
+              <View style={ss.notesContainer}>
+                <Text style={ss.notesTitle}>ما الجديد:</Text>
+                <Text style={ss.notesText}>{info.releaseNotes}</Text>
+              </View>
+            ) : null}
+          </ScrollView>
 
           <View style={ss.buttons}>
             <Pressable style={ss.btnPrimary} onPress={handleAction} disabled={downloading}>
@@ -81,7 +88,7 @@ export function UpdateModal({ info, onClose }: Props) {
                 end={{ x: 1, y: 1 }}
                 style={ss.btnGrad}
               >
-                <Ionicons name={downloading ? "cloud-download" : "refresh"} size={20} color="#fff" />
+                <Ionicons name={downloading ? "cloud-download" : "refresh"} size={20} color={C.textOnAccent} />
                 <Text style={ss.btnPrimaryText}>{actionLabel}</Text>
               </LinearGradient>
               {downloading && (
@@ -114,25 +121,27 @@ const ss = StyleSheet.create({
   sheet: {
     width: "100%",
     maxWidth: 340,
+    maxHeight: "100%",
     backgroundColor: C.surface,
     borderRadius: R.xl,
     padding: 24,
     alignItems: "center",
     borderWidth: 1,
     borderColor: C.border,
-    shadowColor: C.accent,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
+  },
+  scroll: {
+    width: "100%",
+  },
+  scrollContent: {
+    alignItems: "center",
   },
   iconContainer: {
     marginBottom: 20,
-    ...ELEVATION_GLOW,
   },
   iconGrad: {
     width: 64,
     height: 64,
-    borderRadius: 32,
+    borderRadius: R.lg,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -182,7 +191,7 @@ const ss = StyleSheet.create({
   },
   btnPrimary: {
     width: "100%",
-    borderRadius: R.pill,
+    borderRadius: R.md,
     overflow: "hidden",
   },
   progressTrack: {
@@ -202,7 +211,7 @@ const ss = StyleSheet.create({
     paddingVertical: 14,
   },
   btnPrimaryText: {
-    color: "#fff",
+    color: C.textOnAccent,
     fontSize: 16,
     fontWeight: "700",
     fontFamily: "Cairo_700Bold",

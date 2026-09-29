@@ -217,14 +217,14 @@ const s = StyleSheet.create({
   rail: { paddingHorizontal: S.paddingContent, gap: 8 },
   dayPillWrap: {},
   dayPill: {
-    width: 56, paddingVertical: 12, borderRadius: R.lg,
+    width: 64, minHeight: 88, paddingVertical: 14, borderRadius: R.md,
     alignItems: "center", justifyContent: "center", gap: 4,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     overflow: "hidden",
   },
-  dayPillActive: { borderColor: "transparent", ...ELEVATION_CARD },
+  dayPillActive: { borderColor: "transparent" },
   dayName: { color: C.textSecondary, fontSize: 11, fontFamily: "Cairo_600SemiBold" },
-  dayNum: { color: C.text, fontSize: 17, fontFamily: "Outfit_700Bold", fontWeight: "700" },
+  dayNum: { color: C.text, fontSize: 24, fontFamily: "Outfit_700Bold", fontWeight: "700" },
   dayTextActive: { color: C.textOnAccent },
   dayDot: {
     position: "absolute", bottom: 6, width: 5, height: 5, borderRadius: 3,
@@ -247,17 +247,15 @@ const s = StyleSheet.create({
   // Row card — poster on the right, body flows left, time chip far left.
   card: {
     flexDirection: "row", alignItems: "center",
-    padding: 10, borderRadius: R.xl,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+    paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: C.borderSoft,
     overflow: "hidden",
-    ...ELEVATION_CARD,
   },
   cardPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.99 }] },
 
   body: { flex: 1, justifyContent: "center", marginRight: 12 },
   epBadge: { color: C.accent, fontSize: 11, fontFamily: "Cairo_700Bold", textAlign: "right" },
   title: {
-    color: C.text, fontSize: 14, lineHeight: 19, fontFamily: "Cairo_600SemiBold",
+    color: C.text, fontSize: 16, lineHeight: 26, fontFamily: "Cairo_600SemiBold",
     textAlign: "right", marginTop: 3,
   },
   metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 5 },

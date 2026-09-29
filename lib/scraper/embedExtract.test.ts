@@ -6,7 +6,7 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
-import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, parseAnime4upEpisodeTitles, parseAnime4upRecentHtml, parseUp4Episodes, parseUp4Servers, pickMediaUrl } from "./direct";
+import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, looksLikeCfChallenge, parseAnime4upEpisodeTitles, parseAnime4upRecentHtml, parseAnime4upStreamUrl, parseAnime4upSubtitles, parseUp4Episodes, parseUp4Servers, parseWitAnimeSections, pickHighestHlsVariant, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -146,11 +146,95 @@ test("Videa manifest request and signed source parse without a WebView", () => {
 
 test("current Anime4up HTML exposes private CDN and redirected DoodStream servers", () => {
   const servers = parseUp4Servers(`<ul id="episode-servers">
-    <li data-watch="https://4o.z4m2r9t.shop/Anime4up-S1/mal/35120/8/sub/"><a>anime4up1 <span>[FHD]</span></a></li>
+    <li data-watch="https://4t.44y4h0r.shop/Anime4up-S1/mal/61169/1/sub/"><a>anime4up1 <span>[FHD]</span></a></li>
     <li data-watch="https://playmogo.com/e/t0rdyelb0krl"><a>DoodStream <span>[FHD]</span></a></li>
     <li data-watch="https://mp4upload.com/embed-5a5h09ih6s0t.html"><a>Mp4upload <span>[FHD]</span></a></li>
   </ul>`);
   assert.deepEqual(servers.map((server) => server.provider), ["anime4upcdn", "doodstream", "mp4upload"]);
+});
+
+test("Anime4up CDN page exposes its token-signed HLS stream URL", () => {
+  const stream = "https://cdn1.k1c6x8p.shop/?token=mUgefvO_DctcULgGHagj3FzypF0sPdzJpmpOEDCSF";
+  const html = `<script>const edgeHosts = ["cdn1.k1c6x8p.shop","cdn2.k1c6x8p.shop"];\nlet streamUrl = "${stream}";</script>`;
+  assert.equal(parseAnime4upStreamUrl(html), stream);
+});
+
+test("Cloudflare's JSD snippet on a served page is NOT a challenge", () => {
+  const jsd = `<script>window.__cfRLUnblockHandlers=true;var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);</script>`;
+  assert.equal(looksLikeCfChallenge(jsd), false);
+  // The live anime4up player page carries exactly this snippet plus its stream.
+  assert.equal(
+    looksLikeCfChallenge(`<script>let streamUrl = "https://cdn1.k1c6x8p.shop/?token=x";</script>${jsd}`),
+    false,
+  );
+});
+
+test("Anime4up player page exposes its sidecar subtitle tracks", () => {
+  // Live shape: a nested fallbacks array (a non-greedy regex stops early).
+  const html = `<script>
+    const tracks = [{"file":"https://w1.anime4up.rest/vnx-subtitle/abc.vtt","fallbacks":["https://w1.anime4up.rest/wp-content/uploads/x.vtt?vnx_uploaded_subtitle=1"],"label":"العربية","srclang":"ar","kind":"captions","default":true}];
+    let streamUrl = "https://cdn1.k1c6x8p.shop/?token=x";
+  </script>`;
+  const subs = parseAnime4upSubtitles(html);
+  assert.equal(subs.length, 1);
+  assert.equal(subs[0].url, "https://w1.anime4up.rest/vnx-subtitle/abc.vtt");
+  assert.equal(subs[0].lang, "ar");
+});
+
+test("Anime4up subtitle parser is empty without a tracks array", () => {
+  assert.deepEqual(parseAnime4upSubtitles("<html><body>no tracks</body></html>"), []);
+});
+
+test("a real Cloudflare interstitial is still detected", () => {
+  assert.equal(looksLikeCfChallenge(`<title>Just a moment...</title><div id="cf-please-wait"></div>`), true);
+  assert.equal(looksLikeCfChallenge(`<span data-translate="checking_browser">Checking your browser</span>`), true);
+});
+
+test("Witanime anime page splits مقترحة and قد يعجبك أيضًا rails", () => {
+  const card = (href: string, title: string, type: string) => `<a href="${href}" class="group block w-full cursor-pointer">
+    <img src="https://images.witanime.site/posters/${title.replace(/\s+/g, "-")}.jpg" alt="${title}">
+    <div class="absolute start-2 top-2 rounded-md bg-white px-2 py-1 text-xs font-bold text-black">${type}</div>
+    <h3 dir="ltr" class="truncate font-semibold text-white">${title}</h3>
+  </a>`;
+  const html = `<section>
+      <h2 class="text-2xl font-bold text-white">مقترحة</h2>
+      ${card("https://witanime.site/anime/kimetsu-no-yaiba-yuukaku-hen", "Kimetsu no Yaiba Yuukaku-hen", "TV")}
+    </section>
+    <section>
+      <h2 class="text-2xl font-bold text-white">قد يعجبك أيضًا</h2>
+      ${card("https://witanime.site/anime/strike-the-blood-valkyria-no-oukoku-hen", "Strike the Blood", "OVA")}
+    </section>`;
+  const sections = parseWitAnimeSections(html);
+  assert.deepEqual(sections.related.map((c) => c.title), ["Kimetsu no Yaiba Yuukaku-hen"]);
+  assert.deepEqual(sections.mayLike.map((c) => c.title), ["Strike the Blood"]);
+  assert.equal(sections.mayLike[0].type, "OVA");
+});
+
+test("Witanime sections are empty when the page has no rails", () => {
+  const sections = parseWitAnimeSections("<section><h2>الحلقات</h2></section>");
+  assert.deepEqual(sections, { related: [], mayLike: [] });
+});
+
+test("Anime4up CDN parser ignores pages without a streamUrl", () => {
+  assert.equal(parseAnime4upStreamUrl("<html><body>nothing</body></html>"), null);
+  assert.equal(parseAnime4upStreamUrl('let streamUrl = "/relative/only.m3u8";'), null);
+});
+
+test("HLS master playlist resolves to the highest-bandwidth variant", () => {
+  const master = [
+    "#EXTM3U",
+    "#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360",
+    "https://cdn1.k1c6x8p.shop/?token=low",
+    "#EXT-X-STREAM-INF:BANDWIDTH=5300000,RESOLUTION=1920x1080",
+    "https://cdn1.k1c6x8p.shop/?token=best",
+    "#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720",
+    "/?token=mid",
+  ].join("\n");
+  assert.equal(pickHighestHlsVariant(master, "https://cdn1.k1c6x8p.shop/master.m3u8"), "https://cdn1.k1c6x8p.shop/?token=best");
+});
+
+test("HLS media playlist (no variants) yields null so the master is kept", () => {
+  assert.equal(pickHighestHlsVariant("#EXTM3U\n#EXTINF:6,\nseg1.ts", "https://cdn/x.m3u8"), null);
 });
 
 test("current Anime4up anime page ignores stylesheet selectors and finds episode cards", () => {

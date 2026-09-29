@@ -255,8 +255,14 @@ async function rawGetA3rb(url: string): Promise<{ html: string | null; status: n
   return { html: null, status: lastStatus };
 }
 
-function looksLikeCfChallenge(html: string): boolean {
-  return /just a moment|cf-browser-verification|challenge-platform|cf_chl_opt|id="cf-please-wait"|Checking your browser|Attention Required/i.test(
+// A REAL Cloudflare interstitial only. Cloudflare injects its JS-detection
+// snippet (`/cdn-cgi/challenge-platform/scripts/jsd/main.js`) into every
+// protected page — including fully-served ones — so matching the bare
+// "challenge-platform" token marked normal pages as blocked and made the
+// anime4up CDN extractor bail out on every attempt (the "anime4up1/2 don't
+// work" bug). Keep only markers that appear on an actual challenge page.
+export function looksLikeCfChallenge(html: string): boolean {
+  return /just a moment|cf-browser-verification|cf_chl_opt|id="cf-please-wait"|Checking your browser|Attention Required/i.test(
     html,
   );
 }
@@ -396,6 +402,46 @@ export async function fetchWitListingDirect(url: string): Promise<WitCard[] | nu
   const html = await fetchHtml(rewriteWitUrl(url, base), base + "/");
   if (!html) return null;
   return parseWitCards(html);
+}
+
+/* ── Witanime anime-page recommendation widgets ─────────────────────────────
+ * The detail page carries two recommendation sections that the app's Related
+ * tab / "you may like" rail are sourced from:
+ *   <h2>مقترحة</h2>        — same-franchise / suggested titles (banner cards)
+ *   <h2>قد يعجبك أيضًا</h2> — "you may also like" (poster grid)
+ * Both are plain static anchors with an <h3> + <img>, so the existing card
+ * parser handles them once the HTML is sliced to the section. */
+
+function witSectionSlice(html: string, heading: RegExp): string {
+  const m = heading.exec(html);
+  if (!m || m.index == null) return "";
+  const start = m.index;
+  const end = html.indexOf("</section>", start);
+  return end > start ? html.slice(start, end) : html.slice(start);
+}
+
+export function parseWitAnimeSections(html: string): { related: WitCard[]; mayLike: WitCard[] } {
+  return {
+    related: parseWitCards(witSectionSlice(html, /<h2[^>]*>\s*مقترحة\s*<\/h2>/)),
+    mayLike: parseWitCards(witSectionSlice(html, /<h2[^>]*>\s*قد\s*يعجبك\s*أيضًا\s*<\/h2>/)),
+  };
+}
+
+// The anime page's own <h1> (its canonical title), used to verify a page that
+// was resolved by title search really is the requested anime.
+export function parseWitAnimePageTitle(html: string): string {
+  const m = html.match(/<main[\s\S]*?<h1[^>]*>([\s\S]*?)<\/h1>/i) || html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  if (!m) return "";
+  return htmlDecode(m[1].replace(/<[^>]+>/g, ""));
+}
+
+export async function fetchWitanimeAnimeSections(
+  animeUrl: string,
+): Promise<{ related: WitCard[]; mayLike: WitCard[]; title: string } | null> {
+  const base = await getWitBase();
+  const html = await fetchHtml(rewriteWitUrl(animeUrl, base), base + "/");
+  if (!html) return null;
+  return { ...parseWitAnimeSections(html), title: parseWitAnimePageTitle(html) };
 }
 
 /* ── witanime: direct static-HTML HOME ──
@@ -1665,15 +1711,18 @@ async function resolveWitManifestServers(
   const manifestResponse = await fetchWitPlayerResponse(config.sourcesUrl, { method: "POST", headers });
   if (!manifestResponse.ok) return [];
   const entries = parseWitManifestEntries(await manifestResponse.json());
-  const servers: RawServer[] = [];
-  for (const entry of entries) {
+  // Each entry costs up to three sequential requests (stream-source, gate
+  // redirect, gate follow). Running the entries in PARALLEL turns a 4-provider
+  // page from ~12 serial round-trips into the slowest single provider — the
+  // main "servers take forever to appear" fix for Witanime episodes.
+  const resolved = await Promise.all(entries.map(async (entry): Promise<RawServer | null> => {
     const sourceUrl = `${origin}/watch/stream-source/${entry.token}`;
     let ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
     if (ready?.status === 429) {
       await new Promise((resolve) => setTimeout(resolve, 800));
       ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
     }
-    if (!ready?.ok) continue;
+    if (!ready?.ok) return null;
     const gateUrl = `${origin}/watch/stream-gate/${entry.token}`;
     let target: string | null = null;
     try {
@@ -1688,13 +1737,18 @@ async function resolveWitManifestServers(
         target = parseWitGateTarget(null, "", gate.url, gateUrl);
       } catch {}
     }
-    if (!target || servers.some((server) => server.iframeUrl === target)) continue;
-    servers.push({
+    if (!target) return null;
+    return {
       id: entry.token,
       name: `${entry.label} ${entry.quality}`.trim(),
       iframeUrl: target,
       provider: classifyProvider(target),
-    });
+    };
+  }));
+  const servers: RawServer[] = [];
+  for (const server of resolved) {
+    if (!server || servers.some((existing) => existing.iframeUrl === server.iframeUrl)) continue;
+    servers.push(server);
   }
   return servers;
 }
@@ -1725,14 +1779,45 @@ export async function scrapeWitanimeEpisodePageDirect(
   const deent = (s: string) =>
     s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
       .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
+  // Titles: the watch page's <h1> is the ANIME name (current layout, e.g.
+  // "BLACK TORCH") while the episode label sits in a sibling span and in the
+  // JSON-LD TVEpisode. Reading the h1 alone made episodeTitle === animeTitle,
+  // so the player header and the Continue-watching card showed the anime name
+  // twice and no "الحلقة N" anywhere.
   let episodeTitle = "";
-  const heading = html.match(/<main[\s\S]*?<h1[^>]*>([\s\S]*?)<\/h1>/i) || html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
-  if (heading) episodeTitle = deent(heading[1].replace(/<[^>]+>/g, ""));
   let animeTitle = "";
-  const link = html.match(/anime-page-link[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)
-    || html.match(/<a[^>]+href=["'][^"']*\/anime\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/i);
-  if (link) animeTitle = deent(link[1].replace(/<[^>]+>/g, ""));
-  if (!animeTitle && episodeTitle) animeTitle = episodeTitle.replace(/الحلقة\s*\d+.*$/, "").trim();
+  for (const block of html.match(/<script[^>]*application\/ld\+json[^>]*>[\s\S]*?<\/script>/gi) || []) {
+    if (!/TVEpisode/i.test(block)) continue;
+    try {
+      const json = JSON.parse(block.replace(/^[^>]*>/, "").replace(/<\/script>$/i, ""));
+      if (json?.["@type"] !== "TVEpisode") continue;
+      if (json.name) episodeTitle = deent(String(json.name));
+      if (json.partOfSeries?.name) animeTitle = deent(String(json.partOfSeries.name));
+      break;
+    } catch {}
+  }
+  const h1 = html.match(/<main[\s\S]*?<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || "";
+  const h1Text = h1 ? deent(h1.replace(/<[^>]+>/g, "")) : "";
+  if (!animeTitle && h1Text) animeTitle = h1Text;
+  if (!episodeTitle && h1Text) {
+    const label = h1Text.match(/(?:الحلقة|الحلقه)\s*\d+|فيلم/);
+    if (label) {
+      episodeTitle = label[0];
+      animeTitle = h1Text.replace(label[0], "").replace(/[-–—:]\s*$/, "").trim() || animeTitle;
+    }
+  }
+  if (!episodeTitle) {
+    const span = html.match(/<h1[^>]*>[\s\S]*?<\/h1>[\s\S]{0,600}?<(?:span|div)[^>]*>([^<]*(?:الحلقة|الحلقه|فيلم)[^<]*)<\/(?:span|div)>/i);
+    if (span) episodeTitle = deent(span[1]);
+  }
+  if (!episodeTitle) {
+    let decodedUrl = episodeUrl;
+    try { decodedUrl = decodeURIComponent(episodeUrl); } catch {}
+    const num = decodedUrl.match(/الحلقة[\s_-]*(\d+)/) || decodedUrl.match(/\/watch\/[^/]+\/(\d+)(?:\/|$)/i);
+    if (num) episodeTitle = `الحلقة ${num[1]}`;
+  }
+  // Never let the two fields collapse to the same string (the old bug).
+  if (episodeTitle && animeTitle && episodeTitle === animeTitle) episodeTitle = "";
   return { servers, episodeTitle, animeTitle };
 }
 
@@ -2275,6 +2360,142 @@ export async function scrapeAnime3rbEpisodeServers(episodeUrl: string): Promise<
 // same way vid3rb/anime3rb is handled. The token in the .mp4 URL is bound to
 // the UA that fetched the embed page — fetchHtml's BROWSER_UA matches the
 // native player's playback UA, so the extracted URL stays valid.
+/* ── Anime4up CDN (anime4up1 / anime4up2) ──────────────────────────────────
+ * The episode page's featured servers anime4up1/anime4up2 (Anime4up-S1/S2)
+ * embed a VnxPlayer page on a rotating *.shop host. That page ships its HLS
+ * master URL in the STATIC HTML as `let streamUrl = "https://cdnN.<edge>.shop/
+ * ?token=…"`. One plain GET gets it, where the hidden-WebView collector never
+ * recognized the private host/URL shape and timed out — which is why these two
+ * servers looked broken. The master carries 360p/720p/1080p variants, each with
+ * its own signed token, so we return the HIGHEST-resolution variant and the
+ * native player always runs at max quality instead of adaptively starting low. */
+
+export function parseAnime4upStreamUrl(html: string): string | null {
+  const m = String(html || "").match(/(?:let|const|var)\s+streamUrl\s*=\s*["']([^"']+)["']/i);
+  if (!m) return null;
+  const raw = m[1].replace(/\\\//g, "/").trim();
+  return /^https?:\/\//i.test(raw) ? raw : null;
+}
+
+export type MediaSubtitle = { url: string; label?: string; lang?: string };
+
+// Extract a top-level `key = [...]` JSON array with a string-aware bracket
+// scan (the page's tracks array nests a `fallbacks` array, so a non-greedy
+// regex would stop at the inner closing bracket).
+function jsonArrayAfter(src: string, key: string): string | null {
+  const at = src.search(new RegExp(`(?:let|const|var)\\s+${key}\\s*=\\s*`, "i"));
+  if (at < 0) return null;
+  const start = src.indexOf("[", at);
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let quote = "";
+  for (let i = start; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { esc = true; continue; }
+      if (ch === quote) inStr = false;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { inStr = true; quote = ch; continue; }
+    if (ch === "[") depth++;
+    else if (ch === "]") { depth--; if (depth === 0) return src.slice(start, i + 1); }
+  }
+  return null;
+}
+
+// The Anime4up player page ships its Arabic subtitle as a sidecar VTT in the
+// inline `tracks` array — separate from the HLS stream, so the player must
+// load it explicitly or the episode plays without subtitles.
+export function parseAnime4upSubtitles(html: string): MediaSubtitle[] {
+  const raw = jsonArrayAfter(String(html || ""), "tracks");
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw.replace(/\\\//g, "/"));
+    const out: MediaSubtitle[] = [];
+    const seen = new Set<string>();
+    for (const track of Array.isArray(arr) ? arr : []) {
+      const url = String(track?.file || "").replace(/\\\//g, "/").trim();
+      if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+      seen.add(url);
+      out.push({
+        url,
+        label: track?.label ? String(track.label) : undefined,
+        lang: track?.srclang ? String(track.srclang) : undefined,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// Highest-bandwidth variant of an HLS master playlist (null when the playlist
+// is already a media playlist or malformed).
+export function pickHighestHlsVariant(playlist: string, masterUrl?: string): string | null {
+  const lines = String(playlist || "").split(/\r?\n/);
+  let best: { bw: number; url: string } | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const info = lines[i].match(/^#EXT-X-STREAM-INF:.*\bBANDWIDTH=(\d+)/i);
+    if (!info) continue;
+    let j = i + 1;
+    while (j < lines.length && (!lines[j].trim() || lines[j].trim().startsWith("#"))) j++;
+    const uri = (lines[j] || "").trim();
+    if (!uri) continue;
+    let resolved: string;
+    try {
+      resolved = /^https?:\/\//i.test(uri) ? uri : new URL(uri, masterUrl).toString();
+    } catch {
+      continue;
+    }
+    const bw = parseInt(info[1], 10);
+    if (!best || bw > best.bw) best = { bw, url: resolved };
+  }
+  return best?.url || null;
+}
+
+export async function extractAnime4upCdn(iframeUrl: string): Promise<{ url: string; type: "hls"; subtitles?: MediaSubtitle[] } | null> {
+  // Embed hosts answer fast or not at all (same policy as mp4upload): one
+  // attempt, then a second with a longer budget. No escalating CF retries.
+  let html: string | null = null;
+  for (const timeoutMs of [6000, 12000]) {
+    const got = await fetchEmbed(iframeUrl, timeoutMs, UP4_BASE + "/");
+    if (got.blocked) return null;
+    if (got.html) { html = got.html; break; }
+  }
+  // Plain GET blocked (ISP filter / bot gate): render it once in the hidden
+  // WebView, which passes those naturally. The inline `streamUrl` is part of
+  // the served HTML, so the marker check is enough.
+  if (!html) html = await fetchHtmlViaWebView(iframeUrl, "streamUrl").catch(() => null);
+  if (!html) return null;
+  const stream = parseAnime4upStreamUrl(html);
+  if (!stream) return null;
+  const subtitles = parseAnime4upSubtitles(html);
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(stream, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": BROWSER_UA,
+          Accept: "application/vnd.apple.mpegurl, application/x-mpegURL, */*",
+        },
+      });
+      if (res.ok) {
+        const best = pickHighestHlsVariant(await res.text(), stream);
+        if (best) return { url: best, type: "hls", subtitles };
+      }
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {}
+  // Playlist unresolved — hand over the master and let the player adapt.
+  return { url: stream, type: "hls", subtitles };
+}
+
 export async function extractMp4upload(iframeUrl: string): Promise<{ url: string; type: "mp4" } | null> {
   const embedUrl = normalizeEmbedUrl(iframeUrl);
   // The embed page is tiny (~4 KB) and the direct .mp4 sits in its static HTML

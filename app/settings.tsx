@@ -389,6 +389,7 @@ function ToggleRow({
         <Switch
           value={value}
           onValueChange={onChange}
+          accessibilityLabel={title}
           trackColor={{ false: C.surfaceLight, true: C.accent }}
           thumbColor="#fff"
           ios_backgroundColor={C.surfaceLight}
@@ -473,18 +474,18 @@ function Divider() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
 
-  sectionGap: { height: 24 },
+  sectionGap: { height: 32 },
   group: {
-    borderRadius: R.xl, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    overflow: "hidden", ...ELEVATION_CARD,
+    borderRadius: R.lg, backgroundColor: C.surfaceContainer,
+    overflow: "hidden",
   },
   // No flexDirection — icon and control are absolutely pinned to the right/left
   // edges and the text is a full-width right-aligned block. This avoids RN 0.81's
   // Yoga collapse where a [control | flex text | icon] row reverses on an Arabic-
   // locale device and stacks into a broken layout (RN ignores the `direction` style).
   row: {
-    justifyContent: "center", minHeight: 64,
-    paddingVertical: 12, paddingHorizontal: 14,
+    justifyContent: "center", minHeight: 84,
+    paddingVertical: 18, paddingHorizontal: 16,
   },
   rowIcon: {
     position: "absolute", right: 14, top: "50%", marginTop: -20,
@@ -496,7 +497,7 @@ const s = StyleSheet.create({
   // Full-width text; paddingRight clears the icon, paddingLeft clears the control.
   rowText: { paddingRight: 62, paddingLeft: 70 },
   rowTitle: { color: C.text, fontSize: 15, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
-  rowDesc: { color: C.textMuted, fontSize: 12, marginTop: 4, lineHeight: 17, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  rowDesc: { color: C.textMuted, fontSize: 12, marginTop: 6, lineHeight: 21, fontFamily: "Cairo_500Medium", textAlign: "right" },
   // Indent the divider so it stops short of the icon rail on the right.
   divider: { height: 1, backgroundColor: C.border, marginLeft: 14, marginRight: 68 },
 
@@ -506,12 +507,12 @@ const s = StyleSheet.create({
   scopeBody: { paddingRight: 56 },
   segment: {
     flexDirection: "row", marginTop: 14,
-    padding: 4, borderRadius: R.pill,
-    backgroundColor: C.bgDeep, borderWidth: 1, borderColor: C.glassBorder,
+    padding: 4, borderRadius: R.md,
+    backgroundColor: C.bgDeep,
   },
   segmentBtn: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
-    paddingVertical: 10, borderRadius: R.pill,
+    minHeight: 48, paddingVertical: 10, borderRadius: R.sm,
   },
   segmentBtnActive: { backgroundColor: C.accent },
   segmentText: { color: C.textSecondary, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold", marginLeft: 6 },
@@ -532,7 +533,7 @@ const s = StyleSheet.create({
     width: 52, height: 52, borderRadius: 16,
     alignItems: "center", justifyContent: "center",
   },
-  logoGlyph: { color: C.white, fontSize: 26, fontWeight: "900", fontFamily: "Outfit_900Black" },
+  logoGlyph: { color: C.textOnAccent, fontSize: 26, fontWeight: "900", fontFamily: "Outfit_900Black" },
   brandName: { color: C.text, fontSize: 19, fontWeight: "800", fontFamily: "Cairo_700Bold" },
   brandTag: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium" },
   brandVersion: { color: C.textMuted, fontSize: 11, marginTop: 6, fontFamily: "Cairo_500Medium" },

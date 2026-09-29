@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   StyleSheet,
-  Dimensions,
   Animated,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -21,20 +20,18 @@ import type { SearchResult } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { GlassFill } from "../../components/GlassFill";
-import { PosterCard, PosterPill } from "../../components/PosterCard";
+import { PosterCard, PosterPill, INLINE_POSTER_BADGE } from "../../components/PosterCard";
+import { CardLayoutControl } from "../../components/CardLayoutControl";
+import { useCardLayout, type CardLayout } from "../../lib/cardLayout";
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
 import { useSidebar } from "../../components/Sidebar";
-import { C, S, R, TAr, ELEVATION_GLOW } from "../../lib/theme";
+import { C, S, R, TAr, ELEVATION_GLOW, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
 
-const { width: SW } = Dimensions.get("window");
 const PAD = S.paddingContent;
 const GAP = 10;
-const NUM_COLS = 3;
-const CARD_W = (SW - PAD * 2 - GAP * (NUM_COLS - 1)) / NUM_COLS;
-const CARD_H = CARD_W * (4 / 3);
 
 const GENRE_LABELS: Record<string, string> = {
   All: "الكل",
@@ -58,7 +55,7 @@ const GENRE_LABELS: Record<string, string> = {
 const GENRES = Object.keys(GENRE_LABELS);
 
 /* ── Skeleton card (pulsing placeholder while the grid loads) ── */
-function SkeletonGrid() {
+function SkeletonGrid({ width, layout }: { width: number; layout: CardLayout }) {
   const pulse = useRef(new Animated.Value(0.35)).current;
   const reduced = useReducedMotion();
   useEffect(() => {
@@ -76,10 +73,8 @@ function SkeletonGrid() {
   return (
     <View style={ss.skeletonWrap}>
       {Array.from({ length: 12 }).map((_, i) => (
-        <View key={i} style={{ width: CARD_W }}>
-          <Animated.View style={[ss.skeletonCard, { opacity: pulse }]} />
-          <Animated.View style={[ss.skeletonLine, { opacity: pulse }]} />
-          <Animated.View style={[ss.skeletonLineShort, { opacity: pulse }]} />
+        <View key={i} style={{ width }}>
+          <Animated.View style={[ss.skeletonCard, { width, height: layout === "list" ? 150 : width * 1.5, opacity: pulse }]} />
         </View>
       ))}
     </View>
@@ -89,30 +84,33 @@ function SkeletonGrid() {
 /* Memoized result card — built on the unified <PosterCard>. Without this,
  * every visible poster re-rendered on each keystroke (the search-progress strip
  * toggles parent state) and on every pagination append. */
-const ResultCard = memo(function ResultCard({ item }: { item: SearchResult }) {
+const ResultCard = memo(function ResultCard({ item, width, layout }: { item: SearchResult; width: number; layout: CardLayout }) {
   return (
     <PosterCard
       image={item.image}
       title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-      width={CARD_W}
-      aspectRatio={3 / 4}
+      width={width}
+      layout={layout}
+      subtitle={layout === "list" ? item.type : undefined}
+      aspectRatio={2 / 3}
       recyclingKey={item.href}
       titleLines={2}
-      topRight={<MalCardBadge title={item.title} />}
+      topRight={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
       bottomLeft={
-        item.type ? (
+        layout !== "list" && item.type ? (
           <PosterPill>
             <Text style={ss.typeBadgeText}>{item.type}</Text>
           </PosterPill>
         ) : null
       }
-      bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} />}
+      bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} style={INLINE_POSTER_BADGE} />}
     />
   );
 });
 
 export default function SearchScreen() {
+  const cards = useCardLayout("search", GAP);
   const insets = useSafeAreaInsets();
   const { openSidebar } = useSidebar();
   const { genre: genreParam, q: qParam } = useLocalSearchParams<{ genre?: string; q?: string }>();
@@ -324,6 +322,12 @@ export default function SearchScreen() {
       {/* ── Search console — one cohesive surface lifted over the grid ── */}
       <View style={ss.header}>
         <Rise style={ss.headerTop}>
+          <View style={ss.headerActions}>
+          <Pressable accessibilityRole="button" accessibilityLabel={t.menu} onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
+            <Ionicons name="menu" size={20} color={C.text} />
+          </Pressable>
+          <CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />
+          </View>
           <View style={ss.headerTitleRow}>
             <Text style={ss.heading}>{t.discover}</Text>
             {!loading && items.length > 0 && (
@@ -332,15 +336,11 @@ export default function SearchScreen() {
               </View>
             )}
           </View>
-          <Pressable onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
-            <GlassFill intensity={16} />
-            <Ionicons name="menu" size={20} color={C.text} />
-          </Pressable>
         </Rise>
+        <Text style={ss.intro}>{t.searchSub}</Text>
 
         {/* Glass search field — the hero control */}
         <View style={[ss.searchBar, searching && ss.searchBarActive]}>
-          <GlassFill intensity={16} />
           <View style={[ss.searchIcon, searching && ss.searchIconActive]}>
             {searching ? (
               <ActivityIndicator size="small" color={C.accent} />
@@ -360,6 +360,8 @@ export default function SearchScreen() {
             autoCapitalize="none"
             autoCorrect={false}
             textAlign="right"
+            accessibilityLabel={t.searchPlaceholder}
+            selectionColor={C.accent}
           />
           {query.length > 0 && (
             <Pressable onPress={handleClear} hitSlop={8} style={ss.clearBtn}>
@@ -378,7 +380,7 @@ export default function SearchScreen() {
             keyboardShouldPersistTaps="handled"
           >
             {GENRES.map((g) => (
-              <Pressable key={g} onPress={() => handleGenre(g)}>
+              <Pressable key={g} accessibilityRole="button" accessibilityState={{ selected: activeGenre === g }} onPress={() => handleGenre(g)}>
                 <View style={[ss.chip, activeGenre === g && ss.chipActive]}>
                   <Text style={[ss.chipText, activeGenre === g && ss.chipTextActive]}>{GENRE_LABELS[g] || g}</Text>
                 </View>
@@ -397,7 +399,7 @@ export default function SearchScreen() {
                 colors={["transparent", C.accent, "transparent"]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
-                style={StyleSheet.absoluteFill}
+                style={ABSOLUTE_FILL}
               />
             </View>
           )}
@@ -406,11 +408,12 @@ export default function SearchScreen() {
 
       {/* Content */}
       {loading ? (
-        <SkeletonGrid />
+        <SkeletonGrid width={cards.cardWidth} layout={cards.layout} />
       ) : items.length > 0 ? (
         <FlatList
+          key={`${cards.layout}-${cards.columns}`}
           data={items}
-          numColumns={NUM_COLS}
+          numColumns={cards.columns}
           keyExtractor={(item, i) => item.href + i}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
@@ -419,8 +422,8 @@ export default function SearchScreen() {
           maxToRenderPerBatch={9}
           windowSize={7}
           updateCellsBatchingPeriod={50}
-          contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100 }}
-          columnWrapperStyle={{ gap: GAP, marginBottom: GAP + 8 }}
+          contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100, rowGap: GAP + 8 }}
+          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
           onEndReached={loadMoreGenre}
           onEndReachedThreshold={0.5}
           refreshControl={
@@ -436,7 +439,7 @@ export default function SearchScreen() {
             <Text style={ss.resultsLabel}>{t.searchResultsFor(query.trim())}</Text>
           ) : null}
           ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
-          renderItem={({ item }) => <ResultCard item={item} />}
+          renderItem={({ item }) => <ResultCard item={item} width={cards.cardWidth} layout={cards.layout} />}
         />
       ) : (
         <StateView
@@ -459,24 +462,24 @@ const ss = StyleSheet.create({
   // the scrolling grid (opaque bg so scrolled content never bleeds through).
   header: {
     backgroundColor: C.bg, zIndex: 10,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
   },
   headerTop: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 12,
   },
   headerTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   menuBtn: {
-    width: 44, height: 44, borderRadius: R.circle, overflow: "hidden",
+    width: 48, height: 48, borderRadius: R.md, overflow: "hidden", backgroundColor: C.surface,
     alignItems: "center", justifyContent: "center",
     borderWidth: 1, borderColor: C.glassBorder,
   },
   heading: {
-    ...TAr.h1, color: C.bone,
+    ...TAr.h1, lineHeight: 44, color: C.bone,
   },
+  intro: { ...TAr.body, color: C.textMuted, textAlign: "right", paddingHorizontal: PAD, marginBottom: 20 },
   countPill: {
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
+    backgroundColor: C.surfaceLight,
     borderRadius: R.pill, paddingHorizontal: 10, paddingVertical: 3,
   },
   countPillText: { color: C.ember, fontSize: 11, fontWeight: "700", fontFamily: "Outfit_700Bold" },
@@ -485,32 +488,32 @@ const ss = StyleSheet.create({
   searchBar: {
     flexDirection: "row", alignItems: "center", gap: 10,
     marginHorizontal: PAD, marginBottom: 14,
-    borderRadius: R.xl, height: 56, paddingHorizontal: 10, paddingRight: 16,
+    borderRadius: R.md, height: 56, paddingHorizontal: 10, paddingRight: 16, backgroundColor: C.surface,
     overflow: "hidden", borderWidth: 1, borderColor: C.line,
   },
-  searchBarActive: { borderColor: C.borderAccent, ...ELEVATION_GLOW },
+  searchBarActive: { borderColor: C.accent },
   searchIcon: {
     width: 36, height: 36, borderRadius: R.circle,
     alignItems: "center", justifyContent: "center",
   },
   searchIconActive: { backgroundColor: C.accentSoft },
-  clearBtn: { padding: 2 },
+  clearBtn: { width: 40, height: 48, alignItems: "center", justifyContent: "center" },
   input: {
     flex: 1, color: C.text, fontSize: 15, height: 56,
     fontFamily: "Cairo_500Medium",
   },
 
   // Chips
-  chipContainer: { height: 52, overflow: "visible" },
+  chipContainer: { height: 64, overflow: "visible" },
   chipScroll: { paddingHorizontal: PAD, gap: 8, paddingBottom: 16, alignItems: "center" as const },
   chip: {
-    height: 36, justifyContent: "center",
-    paddingHorizontal: 15, borderRadius: R.pill,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.borderLight,
+    height: 48, justifyContent: "center",
+    paddingHorizontal: 16, borderRadius: R.sm,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
-  chipActive: { backgroundColor: C.ember, borderColor: "transparent" },
+  chipActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
   chipText: { color: C.textSecondary, fontSize: 13, lineHeight: 20, fontWeight: "600", fontFamily: "Cairo_600SemiBold", includeFontPadding: false, textAlignVertical: "center" },
-  chipTextActive: { color: C.textOnAccent },
+  chipTextActive: { color: C.accent },
 
   // Console bottom edge — full-width hairline + search-progress strip
   glowLineWrap: { height: 2, justifyContent: "center" },
@@ -518,7 +521,7 @@ const ss = StyleSheet.create({
     height: 0.5,
     backgroundColor: C.line,
   },
-  progressStrip: { ...StyleSheet.absoluteFillObject, overflow: "hidden", borderRadius: 1 },
+  progressStrip: { ...ABSOLUTE_FILL, overflow: "hidden", borderRadius: 1 },
 
   // Results
   resultsLabel: {
@@ -534,15 +537,7 @@ const ss = StyleSheet.create({
     padding: PAD,
   },
   skeletonCard: {
-    width: CARD_W, height: CARD_H, borderRadius: R.lg,
-    backgroundColor: C.surfaceLight,
-  },
-  skeletonLine: {
-    width: CARD_W * 0.85, height: 10, borderRadius: 5, marginTop: 8,
-    backgroundColor: C.surfaceLight,
-  },
-  skeletonLineShort: {
-    width: CARD_W * 0.5, height: 10, borderRadius: 5, marginTop: 5,
+    borderRadius: R.lg,
     backgroundColor: C.surfaceLight,
   },
 });

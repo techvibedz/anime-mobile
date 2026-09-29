@@ -1,125 +1,174 @@
-# Design
+---
+name: Pantoufa
+description: A personal screening room, in the original dark, periwinkle and mint palette.
+colors:
+  bg: "#08090C"
+  bg-deep: "#050507"
+  surface: "#14161C"
+  surface-container: "#101218"
+  surface-light: "#1C1F27"
+  accent: "#8B93FF"
+  mint: "#5EEAD4"
+  text: "#FFFFFF"
+  text-secondary: "#B4B8C5"
+  text-muted: "#8A8F9E"
+  text-on-accent: "#0A0B12"
+  gold: "#FFCE5C"
+  success: "#4ADE80"
+  error: "#FF6B6B"
+typography:
+  display:
+    fontFamily: Cairo_700Bold
+    fontSize: "36px"
+    lineHeight: "52px"
+    fontWeight: 700
+  headline:
+    fontFamily: Cairo_700Bold
+    fontSize: "30px"
+    lineHeight: "44px"
+    fontWeight: 700
+  title:
+    fontFamily: Cairo_700Bold
+    fontSize: "22px"
+    lineHeight: "34px"
+    fontWeight: 700
+  body:
+    fontFamily: Cairo_500Medium
+    fontSize: "14px"
+    lineHeight: "24px"
+    fontWeight: 500
+rounded:
+  sm: "12px"
+  md: "14px"
+  lg: "16px"
+  xl: "22px"
+spacing:
+  sm: "8px"
+  md: "12px"
+  lg: "16px"
+  content: "20px"
+  section: "34px"
+  touch: "48px"
+  input: "56px"
+components:
+  button-primary:
+    backgroundColor: "{colors.accent}"
+    textColor: "{colors.text-on-accent}"
+    rounded: "{rounded.md}"
+    height: "56px"
+  input:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.md}"
+    height: "56px"
+---
 
-Visual system for Pantoufa. Register: **spatial** (glass panels floating in depth).
-Identity: **HOLO SPATIAL** — a from-scratch language that replaced "SUMI — Ink &
-Ember". Vibe: Apple Vision Pro / visionOS — a neutral near-black void with
-translucent LIGHT glass panels, heavy blur, soft periwinkle→mint iridescence, and
-generous rounding. Dimensional and layered where Sumi was flat editorial print.
+# Design System: Pantoufa
 
-> Supersedes the Sumi (Ink & Ember) and Void docs. Tokens below mirror
-> `lib/theme.ts`, the single source of truth. Token *names* were kept stable
-> across Sumi→Holo so screens re-skin via cascade; only the values changed. The
-> `ember`/`violet` aliases now resolve to the Holo **periwinkle** accent.
+## Overview
 
-## Color
+**Creative North Star: "The Personal Screening Room"**
 
-Neutral void + a two-hue periwinkle/mint accent. Contrast is against `bg` (#08090C).
+A cinematic, content-first mobile interface for relaxed night viewing. Anime
+artwork carries the visual energy; navigation and account tools use calm tonal
+surfaces, readable Arabic typography and generous separation between sections.
+This redesign replaces the ornamental Holo glass treatment while preserving
+every existing color value in `lib/theme.ts`.
 
-### Backgrounds — the void + glass panels
-- `bg` / `ink` #08090C — neutral near-black canvas (OLED-true)
-- `bgDeep` #050507 — deepest void
-- `surface` / `inkRaised` #14161C — opaque raised panel (cards/fallbacks, safe default)
-- `surfaceLight` / `inkHigh` #1C1F27 — pressed / elevated opaque
-- `surfaceGlass` rgba(255,255,255,0.08), `glass` rgba(255,255,255,0.07) — TRUE glass;
-  pair with `expo-blur` `BlurView` for the visionOS frosted-panel look
-- `player` #000000, `playerSheet` #0A0B0F — true-black video + sheets
+**Key Characteristics:** artwork-first, restrained accents, visible navigation
+labels, confident typography, comfortable controls.
 
-### Accent — two-hue iridescence
-- `accent` / `ember` / `periwinkle` #8B93FF — Play · active · live · primary CTA.
-  Light periwinkle → use `textOnAccent` #0A0B12 (dark ink) for labels on it.
-- `mint` #5EEAD4 — secondary hue; pairs with periwinkle in gradients/glows.
-- `accentSoft` rgba(139,147,255,0.14), `accentGlow` rgba(139,147,255,0.30).
-- Gradients: periwinkle→mint (`meshViolet`/`meshPink`) carry the spatial shimmer.
+## Colors
 
-### Semantic (one meaning each)
-- `gold` #FFCE5C (ratings), `success` #4ADE80, `cyan`/`mint` #5EEAD4 (source tag),
-  `error` #FF6B6B.
+`lib/theme.ts` is the source of truth. The complete `C` palette is unchanged,
+including compatibility aliases (`ember`, `violet`, `ink`) and overlay tokens.
+`tailwind.config.js` mirrors the NativeWind subset.
 
-### Text — pure-white ramp (AA-verified on the void)
-- `text` / `bone` #FFFFFF (~19:1) — headings, primary
-- `textSecondary` #B4B8C5 (~9:1) — secondary/meta
-- `textMuted` #8A8F9E (~5.2:1) — lowest readable (AA floor)
-- `textFaint` #4A4E5A — DECORATIVE ONLY (idle icons, hairlines). Never text.
-- Over artwork: lay a scrim so text clears 4.5:1 against the darkened plate.
+Periwinkle marks playback, primary actions and selection. Mint supports secondary
+status and social actions. Gold is reserved for ratings; success/error retain
+their semantic roles. Neutral surfaces range from `bgDeep` through
+`surfaceContainer`, `surface` and `surfaceLight`.
 
-## Typography — clean spatial sans
+**The Foreground Rule.** Filled periwinkle, mint and success controls use
+`textOnAccent`, never white labels. Text over artwork needs a dark scrim.
+`textFaint` is decorative, never body or placeholder text.
 
-Kept from Sumi (families are bundled in the APK — OTA can't add fonts — and the
-measures are proven). Holo carries identity through color/glass/depth/rounding,
-not a type overhaul.
-- **Outfit** (`F.display` = Outfit_900Black) — Latin display/headings.
-- **DM Sans** (`F.body…`) — Latin body/labels.
-- **Cairo** (`AR.*`) — ALL static Arabic chrome (Outfit can't render Arabic;
-  Latin fonts under-measure Arabic and spill in RTL rows).
-- Scale `T`: `display 40/−1.0 · h1 30/−0.7 · h2 21 · body 14/23`.
+## Typography
 
-## Spacing & Radius
+Static Arabic chrome uses Cairo (500/600/700). Latin headings and numerical
+displays use Outfit; Latin body copy uses DM Sans. All three families are loaded
+in `app/_layout.tsx`. Arabic tracking is zero and the shared `TAr` ramp reserves
+enough line height for Arabic glyphs. Operational copy is generally 13–16dp;
+page titles are 24–34dp. Keep text scaling enabled.
 
-- `S` 4pt scale, generous spatial rhythm (`marginSection 34`).
-- `R` **soft visionOS rounding** (bigger than Sumi's crisp print): posters
-  `R.lg 16`, sheets `R.xl 22`, chips `R.sm 12`, pills `R.pill 100`. Glass reads as
-  pebbles floating in depth.
-- Touch targets ≥44.
+## Layout
 
-## Elevation — depth + gentle bloom
+Phone-first, with 20dp content gutters and 28dp gutters on account forms. Browse
+grids default to three compact columns, with saved two-column and horizontal
+list options. A 48dp header action cycles the layouts in one press (compact →
+comfortable → list); it does not add a separate button row above the content.
+Every page remembers its own choice (per-page key) — changing search never
+affects My List, and each page restores its saved layout on the next launch.
+Grid cards are the artwork alone: the title is overlaid on the poster over the
+bottom scrim (two lines max) and the row gap is the only space between cards, so
+no caption or metadata can ever stretch a row. List rows keep an inline title,
+subtitle and metadata row. Horizontal home
+rails use 140dp posters and 200dp episode thumbnails. The featured composition
+is 440dp high, below a separate masthead.
 
-- `ELEVATION_CARD` — soft ambient float (glass hovers over the void; offset y10,
-  radius 24).
-- `ELEVATION_GLOW` / `_VIOLET` — **soft periwinkle bloom** on active/elevated glass
-  (visionOS light-spill). Holo permits a gentle colored halo (Sumi banned it).
-- `ELEVATION_NAV` — upward shadow for floating nav / sheets.
+Bottom navigation always displays the three destination labels and respects
+system-bar insets. Secondary headers use 48dp back/menu controls and right-aligned
+titles at 28dp; sidebar destination labels are 18dp. Account forms scroll and retain keyboard avoidance. Player controls are
+landscape-oriented; dialogs and server lists remain bounded and scrollable.
 
-## Motion — motion-forward
+Use plain rows plus explicitly ordered children for fixed-control/flexible-text
+layouts. Avoid `gap` with `row-reverse` on React Native 0.81. Reserve bottom
+content padding for fixed navigation and playback bars.
 
-Holo leans into motion (the identity is "heavily animated"). Use **Reanimated**
-(already a dep) on the UI thread for 60fps:
-- Staggered fade+rise entrances on rails/cards; parallax on the hero; spring on
-  press (scale ~0.97); shared-element-feel transitions where cheap.
-- Reduced motion REQUIRED — `lib/motion.ts` `useReducedMotion()` gates
-  carousels/parallax/stagger. Never gate content visibility on a transition.
+## Elevation & Depth
 
-## Components & Patterns (Holo)
+Tonal contrast supplies most depth. Posters are unframed; settings use one
+grouped surface; activity/download/schedule rows use quiet dividers. Blur remains
+functional in overlays and sheets, rather than decorating every component.
+Compatibility `ELEVATION_*` tokens remain available to existing overlays.
+Sidebar and sheet transitions respect the existing reduced-motion hook.
 
-- **Masthead** — bone wordmark led by a periwinkle spark; sits on a frosted
-  `BlurView` bar that fades in over the hero.
-- **Marquee hero** — full-bleed art, AA scrim, big bone display title, genres as
-  glass chips, periwinkle→mint gradient Play + frosted-glass ghost My List.
-- **Section header** — periwinkle marginal mark + heavy bone title; "see all" ash.
-- **Poster card** — artwork-first, `R.lg` soft, glass rim border, ambient float +
-  optional periwinkle bloom on press; rank as oversized numeral.
-- **Floating nav** — frosted `BlurView` bar + rim hairline; active tab = light
-  glass chip with periwinkle icon/label + a small periwinkle spark dot.
-- **Glass** — the Holo signature. Frosted `BlurView` panels for bars, sheets,
-  chips, and over-art overlays — purposeful depth, not flat fills everywhere.
+## Shapes
 
-## RTL & i18n
+Controls use `R.md` (14dp); artwork uses `R.lg` (16dp). Sheets use `R.xl` or
+`R.xxl` (22/26dp). Circular avatars and playback controls keep their familiar
+shapes. Pills are reserved for compact badges and metadata.
 
-RTL-first. Static Arabic → `AR.*` (Cairo). Avoid `gap` with `row-reverse`
-(RN 0.81 Yoga bug — use margins). Numerals/romaji on Latin stack.
+## Components
 
-## Absolute bans
+- **Home:** compact masthead, protected artwork/title composition, primary Play
+  and secondary saved-list action, then an unboxed resume rail and content rails.
+- **Navigation:** permanently labeled destinations with a quiet active panel.
+- **PosterCard:** shared artwork plus an overlaid grid title and completion
+  slots; accessible title labels and pressed feedback. Bottom badges sit above
+  the 48dp title band. Preserve source, rating and completion data.
+- **Discover/library:** prominent title, readable search/filter controls and
+  user-selectable compact, comfortable and list layouts. Keep filters and data
+  intact when the FlatList remounts to change its column count.
+- **Details:** overlapping poster/title treatment, synopsis, quiet genre tags,
+  episode tabs and a persistent playback action.
+- **Account forms:** open layout, 56dp tonal fields and clear primary actions.
+  Keep validation, email confirmation and recovery controls.
+- **News:** large image, readable headline and a clear reading action, separated
+  by space rather than nested panels.
+- **Social:** calm message bubbles and compact 48dp composer actions; preserve
+  keyboard-safe positioning and closed-thread state.
+- **StateView:** one shared empty/error/loading anatomy with actionable recovery.
 
-- No neon (Holo bloom is SOFT, low-opacity — not a hard glow). No gradient text.
-- No periwinkle as a default surface/border fill — the accent marks the
-  privileged action/state only. No muted text below the AA floor. No nested cards.
-- White text directly on the periwinkle accent (too low contrast) — use
-  `textOnAccent` dark ink instead.
+## Do's and Don'ts
 
-## Styling mechanism
+- Do preserve the exact palette and existing functional behavior.
+- Do prioritize artwork, reading order, comfortable touch targets and safe areas.
+- Do use Cairo for Arabic and honor reduced motion.
+- Don't add ambient neon, gratuitous glass, gradient text or repetitive icon tiles.
+- Don't use white text on a light accent fill or hide essential navigation labels.
+- Don't publish an update during local UI evaluation.
 
-Migrating to **NativeWind** (`className`), token values mirrored in
-`tailwind.config.js`. Hybrid by necessity: `className` for the static skin
-(color/radii/spacing/border/type); `style` retained for dynamic props (width,
-aspectRatio), RN shadows (`ELEVATION_*`), `textShadow`, `absoluteFill`, and
-third-party components (`expo-image`, `LinearGradient`, `BlurView`).
-
-## Rollout status
-
-- ✅ Token core swapped to Holo (`lib/theme.ts` + `tailwind.config.js`) — whole app
-  cascades to the new palette/radii/elevation. `tsc` green.
-- ✅ NativeWind wired (`tailwind.config.js` was the missing piece); `CatalogCard`
-  piloted to `className`.
-- ⏳ Per-screen structural recompose (real `BlurView` glass + Reanimated motion),
-  in priority order: home → anime detail → search → my-list → watch/player →
-  downloads → auth → the rest. Plus a sweep of hardcoded rgba values that don't
-  cascade (`CatalogCard` badge, `MalRating`, `title/[id]`).
+Local verification: the Android Metro export, TypeScript and the existing test
+suite passed. No phone/emulator was connected; rendered-device review remains
+the user's Expo testing step. No new raster assets were introduced.

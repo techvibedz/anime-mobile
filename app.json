@@ -7,11 +7,6 @@
     "userInterfaceStyle": "dark",
     "scheme": "anime-mobile",
     "icon": "./assets/icon.png",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#08090C"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.anime.mobile"
@@ -24,7 +19,6 @@
       },
       "package": "com.anime.mobile",
       "googleServicesFile": "./google-services.json",
-      "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.REQUEST_INSTALL_PACKAGES",
         "android.permission.POST_NOTIFICATIONS"
@@ -52,6 +46,14 @@
     "plugins": [
       "expo-router",
       "expo-updates",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -88,7 +90,8 @@
           "photosPermission": "يحتاج التطبيق إلى الوصول إلى صورك لإرفاق لقطة شاشة بالبلاغ."
         }
       ],
-      "./plugins/withAndroidDoH"
+      "./plugins/withAndroidDoH",
+    "./plugins/withAsyncStorageSize"
     ],
     "owner": "houdeifa515"
   }

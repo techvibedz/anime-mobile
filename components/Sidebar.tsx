@@ -19,9 +19,10 @@ import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/presence";
 import { getHistory, isCompleted } from "../lib/history";
 import { getFavorites } from "../lib/favorites";
-import { C, R, ELEVATION_CARD, ELEVATION_GLOW_VIOLET } from "../lib/theme";
+import { C, R, ELEVATION_CARD, ELEVATION_GLOW_VIOLET, ABSOLUTE_FILL } from "../lib/theme";
 import { t } from "../lib/i18n";
 import Constants from "expo-constants";
+import { useReducedMotion } from "../lib/motion";
 
 // Show the version of the bundle actually running, same source the Settings
 // screen uses. NOT the bundled version.json: the release flow bumps version.json
@@ -89,6 +90,7 @@ function Sidebar() {
   const { user, signOut, isConfigured } = useAuth();
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
+  const reduced = useReducedMotion();
 
   const [mounted, setMounted] = useState(false);
   const [stats, setStats] = useState<QuickStats>({ episodesWatched: 0, animeCount: 0 });
@@ -118,21 +120,21 @@ function Sidebar() {
         .catch(() => {});
       Animated.timing(anim, {
         toValue: 1,
-        duration: 340,
+        duration: reduced ? 0 : 280,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start();
     } else if (mounted) {
       Animated.timing(anim, {
         toValue: 0,
-        duration: 220,
+        duration: reduced ? 0 : 200,
         easing: Easing.in(Easing.cubic),
         useNativeDriver: true,
       }).start(({ finished }) => {
         if (finished) setMounted(false);
       });
     }
-  }, [open]);
+   }, [open, reduced]);
 
   if (!mounted) return null;
 
@@ -225,7 +227,7 @@ function Sidebar() {
     <View style={st.overlay} pointerEvents="box-none">
       {/* Backdrop */}
       <Animated.View
-        style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}
+        style={[ABSOLUTE_FILL, { opacity: backdropOpacity }]}
         pointerEvents={open ? "auto" : "none"}
       >
         <Pressable style={st.backdrop} onPress={closeSidebar} />
@@ -237,7 +239,7 @@ function Sidebar() {
       >
         {/* Subtle neutral tonal lift — no colored glow (Sumi: hairlines, not halos). */}
         <View style={st.glow} pointerEvents="none">
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: C.inkRaised, opacity: 0.4 }]} />
+          <View style={[ABSOLUTE_FILL, { backgroundColor: C.inkRaised, opacity: 0.4 }]} />
         </View>
         {/* Accent hairline on the panel's leading edge — single ember color. */}
         <LinearGradient
@@ -327,7 +329,6 @@ function Sidebar() {
                       pressed && st.navItemPressed,
                     ]}
                   >
-                    {active ? <View style={[st.activeBar, { backgroundColor: tint }]} /> : null}
                     {/* Icon is absolutely pinned to the right (reading edge) and the
                         label is a plain full-width right-aligned text. There is NO
                         flexDirection:"row" here, so an Arabic-locale device can't
@@ -336,7 +337,7 @@ function Sidebar() {
                     <View style={[st.navIcon, active && { backgroundColor: tint + "1F", borderColor: tint + "33" }]}>
                       <Ionicons name={item.icon} size={21} color={active ? tint : C.textSecondary} />
                     </View>
-                    <Text style={[st.navLabel, active && st.navLabelActive, active && { color: tint }]} numberOfLines={1}>{item.label}</Text>
+                    <Text style={[st.navLabel, active && st.navLabelActive, active && { color: tint }]} numberOfLines={2}>{item.label}</Text>
                     {/* Disclosure chevron only on the focused row, pinned far-left. */}
                     {active ? <Ionicons style={st.navChevron} name={CHEVRON} size={15} color={tint} /> : null}
                   </Pressable>
@@ -397,12 +398,12 @@ function StatTile({
 /* Every row keeps a single visual order (chevron → label → icon, reading L→R)
  * so the right-aligned Arabic labels stay anchored to the icon rail. */
 const st = StyleSheet.create({
-  overlay: { ...StyleSheet.absoluteFillObject, zIndex: 1000 },
+  overlay: { ...ABSOLUTE_FILL, zIndex: 1000 },
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.66)" },
 
   panel: {
     position: "absolute", top: 0, bottom: 0, right: 0,
-    backgroundColor: C.bgDeep,
+     backgroundColor: C.surfaceContainer,
     borderTopLeftRadius: R.xxl, borderBottomLeftRadius: R.xxl,
     borderLeftWidth: 1, borderColor: C.line,
     paddingHorizontal: 16,
@@ -412,8 +413,8 @@ const st = StyleSheet.create({
     shadowOpacity: 0.6,
     shadowRadius: 32,
   },
-  glow: { ...StyleSheet.absoluteFillObject },
-  edgeLine: { position: "absolute", top: 36, bottom: 36, left: 0, width: 2.5, borderRadius: 2 },
+  glow: { ...ABSOLUTE_FILL },
+   edgeLine: { position: "absolute", top: 36, bottom: 36, left: 0, width: 1 },
 
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -425,8 +426,8 @@ const st = StyleSheet.create({
   // Arabic (Cairo) glyphs — without it the title rides high and no longer sits
   // inline with the logo mark. lineHeight keeps the two lines tight & centered.
   brandName: {
-    color: C.text, fontSize: 18, fontWeight: "800", fontFamily: "Cairo_700Bold",
-    lineHeight: 24, includeFontPadding: false, textAlignVertical: "center",
+    color: C.text, fontSize: 22, fontWeight: "700", fontFamily: "Cairo_700Bold",
+    lineHeight: 32, includeFontPadding: false, textAlignVertical: "center",
   },
   brandTag: {
     color: C.textMuted, fontSize: 11, marginTop: 1, fontFamily: "Cairo_500Medium",
@@ -441,9 +442,9 @@ const st = StyleSheet.create({
     backgroundColor: C.ember,
     alignItems: "center", justifyContent: "center",
   },
-  logoGlyph: { color: "#fff", fontSize: 23, fontWeight: "900", fontFamily: "Outfit_900Black" },
+   logoGlyph: { color: C.textOnAccent, fontSize: 23, fontWeight: "900", fontFamily: "Outfit_900Black" },
   closeBtn: {
-    width: 40, height: 40, borderRadius: R.circle,
+     width: 48, height: 48, borderRadius: R.md,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     alignItems: "center", justifyContent: "center",
   },
@@ -451,10 +452,9 @@ const st = StyleSheet.create({
 
   // Hero profile card
   hero: {
-    borderRadius: R.xxl, padding: 16,
-    backgroundColor: C.surfaceCard, borderWidth: 1, borderColor: C.border,
+     borderRadius: R.lg, padding: 18,
+     backgroundColor: C.surface,
     marginBottom: 16, overflow: "hidden",
-    ...ELEVATION_CARD,
   },
   heroPressed: { transform: [{ scale: 0.99 }], borderColor: C.borderLight },
   heroRow: { flexDirection: "row", alignItems: "center" },
@@ -497,16 +497,16 @@ const st = StyleSheet.create({
 
   // Quiet uppercase-style caption that introduces the nav list.
   sectionCap: {
-    color: C.textMuted, fontSize: 11, fontFamily: "Cairo_700Bold",
+    color: C.textMuted, fontSize: 13, fontFamily: "Cairo_700Bold",
     letterSpacing: 0.4, textAlign: "right",
     marginTop: 4, marginBottom: 10, marginRight: 4,
   },
-  navList: { gap: 16 },
+   navList: { gap: 4 },
   // No flexDirection here — the row is built from a centered full-width label
   // plus an absolutely-pinned icon, so it can't be reversed/collapsed on an
   // RTL-locale device. minHeight reserves room for the 44px icon.
   navItem: {
-    justifyContent: "center", minHeight: 64,
+     justifyContent: "center", minHeight: 64, paddingVertical: 12,
     paddingHorizontal: 12, borderRadius: R.lg,
     borderWidth: 1, borderColor: "transparent",
   },
@@ -516,15 +516,15 @@ const st = StyleSheet.create({
   navIcon: {
     position: "absolute", right: 12, top: "50%", marginTop: -22,
     width: 44, height: 44, borderRadius: R.md,
-    backgroundColor: C.surfaceLight, borderWidth: 1, borderColor: C.border,
+     backgroundColor: "transparent",
     alignItems: "center", justifyContent: "center",
   },
   navIconDanger: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
   navChevron: { position: "absolute", left: 12, top: "50%", marginTop: -8 },
   // Full-width right-aligned text; paddingRight clears the icon, paddingLeft the chevron.
   navLabel: {
-    color: C.text, fontSize: 16.5, fontWeight: "600", fontFamily: "Cairo_600SemiBold",
-    textAlign: "right", paddingRight: 70, paddingLeft: 24,
+     color: C.textSecondary, fontSize: 18, lineHeight: 28, fontWeight: "600", fontFamily: "Cairo_600SemiBold",
+     textAlign: "right", paddingRight: 64, paddingLeft: 24,
   },
   navLabelActive: { color: C.accent, fontFamily: "Cairo_700Bold" },
 

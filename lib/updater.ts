@@ -18,6 +18,7 @@ export interface UpdateInfo {
  * Returns null if no update, or UpdateInfo if a new APK is available.
  */
 export async function checkForApkUpdate(): Promise<UpdateInfo | null> {
+  if (__DEV__) return null;
   try {
     const base =
       Constants.expoConfig?.extra?.versionJsonUrl ??
@@ -53,6 +54,7 @@ export async function checkForApkUpdate(): Promise<UpdateInfo | null> {
  * Fetches the update and returns info if one was applied.
  */
 export async function checkForOtaUpdate(): Promise<UpdateInfo | null> {
+  if (__DEV__) return null;
   try {
     if (!Updates.isEnabled) return null;
 

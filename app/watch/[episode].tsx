@@ -21,6 +21,7 @@ import * as ScreenOrientation from "expo-screen-orientation";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchCompleteVideoServers, resolveVideo, prefetchAnime3rbServers } from "../../lib/api";
 import type { VideoServer } from "../../lib/api";
+import type { MediaSubtitle } from "../../lib/scraper/direct";
 import { saveProgress, getProgress } from "../../lib/history";
 import { recordEpisodeWatched } from "../../lib/completion";
 import { getDownloadByEpisode, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
@@ -29,7 +30,7 @@ import { getAutoplayNext } from "../../lib/settings";
 import { maybeShowInterstitial } from "../../lib/ads";
 import { useAuth } from "../../lib/auth";
 import { useWatchPartySync, createRoom } from "../../lib/watchParty";
-import { C } from "../../lib/theme";
+import { C, R, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
 import {
@@ -44,6 +45,7 @@ import {
   videoPlaybackHeaders,
 } from "../../lib/videoProviders";
 import { _cancelBackground } from "../../lib/scraper/bus";
+import { cueAt, parseVtt, type SubtitleCue } from "../../lib/subtitles";
 import { remoteLog } from "../../lib/remoteLog";
 
 type ServerStatus = "idle" | "resolving" | "playing" | "webview" | "failed";
@@ -52,6 +54,8 @@ interface ServerState {
   server: VideoServer & { source?: string };
   status: ServerStatus;
   videoUrl: string | null;
+  /** Sidecar subtitle tracks for providers that ship a separate VTT. */
+  subtitles?: MediaSubtitle[];
 }
 
 const localServer = (videoUrl: string): ServerState => ({
@@ -93,6 +97,79 @@ function getIframeUrl(server: VideoServer | undefined): string {
   if (!server) return "";
   const raw = (server.iframeUrl || "").trim();
   return raw.startsWith("//") ? `https:${raw}` : raw;
+}
+
+// Hard black border around cue text. RN has no text-stroke, so eight black
+// copies of the cue are painted under the white glyphs, offset 1.5px each way.
+const SUBTITLE_OUTLINE: [number, number][] = [
+  [-1.5, -1.5], [0, -1.5], [1.5, -1.5],
+  [-1.5, 0], [1.5, 0],
+  [-1.5, 1.5], [0, 1.5], [1.5, 1.5],
+];
+
+// Sidecar subtitles. Anime4up's CDN ships the Arabic track as a separate .vtt
+// (its HLS master carries no subtitle rendition) and expo-video has no API for
+// external tracks, so the VTT is parsed once and the active cue is painted over
+// the video, synced to the player clock.
+function SubtitleOverlay({
+  tracks,
+  player,
+  playing,
+}: {
+  tracks?: MediaSubtitle[];
+  player: ReturnType<typeof useVideoPlayer> | null;
+  playing: boolean;
+}) {
+  const [cues, setCues] = useState<SubtitleCue[] | null>(null);
+  const [text, setText] = useState<string | null>(null);
+  const trackUrl = tracks?.[0]?.url || "";
+
+  useEffect(() => {
+    if (!trackUrl) { setCues(null); setText(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(trackUrl, { headers: { Accept: "text/vtt, */*" } });
+        if (!res.ok) return;
+        const raw = await res.text();
+        if (!cancelled) setCues(parseVtt(raw));
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [trackUrl]);
+
+  useEffect(() => {
+    if (!cues || cues.length === 0 || !player || !playing) { setText(null); return; }
+    const tick = () => {
+      let time = 0;
+      try { time = player.currentTime || 0; } catch {}
+      const next = cueAt(cues, time);
+      setText((prev) => (prev === next ? prev : next));
+    };
+    tick();
+    const timer = setInterval(tick, 250);
+    return () => clearInterval(timer);
+  }, [cues, player, playing]);
+
+  if (!text) return null;
+  const rtl = /[\u0600-\u06ff]/.test(text);
+  const base = [ss.subtitleText, rtl && ss.subtitleTextRtl];
+  return (
+    <View pointerEvents="none" style={ss.subtitleWrap}>
+      <View style={ss.subtitleBox}>
+        {SUBTITLE_OUTLINE.map(([dx, dy]) => (
+          <Text
+            key={`${dx},${dy}`}
+            accessible={false}
+            style={[...base, ss.subtitleOutline, { transform: [{ translateX: dx }, { translateY: dy }] }]}
+          >
+            {text}
+          </Text>
+        ))}
+        <Text style={base}>{text}</Text>
+      </View>
+    </View>
+  );
 }
 
 const ADBLOCK_JS = `(function(){
@@ -142,22 +219,45 @@ const ADBLOCK_JS = `(function(){
 
 const PROGRESS_JS = `
 (function(){
-  setInterval(function(){
+  function readDoc(doc){
     var pos=0,dur=0;
     try {
       // Standard video element
-      var v=document.querySelector('video');
+      var v=doc.querySelector('video');
       if(v&&v.duration>0){pos=v.currentTime*1000;dur=v.duration*1000;}
+      var w=doc.defaultView;
       // JW Player
-      if(!pos&&typeof jwplayer==='function'){
-        try{var p=jwplayer();if(p&&p.getPosition&&p.getDuration){pos=p.getPosition()*1000;dur=p.getDuration()*1000;}}catch(e){}
+      if(!pos&&w&&typeof w.jwplayer==='function'){
+        try{var p=w.jwplayer();if(p&&p.getPosition&&p.getDuration){pos=p.getPosition()*1000;dur=p.getDuration()*1000;}}catch(e){}
       }
       // VideoJS
-      if(!pos&&typeof videojs==='function'){
-        try{var vj=videojs(document.querySelector('.video-js'));if(vj&&vj.currentTime&&vj.duration){pos=vj.currentTime()*1000;dur=vj.duration()*1000;}}catch(e){}
+      if(!pos&&w&&typeof w.videojs==='function'){
+        try{var vj=w.videojs(doc.querySelector('.video-js'));if(vj&&vj.currentTime&&vj.duration){pos=vj.currentTime()*1000;dur=vj.duration()*1000;}}catch(e){}
+      }
     }catch(e){}
-    if(pos>0&&dur>0){
-      window.ReactNativeWebView.postMessage(JSON.stringify({type:'progress',pos:Math.round(pos),dur:Math.round(dur)}));
+    return {pos:pos,dur:dur};
+  }
+  function read(){
+    var r=readDoc(document);
+    // Many embeds host their player in a nested iframe. Same-origin frames are
+    // reachable (cross-origin ones throw and are skipped) — without this, those
+    // servers never reported a position and never reached Continue Watching.
+    if(!r.pos){
+      try{
+        var frames=document.querySelectorAll('iframe');
+        for(var i=0;i<frames.length&&!r.pos;i++){
+          var cd=null;
+          try{cd=frames[i].contentDocument;}catch(e){cd=null;}
+          if(cd) r=readDoc(cd);
+        }
+      }catch(e){}
+    }
+    return r;
+  }
+  setInterval(function(){
+    var r=read();
+    if(r.pos>0&&r.dur>0){
+      window.ReactNativeWebView.postMessage(JSON.stringify({type:'progress',pos:Math.round(r.pos),dur:Math.round(r.dur)}));
     }
   },3000);
 })();
@@ -329,6 +429,26 @@ export default function WatchScreen() {
   useEffect(() => { serversRef.current = servers; }, [servers]);
 
   const active = servers[activeIdx];
+  // Episode label used for history/continue-watching ("الحلقة N" once the
+  // scraper resolves it; the URL number as fallback), and the player-header
+  // title that shows the anime name AND the episode label — never the same
+  // string twice (the old scrapers set episodeTitle = animeTitle).
+  const episodeLabel = useMemo(() => {
+    const ep = (title || "").trim();
+    if (ep) return ep;
+    return paramEpNum != null ? `${t.episode} ${paramEpNum}` : "";
+  }, [title, paramEpNum]);
+
+  const displayTitle = useMemo(() => {
+    const ep = episodeLabel;
+    const anime = (animeTitle || "").trim();
+    if (!ep) return anime;
+    if (!anime) return ep;
+    const e = ep.toLowerCase();
+    const a = anime.toLowerCase();
+    if (e === a || e.includes(a)) return ep;
+    return `${anime} — ${ep}`;
+  }, [episodeLabel, animeTitle]);
   // Gate playback on the selection: until the user picks a server, the player
   // gets NO source so background pre-resolution can't start audio/video behind
   // the picker. Flips on the moment `picked` is set by pickServer.
@@ -654,6 +774,35 @@ export default function WatchScreen() {
     maybeShowInterstitial("before_episode");
   }, [episode]);
 
+  // Some servers never report a usable position (a WebView embed whose player
+  // lives in a cross-origin iframe, or a stream whose duration is unknown), so
+  // the 5s save loop below never fires and the episode never reaches Continue
+  // Watching. Create the entry as soon as playback actually starts; the real
+  // position overwrites it on the next save.
+  const startedSaveRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!episode) return;
+    if (!isPlaying && !isWebView) return;
+    const key = `${episode}|${activeIdx}`;
+    if (startedSaveRef.current === key) return;
+    startedSaveRef.current = key;
+    const timer = setTimeout(() => {
+      if (playbackPositionMsRef.current > 0) return; // a real save already landed
+      saveProgress({
+        episodeHref: decodeURIComponent(episode),
+        episodeTitle: episodeLabel,
+        animeTitle,
+        animeHref,
+        image: imgParam ? decodeURIComponent(imgParam) : "",
+        positionMs: 0,
+        durationMs: 0,
+        url4up: url4up ? decodeURIComponent(url4up) : undefined,
+        epNum: paramEpNum ?? undefined,
+      });
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [episode, isPlaying, isWebView, activeIdx, episodeLabel, animeTitle, animeHref, imgParam, url4up, paramEpNum]);
+
   // Save progress (native player)
   useEffect(() => {
     if (!isPlaying || !player || !episode) return;
@@ -666,7 +815,7 @@ export default function WatchScreen() {
           playbackPositionMsRef.current = Math.round(pos);
           saveProgress({
             episodeHref: decodeURIComponent(episode),
-            episodeTitle: title,
+            episodeTitle: episodeLabel,
             animeTitle,
             animeHref,
             image: imgParam ? decodeURIComponent(imgParam) : "",
@@ -680,7 +829,28 @@ export default function WatchScreen() {
         }
       } catch {}
     }, 5000);
-    return () => { if (progressTimer.current) clearInterval(progressTimer.current); };
+    return () => {
+      if (progressTimer.current) clearInterval(progressTimer.current);
+      // Persist the final position when leaving / switching servers — a watch
+      // shorter than one 5s tick would otherwise never reach Continue Watching.
+      try {
+        const pos = Math.round((player.currentTime || 0) * 1000);
+        const dur = Math.round((player.duration || 0) * 1000);
+        if (pos > 0) {
+          saveProgress({
+            episodeHref: decodeURIComponent(episode),
+            episodeTitle: episodeLabel,
+            animeTitle,
+            animeHref,
+            image: imgParam ? decodeURIComponent(imgParam) : "",
+            positionMs: pos,
+            durationMs: dur,
+            url4up: url4up ? decodeURIComponent(url4up) : undefined,
+            epNum: paramEpNum ?? undefined,
+          });
+        }
+      } catch {}
+    };
   }, [isPlaying, player, episode, title, animeTitle, animeHref, url4up, imgParam, maybeMarkCompleted]);
 
   // Save progress (WebView player) — receives position from injected JS
@@ -732,7 +902,24 @@ export default function WatchScreen() {
         maybeMarkCompleted(pos, dur);
       }
     }, 5000);
-    return () => { if (progressTimer.current) clearInterval(progressTimer.current); };
+    return () => {
+      if (progressTimer.current) clearInterval(progressTimer.current);
+      // Same as the native path: a short WebView watch must still be recorded.
+      const { pos, dur } = lastWebViewPos.current;
+      if (pos > 0) {
+        saveProgress({
+          episodeHref: decodeURIComponent(episode),
+          episodeTitle: title,
+          animeTitle,
+          animeHref,
+          image: imgParam ? decodeURIComponent(imgParam) : "",
+          positionMs: Math.round(pos),
+          durationMs: Math.round(dur),
+          url4up: url4up ? decodeURIComponent(url4up) : undefined,
+          epNum: paramEpNum ?? undefined,
+        });
+      }
+    };
   }, [isWebView, episode, title, animeTitle, animeHref, url4up, imgParam, maybeMarkCompleted]);
 
   // WebView progress message handler
@@ -1019,7 +1206,7 @@ export default function WatchScreen() {
         i !== idx || s.server.iframeUrl !== srv.iframeUrl
           ? s
           : result.success && result.data?.videoUrl
-            ? { ...s, status: "playing", videoUrl: result.data.videoUrl }
+            ? { ...s, status: "playing", videoUrl: result.data.videoUrl, subtitles: result.data.subtitles }
             : { ...s, status: failStatus(srv.provider), videoUrl: null }));
     }).catch(() => {
       if (activeResolutionRef.current !== resolution) return;
@@ -1029,6 +1216,29 @@ export default function WatchScreen() {
           : s));
     });
   }, [activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null, picked, episode]);
+
+  // A server warmed during discovery (status "playing" with a pre-resolved URL)
+  // skipped the resolve above, so its sidecar subtitles were never attached.
+  // resolveVideo is cached for that exact result — this call is instant.
+  useEffect(() => {
+    if (!picked) return;
+    const state = servers[activeIdx];
+    if (!state || state.status !== "playing" || state.subtitles !== undefined) return;
+    if (state.server.provider !== "anime4upcdn") return;
+    const url = getIframeUrl(state.server);
+    if (!url) return;
+    let cancelled = false;
+    resolveVideo(url, state.server.provider, { priority: false }).then((result) => {
+      if (cancelled) return;
+      const subtitles = result.success ? result.data?.subtitles : undefined;
+      if (!subtitles) return;
+      setServers((p) => p.map((s, i) =>
+        i === activeIdx && s.server.iframeUrl === state.server.iframeUrl
+          ? { ...s, subtitles }
+          : s));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [picked, activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null, servers.length > 0 ? servers[activeIdx]?.server.provider : null]);
 
   // Auto-advance to next server on failure (only after a server was chosen —
   // during selection the active index must stay put).
@@ -1699,6 +1909,7 @@ export default function WatchScreen() {
             contentFit={videoFit}
             allowsPictureInPicture
           />
+          <SubtitleOverlay tracks={active?.subtitles} player={player} playing={isPlaying} />
         </Pressable>
       ) : isWebView ? (
         /* WEBVIEW FALLBACK */
@@ -1759,7 +1970,7 @@ export default function WatchScreen() {
           <Ionicons name="cloud-offline-outline" size={48} color={C.textMuted} />
           <Text style={ss.statusText}>{t.allServersFailed}</Text>
           <Pressable onPress={() => { void loadServers(); }} style={ss.actionBtn}>
-            <Ionicons name="refresh" size={16} color={C.white} />
+            <Ionicons name="refresh" size={16} color={C.textOnAccent} />
             <Text style={ss.actionBtnText}>{t.retry}</Text>
           </Pressable>
         </View>
@@ -1774,7 +1985,7 @@ export default function WatchScreen() {
           Skipped during native playback so taps reach expo-video's native controls. */}
       {!isPlaying && !pickerOpen && (
         <Pressable
-          style={[StyleSheet.absoluteFill, { zIndex: 1 }]}
+          style={[ABSOLUTE_FILL, { zIndex: 1 }]}
           onPress={tapToToggle}
           pointerEvents={isWebView && controlsVisible ? 'box-none' : 'auto'}
         />
@@ -1786,7 +1997,7 @@ export default function WatchScreen() {
           expo-video's native controls. */}
       {isPlaying && !pickerOpen && !controlsVisible && !locked && (
         <View
-          style={[StyleSheet.absoluteFill, { zIndex: 2 }]}
+          style={[ABSOLUTE_FILL, { zIndex: 2 }]}
           {...brightnessPan.panHandlers}
         />
       )}
@@ -1795,7 +2006,7 @@ export default function WatchScreen() {
           tap anywhere reveals it (auto-hides with the chrome timer); tapping it
           lifts the lock and restores the normal controls. */}
       {isPlaying && locked && (
-        <Pressable style={[StyleSheet.absoluteFill, { zIndex: 7 }]} onPress={showControls}>
+        <Pressable style={[ABSOLUTE_FILL, { zIndex: 7 }]} onPress={showControls}>
           {controlsVisible && (
             <View style={ss.lockLayer} pointerEvents="box-none">
               <Pressable
@@ -1832,7 +2043,7 @@ export default function WatchScreen() {
       {isPlaying && !pickerOpen && controlsVisible && !locked && (
         <View style={ss.controlsOverlay} pointerEvents="box-none">
           {/* Tap on empty space hides the chrome; vertical swipe adjusts brightness */}
-          <View style={StyleSheet.absoluteFill} {...brightnessPan.panHandlers} />
+          <View style={ABSOLUTE_FILL} {...brightnessPan.panHandlers} />
           <LinearGradient
             colors={["rgba(0,0,0,0.8)", "rgba(0,0,0,0.35)", "transparent"]}
             style={ss.gradTop}
@@ -1850,7 +2061,7 @@ export default function WatchScreen() {
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
             <View style={ss.titleArea}>
-              <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
+              <Text style={ss.titleText} numberOfLines={1}>{displayTitle}</Text>
               {active && (
                 <View style={ss.metaRow}>
                   <View style={ss.directPill}>
@@ -1902,12 +2113,12 @@ export default function WatchScreen() {
             </Pressable>
             <Pressable onPress={togglePlayPause} style={ss.playBtn} hitSlop={8}>
               {isBuffering && !isPlayerPaused ? (
-                <ActivityIndicator size="large" color={C.white} />
+                <ActivityIndicator size="large" color={C.textOnAccent} />
               ) : (
                 <Ionicons
                   name={isPlayerPaused ? "play" : "pause"}
                   size={38}
-                  color={C.white}
+                  color={C.textOnAccent}
                   style={isPlayerPaused ? { marginLeft: 4 } : undefined}
                 />
               )}
@@ -1968,7 +2179,7 @@ export default function WatchScreen() {
                 {nextEpisodeHref && (
                   <Pressable onPress={() => goNextEpisode()} style={ss.chipBtnAccent}>
                     <Text style={ss.chipBtnAccentText}>{t.nextEpisode}</Text>
-                    <Ionicons name="play-skip-forward" size={14} color={C.white} />
+                    <Ionicons name="play-skip-forward" size={14} color={C.textOnAccent} />
                   </Pressable>
                 )}
               </View>
@@ -1990,7 +2201,7 @@ export default function WatchScreen() {
               <Ionicons name="chevron-back" size={22} color={C.white} />
             </Pressable>
             <View style={ss.titleArea}>
-              <Text style={ss.titleText} numberOfLines={1}>{title}</Text>
+              <Text style={ss.titleText} numberOfLines={1}>{displayTitle}</Text>
               {active && (
                 <View style={ss.metaRow}>
                   {isWebView && (
@@ -2122,7 +2333,7 @@ export default function WatchScreen() {
       {isPlaying && brightness < 1 && (
         <View
           pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: C.player, opacity: (1 - brightness) * 0.92, zIndex: 6 }]}
+          style={[ABSOLUTE_FILL, { backgroundColor: C.player, opacity: (1 - brightness) * 0.92, zIndex: 6 }]}
         />
       )}
 
@@ -2202,7 +2413,7 @@ function ServerSheet({
   return (
     <View style={ss.pickerOverlay}>
       <Animated.View style={[ss.pickerBackdrop, { opacity: backdrop }]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={animateClose} />
+        <Pressable style={ABSOLUTE_FILL} onPress={animateClose} />
       </Animated.View>
       <Animated.View style={[ss.pickerSheet, { paddingTop: (insets.top || 10) + 10, transform: [{ translateX }] }]}>
         <View style={ss.pickerHeader}>
@@ -2211,9 +2422,9 @@ function ServerSheet({
               <Ionicons name="server-outline" size={16} color={C.accent} />
             </View>
             <View>
-              <Text style={ss.pickerTitle}>Servers</Text>
+              <Text style={ss.pickerTitle}>سيرفرات المشاهدة</Text>
               <Text style={ss.pickerSub}>
-                {servers.filter((s) => s.status === "playing" || s.status === "webview").length} of {servers.length} ready
+                {servers.filter((s) => s.status === "playing" || s.status === "webview").length} / {servers.length}
               </Text>
             </View>
           </View>
@@ -2237,7 +2448,7 @@ function ServerSheet({
               : item.status === "webview" ? C.cyan
               : item.status === "failed" ? C.error
               : item.status === "resolving" ? C.gold
-              : "rgba(255,255,255,0.35)";
+              : C.textMuted;
             const label = item.status === "playing" ? "Direct"
               : item.status === "webview" ? "Embed"
               : item.status === "failed" ? "Failed"
@@ -2271,7 +2482,7 @@ function ServerSheet({
                 </View>
                 {isActive ? (
                   <View style={ss.activeBadge}>
-                    <Ionicons name="play" size={9} color={C.white} />
+                    <Ionicons name="play" size={9} color={C.textOnAccent} />
                     <Text style={ss.activeBadgeText}>NOW</Text>
                   </View>
                 ) : item.status === "playing" ? (
@@ -2292,18 +2503,17 @@ const ss = StyleSheet.create({
   player: { flex: 1, backgroundColor: C.player },
   playerWrap: { flex: 1 },
 
-  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: "flex-start", zIndex: 3 },
+  overlay: { ...ABSOLUTE_FILL, justifyContent: "flex-start", zIndex: 3 },
 
   // Status / error states
   statusText: { color: "rgba(255,255,255,0.85)", fontSize: 15, fontWeight: "700", textAlign: "center", paddingHorizontal: 32, fontFamily: "Cairo_700Bold" },
-  statusSub: { color: "rgba(255,255,255,0.45)", fontSize: 12, textAlign: "center", fontFamily: "Cairo_500Medium" },
+  statusSub: { color: C.textMuted, fontSize: 13, textAlign: "center", fontFamily: "Cairo_500Medium" },
   errorTitle: { color: "rgba(255,255,255,0.7)", fontSize: 16, fontWeight: "700", marginTop: 8, textAlign: "center", paddingHorizontal: 32, fontFamily: "Cairo_700Bold" },
   actionBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    backgroundColor: C.accent, borderRadius: 24, paddingHorizontal: 22, paddingVertical: 11,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.22, shadowRadius: 14, elevation: 6,
+    minHeight: 48, backgroundColor: C.accent, borderRadius: R.md, paddingHorizontal: 24, paddingVertical: 12,
   },
-  actionBtnText: { color: C.white, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  actionBtnText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   // Gradient scrims
   gradTop: { position: "absolute", top: 0, left: 0, right: 0, height: 120 },
@@ -2311,8 +2521,8 @@ const ss = StyleSheet.create({
   topBarGrad: { position: "absolute", top: 0, left: 0, right: 0, height: 110 },
 
   // Controls overlay
-  controlsOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "space-between", zIndex: 3 },
-  bufferOverlay: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", zIndex: 2 },
+  controlsOverlay: { ...ABSOLUTE_FILL, justifyContent: "space-between", zIndex: 3 },
+  bufferOverlay: { ...ABSOLUTE_FILL, alignItems: "center", justifyContent: "center", zIndex: 2 },
   partyWaitPill: {
     position: "absolute", bottom: 96, alignSelf: "center", zIndex: 3,
     flexDirection: "row-reverse", alignItems: "center", gap: 8,
@@ -2322,7 +2532,7 @@ const ss = StyleSheet.create({
   partyWaitText: { color: C.text, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
 
   // Screen-lock overlay
-  lockLayer: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
+  lockLayer: { ...ABSOLUTE_FILL, alignItems: "center", justifyContent: "center" },
   lockBtn: {
     flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: 20, paddingVertical: 12, borderRadius: 26,
@@ -2333,13 +2543,12 @@ const ss = StyleSheet.create({
 
   // Top bar
   ctrlTopBar: {
-    flexDirection: "row", alignItems: "center", gap: 10,
+    flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: 18, paddingBottom: 12,
   },
   iconBtn: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
+    width: 44, height: 44, borderRadius: R.md,
+    backgroundColor: C.overlayBlack50,
     alignItems: "center", justifyContent: "center",
   },
   iconBtnAccent: {
@@ -2401,13 +2610,23 @@ const ss = StyleSheet.create({
   },
   partyLeaveText: { color: C.error, fontSize: 12, fontFamily: "Cairo_700Bold" },
   speedBtn: {
-    height: 38, minWidth: 48, borderRadius: 19, paddingHorizontal: 10,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
+    height: 44, minWidth: 48, borderRadius: R.md, paddingHorizontal: 10,
+    backgroundColor: C.overlayBlack50,
     alignItems: "center", justifyContent: "center",
   },
   speedBtnText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.3 },
   titleArea: { flex: 1, gap: 3 },
+  subtitleWrap: {
+    position: "absolute", left: 18, right: 18, bottom: 36,
+    alignItems: "center", justifyContent: "flex-end",
+  },
+  subtitleBox: { alignItems: "stretch" },
+  subtitleOutline: { position: "absolute", left: 0, right: 0, top: 0, color: "#000" },
+  subtitleText: {
+    color: "#fff", fontSize: 16, lineHeight: 24, fontWeight: "700",
+    fontFamily: "Cairo_600SemiBold", textAlign: "center",
+  },
+  subtitleTextRtl: { writingDirection: "rtl" },
   titleText: {
     color: C.white, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold",
     textShadowColor: "rgba(0,0,0,0.6)", textShadowRadius: 6,
@@ -2420,23 +2639,20 @@ const ss = StyleSheet.create({
   },
   directPillText: { color: C.success, fontSize: 8, fontWeight: "800", letterSpacing: 1, fontFamily: "Outfit_800ExtraBold" },
   liveDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: C.success },
-  serverLabelText: { color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "Cairo_500Medium", flexShrink: 1 },
+  serverLabelText: { color: C.textSecondary, fontSize: 11, fontFamily: "Cairo_500Medium", flexShrink: 1 },
 
   // Center cluster
   centerCluster: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 44,
   },
   playBtn: {
-    width: 76, height: 76, borderRadius: 38,
-    backgroundColor: "rgba(139,147,255,0.9)",
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: C.accent,
     alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 18, elevation: 10,
   },
   skipBtn: {
     width: 54, height: 54, borderRadius: 27,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: C.overlayBlack50,
     alignItems: "center", justifyContent: "center",
   },
   skipLabel: { color: "rgba(255,255,255,0.7)", fontSize: 9, fontWeight: "800", marginTop: -3, fontFamily: "Outfit_800ExtraBold" },
@@ -2449,7 +2665,7 @@ const ss = StyleSheet.create({
     fontFamily: "Outfit_700Bold", fontVariant: ["tabular-nums"],
   },
   timeTextDur: {
-    color: "rgba(255,255,255,0.5)", fontSize: 12, fontWeight: "600", minWidth: 42, textAlign: "center",
+    color: C.textSecondary, fontSize: 12, fontWeight: "600", minWidth: 42, textAlign: "center",
     fontFamily: "Outfit_600SemiBold", fontVariant: ["tabular-nums"],
   },
   seekBarWrap: { flex: 1, height: 32, justifyContent: "center" },
@@ -2474,18 +2690,16 @@ const ss = StyleSheet.create({
   ctrlRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   chipBtn: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.12)",
-    borderRadius: 100, paddingHorizontal: 14, paddingVertical: 8,
+    backgroundColor: C.overlayBlack50,
+    minHeight: 48, borderRadius: R.md, paddingHorizontal: 16, paddingVertical: 10,
   },
   chipBtnText: { color: C.white, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   chipBtnAccent: {
     flexDirection: "row", alignItems: "center", gap: 6,
     backgroundColor: C.accent,
-    borderRadius: 100, paddingHorizontal: 16, paddingVertical: 8,
-    shadowColor: C.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.22, shadowRadius: 12, elevation: 6,
+    minHeight: 48, borderRadius: R.md, paddingHorizontal: 18, paddingVertical: 10,
   },
-  chipBtnAccentText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Cairo_700Bold" },
+  chipBtnAccentText: { color: C.textOnAccent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   // Server selection layout (pre-playback)
   selHeader: {
@@ -2494,7 +2708,7 @@ const ss = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.06)",
   },
   selTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
-  selSub: { color: "rgba(255,255,255,0.45)", fontSize: 12, marginTop: 1, fontFamily: "Cairo_500Medium" },
+  selSub: { color: C.textMuted, fontSize: 13, marginTop: 4, fontFamily: "Cairo_500Medium" },
   selContent: {
     // direction:"ltr" + explicit column so the Arabic-locale RTL flip can't
     // turn the list into a row; gap dropped (RN 0.81 gap+row-reverse Yoga bug)
@@ -2504,7 +2718,7 @@ const ss = StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 16,
   },
   selSectionLabel: {
-    color: "rgba(255,255,255,0.45)", fontSize: 11, fontWeight: "800",
+    color: C.textMuted, fontSize: 12, fontWeight: "700",
     letterSpacing: 0.6, marginTop: 8, marginBottom: 2, fontFamily: "Cairo_700Bold",
   },
   selFinding: {
@@ -2518,9 +2732,9 @@ const ss = StyleSheet.create({
     // RN 0.81 gap+row-reverse Yoga bug. marginBottom replaces the list gap.
     direction: "ltr", flexDirection: "row", alignItems: "center", gap: 12,
     marginBottom: 8,
-    paddingVertical: 12, paddingHorizontal: 13, borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.06)",
+    minHeight: 72, paddingVertical: 16, paddingHorizontal: 18, borderRadius: R.md,
+    backgroundColor: C.surfaceContainer,
+    borderWidth: 1, borderColor: C.borderSoft,
   },
   selItemRec: {
     backgroundColor: "rgba(139,147,255,0.1)",
@@ -2537,12 +2751,12 @@ const ss = StyleSheet.create({
   qualityBadgeText: { color: "rgba(255,255,255,0.85)", fontSize: 11, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.3 },
 
   // Server picker
-  pickerOverlay: { ...StyleSheet.absoluteFillObject, flexDirection: "row", zIndex: 10 },
+  pickerOverlay: { ...ABSOLUTE_FILL, flexDirection: "row", zIndex: 10 },
   pickerBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.65)" },
   pickerSheet: {
-    width: "58%", backgroundColor: C.playerSheet,
-    paddingHorizontal: 16, paddingBottom: 16,
-    borderTopLeftRadius: 24, borderBottomLeftRadius: 24,
+    width: "58%", maxWidth: 480, backgroundColor: C.playerSheet,
+    paddingHorizontal: 24, paddingBottom: 20,
+    borderTopLeftRadius: R.xl, borderBottomLeftRadius: R.xl,
     borderLeftWidth: 1, borderColor: "rgba(255,255,255,0.08)",
   },
   pickerHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
@@ -2553,15 +2767,15 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   pickerTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
-  pickerSub: { color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 1, fontFamily: "Cairo_500Medium" },
+  pickerSub: { color: C.textMuted, fontSize: 12, marginTop: 4, fontFamily: "Cairo_500Medium" },
   pickerScroll: { flex: 1 },
   pickerContent: { gap: 7, paddingBottom: 20 },
 
   serverItem: {
     flexDirection: "row", alignItems: "center", gap: 11,
-    paddingVertical: 10, paddingHorizontal: 11, borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.05)",
+    minHeight: 68, paddingVertical: 14, paddingHorizontal: 14, borderRadius: R.md,
+    backgroundColor: C.surfaceContainer,
+    borderWidth: 1, borderColor: C.borderSoft,
   },
   serverItemActive: {
     backgroundColor: "rgba(139,147,255,0.12)",
@@ -2584,12 +2798,12 @@ const ss = StyleSheet.create({
   serverNameActive: { color: C.accent },
   serverMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
   serverMetaLabel: { fontSize: 10, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
-  serverMeta: { color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "Cairo_500Medium", flexShrink: 1 },
+  serverMeta: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", flexShrink: 1 },
   activeBadge: {
     flexDirection: "row", alignItems: "center", gap: 3,
     backgroundColor: C.accent, borderRadius: 100, paddingHorizontal: 8, paddingVertical: 3,
   },
-  activeBadgeText: { color: C.white, fontSize: 8, fontWeight: "800", letterSpacing: 0.8, fontFamily: "Outfit_800ExtraBold" },
+  activeBadgeText: { color: C.textOnAccent, fontSize: 8, fontWeight: "800", letterSpacing: 0.8, fontFamily: "Outfit_800ExtraBold" },
 
   // Brightness indicator
   brightnessIndicator: {

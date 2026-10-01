@@ -53,10 +53,15 @@ import java.util.concurrent.TimeUnit
  * use the original hostname.
  */
 class PantoufaDohDns(private val system: Dns = Dns.SYSTEM) : Dns {
+    // callTimeout bounds the WHOLE DoH round-trip. Kept short (2s): on ISPs
+    // that block 1.1.1.1/8.8.8.8 the request hangs until this fires, and the
+    // old 5s cap made every uncached hostname pay up to 10s (two resolvers)
+    // before the system fallback. Normal DoH latency is well under 1s, so 2s
+    // still lets a slow-but-working resolver answer.
     private val client = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
-        .callTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(2, TimeUnit.SECONDS)
         .build()
     private data class CacheEntry(val addresses: List<InetAddress>, val expiresAt: Long)
     private data class DohResult(val addresses: List<InetAddress>, val ttlMs: Long)

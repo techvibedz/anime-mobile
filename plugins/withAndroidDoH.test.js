@@ -8,7 +8,7 @@ assert.match(dns, /data class CacheEntry/);
 assert.match(dns, /expiresAt/);
 assert.match(dns, /1\.1\.1\.1\/dns-query/);
 assert.match(dns, /8\.8\.8\.8\/resolve/);
-assert.match(dns, /callTimeout\(5, TimeUnit\.SECONDS\)/);
+assert.match(dns, /callTimeout\(2, TimeUnit\.SECONDS\)/);
 assert.match(dns, /DoH first for source, embed and final media CDN hosts/);
 // Local/literal hosts must short-circuit BEFORE any DoH request: public
 // resolvers answer NXDOMAIN for 127.0.0.1, and the two dead round-trips made

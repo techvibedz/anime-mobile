@@ -47,6 +47,7 @@ import {
   extractDoodstream,
   fetchAnime4upRecentPageDirect,
   fetchWitHomeDirect,
+  fetchWitNewEpisodesDirect,
   fetchWitanimeAnimeSections,
   type WitHome,
   type WitHomeEpisode,
@@ -89,7 +90,9 @@ import {
 // v8: the home feed dropped the mixed "trending"/"movies" rails for witanime's
 // own latest-movies / most-watched animes / most-watched movies rails, so
 // pre-v8 payloads (wrong section ids) are discarded too.
-const HOME_CACHE_KEY = "@home_cache_v8";
+// v9: the recent rail now leads with witanime's canonical newest-first order
+// (anime4up only backfills the tail), so pre-v9 anime4up-led rails are purged.
+const HOME_CACHE_KEY = "@home_cache_v9";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
 // Serve an expired payload for up to a day while revalidating in the background:
 // blocking the first paint on a live scrape (which can take ~1 min when a
@@ -105,7 +108,9 @@ const SEARCH_CACHE_PREFIX = "@search_v3:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const RECENT_CACHE_PREFIX = "@recent_v9:";
+// v10: recent pages come from witanime's contiguous /new-episodes pager, so
+// pre-v10 per-page caches (anime4up archive order) are discarded.
+const RECENT_CACHE_PREFIX = "@recent_v10:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
 const SERVERS_CACHE_PREFIX = "@servers_v8:";
 // Resolved Witanime ANIME pages per source title (see fetchCompleteVideoServers).
@@ -381,11 +386,13 @@ async function fetchHomeFresh(): Promise<HomePayload> {
     return { success: true, data: { featured: [], sections: [] } };
   }
   const baseHome = home || { featured: [], animes: [], episodes: [] };
-  // anime4up's recent feed wins when it loaded (it is fresher), but a
-  // failed/empty anime4up page must not wipe Witanime's own recent episodes.
-  // Merge instead of replace: anime4up page 1 is often one batch upload, so
-  // its per-anime de-dupe alone shrinks the rail to a couple of cards.
-  const recentEps = mergeRecentEpisodes(up4Episodes, baseHome.episodes);
+  // Witanime's own latest rail leads the feed — it is the canonical
+  // newest-first order, so a freshly-released episode always sits at the top.
+  // anime4up only backfills the tail: its archive often leads with a batch
+  // upload of an older show, and leading with it pushed new episodes into the
+  // middle of the rail. Conversely, a failed/empty anime4up page must not wipe
+  // Witanime's own recent episodes.
+  const recentEps = mergeRecentEpisodes(baseHome.episodes, up4Episodes);
   const result = buildHomePayload({ ...baseHome, episodes: recentEps });
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
@@ -1238,6 +1245,29 @@ export async function fetchRecent(page = 1): Promise<{
     RECENT_CACHE_PREFIX + page,
     RECENT_CACHE_TTL,
     async () => {
+      // Canonical path: witanime's own paginated new-episodes feed. Pages are
+      // contiguous and strictly newest-first, so the see-all grid continues
+      // the home rail's order page after page. The finished-show filter is
+      // unnecessary here — it guards anime4up's archive, not this feed.
+      // The pager clamps requests past its end (response `page` < requested),
+      // which routes those pages to the archive fallback below instead of
+      // serving the last page again.
+      const wit = await fetchWitNewEpisodesDirect(page).catch(() => null);
+      if (wit?.page === page && wit.episodes.length) {
+        const episodes: EpisodeItem[] = wit.episodes.map((e) => ({
+          title: e.title,
+          href: e.href,
+          image: imgOrEmpty(e.image),
+          animeTitle: e.animeTitle,
+          animeHref: e.animeHref,
+          isNew: e.isNew,
+        }));
+        // Always allow one more page: past the pager's end the next fetch
+        // falls back to the archive, whose own hasNext ends the list.
+        return { success: true, data: { page, episodes, hasNext: true } };
+      }
+      // Fallback when witanime is blocked: page 1 mirrors the home rail, later
+      // pages scrape anime4up's archive.
       let r: Awaited<ReturnType<typeof scrapeRecent>>;
       if (page === 1) {
         const home = await fetchHome();
@@ -1250,7 +1280,7 @@ export async function fetchRecent(page = 1): Promise<{
         }
       }
       r = await scrapeRecent(page);
-      // Later pages are anime4up's raw archive: same backfill pollution.
+      // Fallback pages are anime4up's raw archive: backfill pollution applies.
       const fresh = await filterFinishedEpisodes(r.episodes);
       const episodes: EpisodeItem[] = fresh.map((e) => ({
         title: e.title,

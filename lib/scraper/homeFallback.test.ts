@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseAnime4upHomeHtml, parseWitFeatured, parseWitHomeEpisodes, parseWitHomeRails } from "./direct";
+import { parseAnime4upHomeHtml, parseWitFeatured, parseWitHomeEpisodes, parseWitHomeRails, parseWitNewEpisodes } from "./direct";
 import { dedupeRecentEpisodes, loadWitanimeHome, mergeRecentEpisodes } from "../homeSourceSelection";
 
 const html = `
@@ -89,6 +89,36 @@ async function main() {
     parseWitHomeEpisodes('<a href="https://witanime.site/watch/legacy/1"><h3>Legacy</h3></a>').length,
     1,
   );
+
+  // The /new-episodes pager JSON is the canonical newest-first feed used for
+  // the whole recent rail (home + see-all pages): order must be preserved
+  // exactly as served, and hasOlder maps to hasNext.
+  const pager = parseWitNewEpisodes({
+    page: 1,
+    hasOlder: true,
+    html: `
+      <a class="@container group block w-full cursor-pointer" href="https://witanime.site/watch/new-show/2">
+        <img src="https://images.witanime.site/posters/new.jpg" alt="New Show" class="...">
+        <h3 dir="ltr" class="truncate">New Show</h3>
+      </a>
+      <a class="@container group block w-full cursor-pointer" href="https://witanime.site/watch/other-show/1">
+        <img src="https://images.witanime.site/posters/other.jpg" alt="Other Show" class="...">
+        <h3 dir="ltr" class="truncate">Other Show</h3>
+      </a>`,
+  });
+  assert.ok(pager);
+  assert.deepEqual(pager.episodes.map((e) => e.animeTitle), ["New Show", "Other Show"]);
+  assert.equal(pager.episodes[0]?.title, "الحلقة 2");
+  assert.equal(pager.episodes[0]?.animeHref, "https://witanime.site/anime/new-show");
+  assert.equal(pager.episodes[0]?.image, "https://images.witanime.site/posters/new.jpg");
+  assert.equal(pager.hasNext, true);
+  assert.equal(pager.page, 1);
+  const lastPager = parseWitNewEpisodes({ page: 3, hasOlder: false, html: "" });
+  assert.equal(lastPager?.hasNext, false);
+  assert.equal(lastPager?.page, 3);
+  assert.equal(parseWitNewEpisodes(null), null);
+  assert.equal(parseWitNewEpisodes({}), null);
+  assert.equal(parseWitNewEpisodes({ html: 42 }), null);
 
   // See-all de-dupe: one anime from two sources (different animeHrefs) must
   // collapse to a single card; titles normalize ("Liar Game" vs "LIAR GAME").

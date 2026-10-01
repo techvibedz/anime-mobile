@@ -147,6 +147,7 @@ export async function fetchHtml(
   url: string,
   referer?: string,
   attemptTimeouts: readonly number[] = FETCH_ATTEMPT_TIMEOUTS,
+  extraHeaders?: Record<string, string>,
 ): Promise<string | null> {
   const ATTEMPTS = attemptTimeouts.length;
   const candidates = await getSourceCandidates(url);
@@ -167,6 +168,7 @@ export async function fetchHtml(
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "ar,en;q=0.9",
           ...(referer ? { Referer: rewriteToCandidate(referer, attemptUrl) } : {}),
+          ...(extraHeaders ?? {}),
         },
       });
       clearTimeout(t);
@@ -617,17 +619,11 @@ export function parseWitHomeRails(html: string): {
   };
 }
 
-// Parse the recent-episode cards from the "أحدث الحلقات" (latest episodes)
-// rail. The home page also renders an "الأكثر مشاهدة" (most-watched) rail of
-// /watch/ links BEFORE it, whose episodes are popularity-ranked and often from
-// earlier weeks — scanning the whole page mixed those into the new-episodes
-// feed. Scope the scan to the latest rail's <section>; legacy cached HTML
-// without the heading keeps the old whole-page behavior.
-export function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
-  const out: WitHomeEpisode[] = [];
-  const seen = new Set<string>();
+// Collect the /watch/ episode-card anchors of a card grid in DOM order.
+// Shared by the home page's "أحدث الحلقات" rail and the /new-episodes pager
+// fragment, which carry identical card markup.
+function collectWitWatchCards(scope: string, out: WitHomeEpisode[], seen: Set<string>): void {
   const currentRe = /<a\b[^>]*href=["']([^"']*\/watch\/([^"']+?)\/(\d+))["'][^>]*>([\s\S]*?)<\/a>/gi;
-  const scope = witSectionHtml(html, "أحدث الحلقات") || html;
   let current: RegExpExecArray | null;
   while ((current = currentRe.exec(scope))) {
     const href = htmlDecode(current[1]);
@@ -648,6 +644,19 @@ export function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
       isNew: true,
     });
   }
+}
+
+// Parse the recent-episode cards from the "أحدث الحلقات" (latest episodes)
+// rail. The home page also renders an "الأكثر مشاهدة" (most-watched) rail of
+// /watch/ links BEFORE it, whose episodes are popularity-ranked and often from
+// earlier weeks — scanning the whole page mixed those into the new-episodes
+// feed. Scope the scan to the latest rail's <section>; legacy cached HTML
+// without the heading keeps the old whole-page behavior.
+export function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
+  const out: WitHomeEpisode[] = [];
+  const seen = new Set<string>();
+  const scope = witSectionHtml(html, "أحدث الحلقات") || html;
+  collectWitWatchCards(scope, out, seen);
   const blocks = scope.split("episodes-card-container");
   for (let i = 1; i < blocks.length; i++) {
     const b = blocks[i];
@@ -669,6 +678,42 @@ export function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
     });
   }
   return out;
+}
+
+// The "أحدث الحلقات" rail's own next/prev pager hits /new-episodes, which
+// answers JSON { page, html, hasOlder } whose `html` is the same card grid as
+// the home rail. It is the site's canonical newest-first episode order,
+// paginated — the recent feed sources every page from it so page N+1 always
+// continues page N (the anime4up archive merge could interleave stale batch
+// uploads mid-list, which pushed brand-new episodes out of the lead).
+export function parseWitNewEpisodes(body: unknown): { episodes: WitHomeEpisode[]; hasNext: boolean; page: number } | null {
+  const data = body as { html?: unknown; hasOlder?: unknown; page?: unknown } | null;
+  if (!data || typeof data.html !== "string") return null;
+  const page = typeof data.page === "number" && Number.isFinite(data.page) ? data.page : 0;
+  const episodes: WitHomeEpisode[] = [];
+  collectWitWatchCards(data.html, episodes, new Set<string>());
+  return { episodes, hasNext: !!data.hasOlder, page };
+}
+
+export async function fetchWitNewEpisodesDirect(
+  page = 1,
+): Promise<{ episodes: WitHomeEpisode[]; hasNext: boolean; page: number } | null> {
+  const safePage = Math.max(1, Math.floor(page));
+  const base = await getWitBase();
+  // The route only answers with JSON when the request accepts it; the default
+  // HTML Accept falls through to a 404 page.
+  const body = await fetchHtml(
+    `${base}/new-episodes?page=${safePage}`,
+    base + "/",
+    [8000, 16000],
+    { Accept: "application/json" },
+  );
+  if (!body) return null;
+  try {
+    return parseWitNewEpisodes(JSON.parse(body));
+  } catch {
+    return null;
+  }
 }
 
 // Fetch + parse the witanime home page directly (no WebView). Returns null on a

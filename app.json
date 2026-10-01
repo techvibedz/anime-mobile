@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pantoufa",
     "slug": "injaz",
-    "version": "3.4.4",
+    "version": "3.4.5",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "anime-mobile",
@@ -12,7 +12,7 @@
       "bundleIdentifier": "com.anime.mobile"
     },
     "android": {
-      "versionCode": 344,
+      "versionCode": 345,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#08090C"

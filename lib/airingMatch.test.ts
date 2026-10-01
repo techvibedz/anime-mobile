@@ -4,7 +4,7 @@
 // entries. Run:  npx tsx lib/airingMatch.test.ts
 
 import assert from "node:assert";
-import { pickAiring, titleScore } from "./airing";
+import { pickAiring, seriesIsFinished, titleScore } from "./airing";
 
 const future = Math.floor(Date.now() / 1000) + 86_400;
 
@@ -61,6 +61,38 @@ assert.equal(pickAiring([media("Some Random Anime", 3)], [""]), null);
 assert.equal(
   pickAiring([media("X", 1, { nextAiringEpisode: { airingAt: 1000, episode: 1 } })], ["x"]),
   null,
+);
+
+// ── finished-series filter (new-episodes backfill guard) ──
+// AniList says the series finished ⇒ a freshly uploaded old episode is a
+// backfill and must be dropped from the "new episodes" feed.
+assert.equal(
+  seriesIsFinished([media("Serial Experiments Lain", null, { status: "FINISHED" })], ["serial experiments lain"]),
+  true,
+);
+
+// A releasing series is never dropped, even without a next airing timestamp.
+assert.equal(
+  seriesIsFinished([media("One Piece", null, { status: "RELEASING" })], ["one piece"]),
+  false,
+);
+
+// Finished earlier season + releasing later season under the same base ⇒ keep.
+assert.equal(
+  seriesIsFinished(
+    [
+      media("Tensei Shitara Slime Datta Ken", null, { status: "FINISHED" }),
+      media("Tensei Shitara Slime Datta Ken 4th Season", 5, { status: "RELEASING" }),
+    ],
+    ["tensei shitara slime datta ken"],
+  ),
+  false,
+);
+
+// Only weak containment matches the query ⇒ keep (fail open).
+assert.equal(
+  seriesIsFinished([media("Boruto: Naruto Next Generations", null, { status: "FINISHED" })], ["naruto"]),
+  false,
 );
 
 console.log("airing match tests passed");

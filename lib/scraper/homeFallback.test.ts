@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseAnime4upHomeHtml, parseWitFeatured, parseWitHomeRails } from "./direct";
+import { parseAnime4upHomeHtml, parseWitFeatured, parseWitHomeEpisodes, parseWitHomeRails } from "./direct";
 import { dedupeRecentEpisodes, loadWitanimeHome, mergeRecentEpisodes } from "../homeSourceSelection";
 
 const html = `
@@ -67,6 +67,28 @@ async function main() {
     "https://wit/ep/liar", "https://up4/ep/1b", "https://wit/ep/sakura", "https://wit/ep/op",
   ]);
   assert.deepEqual(mergeRecentEpisodes(primary, []), primary);
+
+  // Witanime's home renders "الأكثر مشاهدة" (most-watched, popularity-ranked)
+  // before "أحدث الحلقات" (latest). The episode feed must read only the latest
+  // rail, otherwise episodes from earlier weeks lead the "new episodes" list.
+  const witHomeEpisodeRails = `
+    <section class="mb-14">
+      <h2>الأكثر مشاهدة</h2>
+      <a href="https://witanime.site/watch/old-hit/5"><img src="https://img.example/old.jpg" alt=""><h3>Old Hit</h3></a>
+    </section>
+    <section class="mb-14">
+      <h2>أحدث الحلقات</h2>
+      <a href="https://witanime.site/watch/fresh-show/2"><img src="https://img.example/fresh.jpg" alt=""><h3>Fresh Show</h3></a>
+      <a href="https://witanime.site/watch/other-show/9"><img src="https://img.example/other.jpg" alt=""><h3>Other Show</h3></a>
+    </section>`;
+  const witEps = parseWitHomeEpisodes(witHomeEpisodeRails);
+  assert.deepEqual(witEps.map((e) => e.animeTitle), ["Fresh Show", "Other Show"]);
+  assert.equal(witEps[0]?.title, "الحلقة 2");
+  assert.equal(witEps[0]?.animeHref, "https://witanime.site/anime/fresh-show");
+  assert.equal(
+    parseWitHomeEpisodes('<a href="https://witanime.site/watch/legacy/1"><h3>Legacy</h3></a>').length,
+    1,
+  );
 
   // See-all de-dupe: one anime from two sources (different animeHrefs) must
   // collapse to a single card; titles normalize ("Liar Game" vs "LIAR GAME").

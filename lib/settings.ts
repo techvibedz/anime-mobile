@@ -8,6 +8,7 @@ const KEYS = {
   notificationsEnabled: "@settings_notifications_enabled",
   autoplayNext: "@settings_autoplay_next",
   notificationScope: "@settings_notification_scope",
+  autoSkipIntro: "@settings_auto_skip_intro",
 } as const;
 
 /** Which anime trigger new-episode notifications. */
@@ -36,6 +37,10 @@ export const setNotificationsEnabled = (v: boolean) => setBool(KEYS.notification
 /** Autoplay the next episode when the current one ends (default on). */
 export const getAutoplayNext = () => getBool(KEYS.autoplayNext, true);
 export const setAutoplayNext = (v: boolean) => setBool(KEYS.autoplayNext, v);
+
+/** Automatically skip intro & outro during playback (default off). */
+export const getAutoSkipIntro = () => getBool(KEYS.autoSkipIntro, false);
+export const setAutoSkipIntro = (v: boolean) => setBool(KEYS.autoSkipIntro, v);
 
 /**
  * Notification scope (default "all"): notify for every new episode across all
@@ -78,6 +83,7 @@ export async function clearContentCache(): Promise<number> {
       "@xsource_v1",
       "@anime_airing_v1:",
       "@anime_airing_v2:",
+      "@aniskip_v1:",
     ];
     const toRemove = keys.filter((k) => cachePrefixes.some((p) => k.startsWith(p)));
     if (toRemove.length) await AsyncStorage.multiRemove(toRemove);

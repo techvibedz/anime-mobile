@@ -117,6 +117,12 @@ export function _consumeCancelled(id: string): boolean {
 }
 
 export async function enqueue(job: Omit<ScrapeJob, "id" | "urls">): Promise<any> {
+  // A priority job is user-initiated (opening an episode / tapping a server).
+  // Free the in-flight background slots it would otherwise wait behind — the
+  // host only reserves one slot, so 3 long background scrapes could still delay
+  // playback by their full timeouts. Background callers already treat rejection
+  // as a soft miss.
+  if (job.priority) _cancelBackground();
   const id = `s${++_seq}`;
   const urls = await getSourceCandidates(job.url);
   return new Promise((resolve, reject) => {

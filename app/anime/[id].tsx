@@ -10,7 +10,6 @@ import {
   I18nManager,
   ActivityIndicator,
   RefreshControl,
-  InteractionManager,
   Share,
   Animated,
   Easing,
@@ -22,18 +21,18 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, findAnime3rbAnimeUrl, findWitanimeAnimeUrl, findAnime4upAnimeUrl, fetchWitanimeSections, searchAnime } from "../../lib/api";
-import type { AnimeDetail, Episode, RelatedAnimeCard, SearchResult } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, findAnime3rbAnimeUrl, findWitanimeAnimeUrl, findAnime4upAnimeUrl, fetchWitanimeSections } from "../../lib/api";
+import type { AnimeDetail, Episode, RelatedAnimeCard } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
 import { fetchSeriesFinished } from "../../lib/airing";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
-import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, getAltTitles, peekMalRating } from "../../lib/animeInfo";
+import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, peekMalRating } from "../../lib/animeInfo";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
-import { normLatin, seasonNum, formatCat } from "../../lib/relations";
 import { MalBadge, MalCardBadge } from "../../components/MalRating";
+import { AniListPosterCard } from "../../components/AniListPosterCard";
 import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
 import { GlassFill } from "../../components/GlassFill";
@@ -46,7 +45,7 @@ import { posterUrl } from "../../lib/img";
 import { t } from "../../lib/i18n";
 import { Rise } from "../../components/Rise";
 import { useReducedMotion } from "../../lib/motion";
-import { useSidebar } from "../../components/Sidebar";
+import { useSidebarActions } from "../../components/Sidebar";
 import { shouldShowSynopsis, synopsisForDisplay } from "../../lib/animeDetail";
 
 // Core React Native bundles a Clipboard native module (no extra dependency), so
@@ -62,10 +61,16 @@ const EP_CARD_WIDTH = (SW - PAD * 2 - 10) / 2;
 
 type TabKey = "episodes" | "related" | "maylike" | "info";
 
+// A Related-tab card: Witanime's own rail (exact href — opens directly) or an
+// AniList relation (no source link — resolved by title search on tap).
+type RelatedTabItem =
+  | { source: "wit"; card: RelatedAnimeCard }
+  | { source: "anilist"; entry: RelatedAnimeEntry };
+
 export default function AnimeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
-  const { openSidebar } = useSidebar();
+  const { openSidebar } = useSidebarActions();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<AnimeDetail | null>(null);
   const [episodes4up, setEpisodes4up] = useState<Episode[]>([]);
@@ -79,11 +84,18 @@ export default function AnimeDetailScreen() {
   // Completed-episode index (across all anime). Carries both per-href matches
   // (same source) and per-anime episode-number matches (cross source), so a
   // "watched" badge shows regardless of which source the episode was played in.
-  const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map() });
+  const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map(), knownTitles: new Set() });
+  // True once the first getCompletedSets() has resolved. The completion-record
+  // effect below must wait for it — running against the initial EMPTY set wrote
+  // caughtUp:false over a good record whenever the episode payload landed first.
+  const [setsLoaded, setSetsLoaded] = useState(false);
   const [malScore, setMalScore] = useState<number | null>(null);
-  // Related anime (sequels, prequels, side stories, spin-offs) from AniList —
-  // the source sites carry no related graph, so these are resolved by title.
-  const [relations, setRelations] = useState<RelatedAnimeEntry[]>([]);
+  // Related anime. First choice is the Witanime anime page's own "ذات صلة"
+  // rail (exact links, no title guessing — direct when this page IS Witanime,
+  // else the page is resolved by title). Only when that rail is empty do we
+  // fall back to the AniList relation graph, whose cards are resolved back to a
+  // source page by title search on tap.
+  const [relations, setRelations] = useState<RelatedTabItem[]>([]);
   const [relationsLoading, setRelationsLoading] = useState(true);
   // "You may like" — the Witanime anime page's own قد يعجبك أيضًا rail. The
   // anime page is resolved by title (season-aware, ambiguity-rejecting) when
@@ -175,32 +187,31 @@ export default function AnimeDetailScreen() {
     return () => { cancelled = true; };
   }, [data?.title]);
 
-  // Resolve related anime (other seasons, side stories, spin-offs) once the
-  // title is known. Runs after the UI is showing, so it never blocks render;
-  // the Related tab appears the moment AniList answers.
+  // Related + "you may like": one static GET of the Witanime anime page (that
+  // page itself when opened from Witanime, else resolved by a season-aware
+  // title match) yields both rails. Related shows the site's own "ذات صلة"
+  // cards — direct links, no guessing. Only when that rail is empty do we fall
+  // back to the AniList relation graph. Runs after the UI is showing.
   useEffect(() => {
     if (!data?.title) return;
     let cancelled = false;
     setRelationsLoading(true);
-    fetchAnimeRelations(data.title, animeHref).then((r) => {
-      if (!cancelled) setRelations(r);
-    }).finally(() => {
-      if (!cancelled) setRelationsLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [data?.title, animeHref]);
-
-  // Resolve the Witanime "قد يعجبك أيضًا" rail for the may-like tab. One static
-  // GET once the anime page is resolved; runs after the UI is showing.
-  useEffect(() => {
-    if (!data?.title) return;
-    let cancelled = false;
     setMayLikeLoading(true);
-    fetchWitanimeSections(animeHref, data.title).then((sections) => {
-      if (!cancelled) setMayLike(sections.mayLike);
-    }).finally(() => {
-      if (!cancelled) setMayLikeLoading(false);
-    });
+    (async () => {
+      const sections = await fetchWitanimeSections(animeHref, data.title).catch(() => null);
+      if (cancelled) return;
+      setMayLike(sections?.mayLike ?? []);
+      setMayLikeLoading(false);
+      if (sections?.related?.length) {
+        setRelations(sections.related.map((card) => ({ source: "wit" as const, card })));
+        setRelationsLoading(false);
+        return;
+      }
+      const entries = await fetchAnimeRelations(data.title, animeHref).catch(() => []);
+      if (cancelled) return;
+      setRelations(entries.map((entry) => ({ source: "anilist" as const, entry })));
+      setRelationsLoading(false);
+    })();
     return () => { cancelled = true; };
   }, [data?.title, animeHref]);
 
@@ -221,7 +232,7 @@ export default function AnimeDetailScreen() {
 
   // Refresh watched flags when the screen regains focus (e.g. after watching).
   useFocusEffect(useCallback(() => {
-    getCompletedSets().then(setCompleted);
+    getCompletedSets().then((s) => { setCompleted(s); setSetsLoaded(true); });
   }, []));
 
   // The two cross-source lists (anime4up + anime3rb) are resolved by TITLE, so a
@@ -261,11 +272,9 @@ export default function AnimeDetailScreen() {
   }, [data, trusted, completed]);
 
   useEffect(() => {
-    if (!data || !animeHref || maxNum === 0) return;
-    let cancelled = false;
+    if (!data || !animeHref || maxNum === 0 || !setsLoaded) return;
     (async () => {
       const finished = caughtUp ? await fetchSeriesFinished(data.title, maxNum) : false;
-      if (cancelled) return;
       // Record EVERY known source href + title so a card from any source rail
       // (e.g. the anime4up-sourced "this season" rail) resolves the badge — not
       // just the URL the anime happened to be opened under. Any source whose URL
@@ -281,7 +290,9 @@ export default function AnimeDetailScreen() {
       if (!has(/anime3rb\.com/i))
         resolvers.push(findAnime3rbAnimeUrl(data.title).then((u) => { if (u) hrefs.push(u); }));
       await Promise.all(resolvers);
-      if (cancelled) return;
+      // Deliberately NOT cancelled on unmount: backing out mid-resolve used to
+      // drop the write entirely, so a finale watched then left immediately never
+      // produced the badge. The write is idempotent and merge-safe.
       await recordAnimeCompletion({
         hrefs,
         titles: [data.title],
@@ -290,8 +301,7 @@ export default function AnimeDetailScreen() {
         finished,
       }).catch(() => {});
     })();
-    return () => { cancelled = true; };
-  }, [data?.title, animeHref, merged?.anime4up, maxNum, caughtUp]);
+  }, [data?.title, animeHref, merged?.anime4up, maxNum, caughtUp, setsLoaded]);
 
   const handleToggleWatched = useCallback(async (ep: GridEpisode) => {
     // Use whichever source href exists so source-only episodes (no witanime
@@ -907,7 +917,7 @@ function EpisodesTab({
   );
 
   // Reset to the cheap first batch when the sort flips so the user sees the top
-  // of the NEW order instantly; the expansion effect below re-fills the page.
+  // of the NEW order instantly.
   useEffect(() => {
     episodeOffsetsRef.current.clear();
     pendingJumpEpisodeRef.current = null;
@@ -915,17 +925,10 @@ function EpisodesTab({
     setVisibleCount(FIRST);
   }, [sortDesc]);
 
-  // Expand from the cheap first batch to the full page once the screen
-  // transition + first paint have settled — so the heavy 80-card build runs
-  // off the critical path and never blocks the navigation animation or taps.
-  // Re-runs when the merged list grows (enrichment sources land after the UI
-  // is already showing). startTransition keeps the expansion interruptible.
-  useEffect(() => {
-    const task = InteractionManager.runAfterInteractions(() => {
-      startTransition(() => setVisibleCount((n) => Math.max(n, PAGE)));
-    });
-    return () => task.cancel();
-  }, [mergedEps.length]);
+  // NOTE: an earlier effect auto-expanded to PAGE (80 cards) after interactions.
+  // That mounted ~1,000 views inside a plain ScrollView on every detail open —
+  // the largest render cost on the screen — while the user only ever sees ~6
+  // cards. The grid now stays at FIRST until "show more" is tapped.
 
   const visible = sorted.slice(0, visibleCount);
   const hasMore = visibleCount < sorted.length;
@@ -1228,199 +1231,15 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
 
 /* ── Tab: Related (AniList) ─────────────────── */
 
-// Score how well a search result's title matches the wanted related title.
-// Latin-folded equality/containment first, then token overlap, with a
-// season match bonus / mismatch penalty so "Season 2" doesn't latch onto
-// Season 1. Mirrors the scorer in lib/relations but for plain result titles.
-//
-// The season penalty is HARSHER here than in lib/relations: resolving a card to
-// a source page is the step that opens the actual wrong anime, so a "Season N"
-// card must not settle for the base series when the site simply doesn't carry
-// that season — better to report "not found" than open Season 1.
-function scoreRelatedMatch(want: string, got: string): number {
-  const w = normLatin(want);
-  const g = normLatin(got);
-  if (!w || !g) return 0;
-  let s: number;
-  if (g === w) s = 100;
-  else if (g.startsWith(w) || w.startsWith(g)) s = 82;
-  else if (g.includes(w) || w.includes(g)) s = 70;
-  else {
-    const wt = w.split(" ").filter((x) => x.length > 1);
-    const gt = new Set(g.split(" ").filter((x) => x.length > 1));
-    let shared = 0;
-    for (const x of wt) if (gt.has(x)) shared++;
-    s = wt.length ? Math.round((shared / wt.length) * 64) : 0;
-  }
-  const ws = seasonNum(want);
-  const gs = relatedSeasonNum(got, ws);
-  if (ws > 0 && gs > 0) s += ws === gs ? 10 : -25;
-  else if (ws > 0 && gs === 0) s -= 14;
-  return s;
-}
+// Card resolution (title → source page) lives in components/AniListPosterCard,
+// shared with the home "مقترح لك" rail; its pure scoring is in lib/relations.
 
-function stripRelatedSeasonNoise(latin: string): string {
-  return latin
-    .replace(/\b([0-9]+)(?:st|nd|rd|th)\s+season\b/g, " ")
-    .replace(/\b(season|part|cour)\s*[0-9]*\b/g, " ")
-    .replace(/\bs[0-9]+\b/g, " ")
-    .replace(/\b(first|second|third|fourth|fifth|sixth)\s+season\b/g, " ")
-    .replace(/\b(i|ii|iii|iv|v|vi)\s*$/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function relatedSeasonNum(title: string, expectedSeason = 0): number {
-  const explicit = seasonNum(title);
-  if (explicit > 0) return explicit;
-  if (expectedSeason <= 0) return 0;
-  const trailing = normLatin(title).match(/\b([2-9][0-9]?)$/);
-  return trailing ? parseInt(trailing[1], 10) : 0;
-}
-
-function relatedNumberedSeasonVariants(title: string): string[] {
-  const season = seasonNum(title);
-  if (season <= 0) return [];
-  const base = stripRelatedSeasonNoise(normLatin(title));
-  return base ? [`${base} ${season}`, `${base} Season ${season}`] : [];
-}
-
-// Best title-match score for a result against EVERY name the related entry is
-// known by (AniList romaji + English). The source sites index an anime under
-// only one language, so a romaji-only score misses results listed in English.
-type RelatedLookupEntry = RelatedAnimeEntry & { lookupTitles?: string[] };
-
-function relatedLookupTitles(entry: RelatedLookupEntry): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const add = (title: string | null | undefined) => {
-    const v = (title || "").trim();
-    const k = v.toLowerCase();
-    if (v && !seen.has(k)) { seen.add(k); out.push(v); }
-  };
-  add(entry.title);
-  add(entry.titleEnglish);
-  for (const title of entry.lookupTitles || []) add(title);
-  for (const title of out.slice()) {
-    for (const variant of relatedNumberedSeasonVariants(title)) add(variant);
-  }
-  return out;
-}
-
-function bestRelatedLookupMatch(entry: RelatedLookupEntry, gotTitle: string): number {
-  let best = 0;
-  for (const title of relatedLookupTitles(entry)) {
-    best = Math.max(best, scoreRelatedMatch(title, gotTitle));
-  }
-  return best;
-}
-
-// Minimum title-match confidence before a tapped related card is allowed to
-// open a source page. Below this we report "not found" rather than risk opening
-// a different anime. 60 clears strong containment / near-full token overlap but
-// rejects a single-word coincidence and a season-mismatched base series.
-const MIN_RELATED_TITLE_SCORE = 60;
-
-function RelatedTab({ items, loading }: { items: RelatedAnimeEntry[]; loading: boolean }) {
+// Cards from the Witanime rail link straight to their anime page. AniList
+// relations only know the name — tapping one resolves the title to a playable
+// source URL via the same cross-source search the search screen uses, then
+// opens its detail page. A per-card spinner shows while that lookup runs.
+function RelatedTab({ items, loading }: { items: RelatedTabItem[]; loading: boolean }) {
   const cards = useCardLayout("related");
-  // AniList knows the related anime by name only — the source sites don't link
-  // them — so tapping a card resolves the title to a playable source URL via
-  // the same cross-source search the search screen uses, then opens its detail
-  // page. A per-card spinner shows while that lookup runs.
-  const [resolvingId, setResolvingId] = useState<number | null>(null);
-  const [notFoundId, setNotFoundId] = useState<number | null>(null);
-
-  const openRelated = useCallback(async (entry: RelatedAnimeEntry) => {
-    if (resolvingId != null) return;
-    setResolvingId(entry.anilistId);
-    setNotFoundId(null);
-
-    // Score a result against the related card: title similarity (season-aware,
-    // either language) that MUST clear MIN_RELATED_TITLE_SCORE, biased hard by
-    // format so a 1-episode OVA card doesn't resolve to the 12-episode series.
-    // `strong` = safe to open from a still-incomplete (partial) pool: a near-exact
-    // title (≥82) with a compatible format. Anything weaker waits for the full
-    // pool so a better candidate can still win.
-    const wantFmt = formatCat(entry.format);
-    const scoreOf = (r: SearchResult, lookupEntry: RelatedLookupEntry = entry): { sc: number; strong: boolean } | null => {
-      const titleScore = bestRelatedLookupMatch(lookupEntry, r.title);
-      if (titleScore < MIN_RELATED_TITLE_SCORE) return null; // too weak — skip
-      const wantedSeason = Math.max(...relatedLookupTitles(lookupEntry).map((title) => seasonNum(title)), 0);
-      if (wantedSeason > 1) {
-        const gotSeason = relatedSeasonNum(r.title, wantedSeason);
-        // Never open the unnumbered/base page for an explicit later-season card.
-        if (gotSeason !== wantedSeason) return null;
-      }
-      let sc = titleScore;
-      let fmtOk = true;
-      if (wantFmt) {
-        const gotFmt = formatCat(r.type) || formatCat(r.title);
-        if (gotFmt) { sc += gotFmt === wantFmt ? 45 : -45; fmtOk = gotFmt === wantFmt; }
-        else { if (wantFmt !== "tv") sc -= 15; fmtOk = wantFmt === "tv"; } // unmarked ≈ series
-      }
-      return { sc, strong: titleScore >= 82 && fmtOk };
-    };
-
-    // Search the source sites by BOTH names AniList knows (romaji + English) — a
-    // site may index an anime under only one language. Run the queries in PARALLEL
-    // and navigate the INSTANT a streamed partial yields a strong match, instead
-    // of awaiting every source of every query serially (which cost ~30s worst
-    // case). `navigated` doubles as the abort flag: still-running search jobs on
-    // the serial bus just get their late partials ignored.
-    const seen = new Set<string>();
-    const pooled: SearchResult[] = [];
-    let navigated = false;
-    const go = (href: string) => {
-      if (navigated) return;
-      navigated = true;
-      router.push(`/anime/${encodeURIComponent(href)}`);
-    };
-    const consider = (results: SearchResult[], lookupEntry: RelatedLookupEntry = entry) => {
-      if (navigated) return;
-      for (const r of results) {
-        if (r?.href && !seen.has(r.href)) { seen.add(r.href); pooled.push(r); }
-      }
-      for (const r of pooled) {
-        if (scoreOf(r, lookupEntry)?.strong) { go(r.href); return; }
-      }
-    };
-
-    try {
-      const altTitleSets = await Promise.all(
-        [entry.title, entry.titleEnglish]
-          .filter((q): q is string => !!q && q.trim().length > 0)
-          .map((q) => getAltTitles(q).catch(() => [])),
-      );
-      const altTitles = altTitleSets.flat();
-      const lookupEntry: RelatedLookupEntry = { ...entry, lookupTitles: altTitles };
-      const queries = relatedLookupTitles(lookupEntry)
-        .filter((q): q is string => !!q && q.trim().length > 0)
-        .filter((q, i, a) => a.findIndex((x) => x.toLowerCase() === q.toLowerCase()) === i);
-      await Promise.all(queries.map((q) =>
-        searchAnime(q, (results) => consider(results, lookupEntry)).then((res) => consider(res.data.results, lookupEntry)).catch(() => {}),
-      ));
-      if (navigated) return;
-
-      // No strong early hit — pick the best of the full pool.
-      let hit: SearchResult | undefined;
-      let best = -Infinity;
-      for (const r of pooled) {
-        const s = scoreOf(r, lookupEntry);
-        if (s && s.sc > best) { best = s.sc; hit = r; }
-      }
-      if (hit?.href) {
-        go(hit.href);
-      } else {
-        setNotFoundId(entry.anilistId);
-        setTimeout(() => setNotFoundId((id) => (id === entry.anilistId ? null : id)), 2500);
-      }
-    } catch {
-      setNotFoundId(entry.anilistId);
-      setTimeout(() => setNotFoundId((id) => (id === entry.anilistId ? null : id)), 2500);
-    } finally {
-      setResolvingId(null);
-    }
-  }, [resolvingId]);
 
   if (loading) {
     return (
@@ -1446,38 +1265,40 @@ function RelatedTab({ items, loading }: { items: RelatedAnimeEntry[]; loading: b
       </View>
       <View style={ss.relatedGrid}>
       {items.map((item) => {
-        const resolving = resolvingId === item.anilistId;
-        const notFound = notFoundId === item.anilistId;
+        if (item.source === "wit") {
+          const card = item.card;
+          return (
+            <PosterCard
+              key={card.href}
+              image={card.image}
+              title={card.title}
+              subtitle={card.type || undefined}
+              onPress={() => router.push(`/anime/${encodeURIComponent(card.href)}`)}
+              width={cards.cardWidth}
+              layout={cards.layout}
+              recyclingKey={card.href}
+              titleLines={2}
+              topRight={<MalCardBadge title={card.title} style={INLINE_POSTER_BADGE} />}
+              footer={card.mark ? (
+                <View style={[ss.relationBadge, cards.layout === "list" && { position: "relative", bottom: 0, marginTop: 8, borderRadius: R.sm }]}>
+                  <Text style={ss.relationBadgeText} numberOfLines={1}>{card.mark}</Text>
+                </View>
+              ) : undefined}
+            />
+          );
+        }
+        const entry = item.entry;
         return (
-          <PosterCard
-            key={item.anilistId}
-            image={item.image}
-            title={item.title}
-            subtitle={item.format || undefined}
-            onPress={() => openRelated(item)}
+          <AniListPosterCard
+            key={entry.anilistId}
+            entry={entry}
             width={cards.cardWidth}
             layout={cards.layout}
-            recyclingKey={String(item.anilistId)}
-            titleLines={2}
-            topRight={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
+            topRight={<MalCardBadge title={entry.title} style={INLINE_POSTER_BADGE} />}
             footer={
               <View style={[ss.relationBadge, cards.layout === "list" && { position: "relative", bottom: 0, marginTop: 8, borderRadius: R.sm }]}>
-                <Text style={ss.relationBadgeText} numberOfLines={1}>{item.relation}</Text>
+                <Text style={ss.relationBadgeText} numberOfLines={1}>{entry.relation}</Text>
               </View>
-            }
-            centerOverlay={
-              (resolving || notFound) ? (
-                <View style={ss.relatedOverlay}>
-                  {resolving ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <Ionicons name="search-outline" size={18} color="#fff" />
-                      <Text style={ss.relatedOverlayText}>{t.notFound}</Text>
-                    </>
-                  )}
-                </View>
-              ) : null
             }
           />
         );
@@ -1873,14 +1694,9 @@ const ss = StyleSheet.create({
   },
   relationBadgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "800",
-    fontFamily: "Cairo_700Bold", writingDirection: "rtl",
+      fontFamily: "Cairo_700Bold", writingDirection: "rtl",
   },
-  relatedOverlay: {
-    ...ABSOLUTE_FILL,
-    backgroundColor: "rgba(10,10,11,0.72)",
-    alignItems: "center", justifyContent: "center", gap: 6,
-  },
-  relatedOverlayText: { color: "#fff", fontSize: 10, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+
 
   // Info
   infoRow: { flexDirection: "row-reverse", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.borderSoft },

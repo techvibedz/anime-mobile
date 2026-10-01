@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -47,23 +47,41 @@ interface SidebarCtx {
   openSidebar: () => void;
   closeSidebar: () => void;
 }
-const Ctx = createContext<SidebarCtx | undefined>(undefined);
+interface SidebarActions {
+  openSidebar: () => void;
+  closeSidebar: () => void;
+}
+// Split contexts: the action object is stable, the open flag is not. Screens
+// that only need openSidebar (every screen with a header) used to re-render
+// their whole tree every time the sidebar opened/closed because the combined
+// context value changed.
+const ActionsCtx = createContext<SidebarActions | undefined>(undefined);
+const OpenCtx = createContext(false);
 
-export function useSidebar(): SidebarCtx {
-  const c = useContext(Ctx);
+export function useSidebarActions(): SidebarActions {
+  const c = useContext(ActionsCtx);
   if (!c) throw new Error("useSidebar must be used within SidebarProvider");
   return c;
+}
+
+export function useSidebar(): SidebarCtx {
+  const actions = useSidebarActions();
+  const open = useContext(OpenCtx);
+  return { open, ...actions };
 }
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const openSidebar = useCallback(() => setOpen(true), []);
   const closeSidebar = useCallback(() => setOpen(false), []);
+  const actions = useMemo(() => ({ openSidebar, closeSidebar }), [openSidebar, closeSidebar]);
   return (
-    <Ctx.Provider value={{ open, openSidebar, closeSidebar }}>
-      {children}
-      <Sidebar />
-    </Ctx.Provider>
+    <ActionsCtx.Provider value={actions}>
+      <OpenCtx.Provider value={open}>
+        {children}
+        <Sidebar />
+      </OpenCtx.Provider>
+    </ActionsCtx.Provider>
   );
 }
 

@@ -6,7 +6,7 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
-import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, looksLikeCfChallenge, parseAnime4upEpisodeTitles, parseAnime4upRecentHtml, parseAnime4upStreamUrl, parseAnime4upSubtitles, parseUp4Episodes, parseUp4Servers, parseWitAnimeSections, pickHighestHlsVariant, pickMediaUrl } from "./direct";
+import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, looksLikeCfChallenge, parseA3rbGenres, parseA3rbSynopsis, parseAnime4upEpisodeTitles, parseAnime4upRecentHtml, parseAnime4upStreamUrl, parseAnime4upSubtitles, parseUp4Episodes, parseUp4Servers, parseWitAnimeSections, pickHighestHlsVariant, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
 function test(name: string, fn: () => void) {
@@ -190,14 +190,14 @@ test("a real Cloudflare interstitial is still detected", () => {
   assert.equal(looksLikeCfChallenge(`<span data-translate="checking_browser">Checking your browser</span>`), true);
 });
 
-test("Witanime anime page splits مقترحة and قد يعجبك أيضًا rails", () => {
+test("Witanime anime page splits ذات صلة and قد يعجبك أيضًا rails", () => {
   const card = (href: string, title: string, type: string) => `<a href="${href}" class="group block w-full cursor-pointer">
     <img src="https://images.witanime.site/posters/${title.replace(/\s+/g, "-")}.jpg" alt="${title}">
     <div class="absolute start-2 top-2 rounded-md bg-white px-2 py-1 text-xs font-bold text-black">${type}</div>
     <h3 dir="ltr" class="truncate font-semibold text-white">${title}</h3>
   </a>`;
   const html = `<section>
-      <h2 class="text-2xl font-bold text-white">مقترحة</h2>
+      <h2 class="text-2xl font-bold text-white">ذات صلة</h2>
       ${card("https://witanime.site/anime/kimetsu-no-yaiba-yuukaku-hen", "Kimetsu no Yaiba Yuukaku-hen", "TV")}
     </section>
     <section>
@@ -208,6 +208,28 @@ test("Witanime anime page splits مقترحة and قد يعجبك أيضًا rai
   assert.deepEqual(sections.related.map((c) => c.title), ["Kimetsu no Yaiba Yuukaku-hen"]);
   assert.deepEqual(sections.mayLike.map((c) => c.title), ["Strike the Blood"]);
   assert.equal(sections.mayLike[0].type, "OVA");
+});
+
+test("Witanime current-layout top-3 badge is captured, score badge ignored", () => {
+  const html = `<section>
+      <h2 class="text-2xl font-bold text-white">ذات صلة</h2>
+      <a href="https://witanime.site/movie/bleach-movie-1" class="group block w-full cursor-pointer">
+        <img src="https://images.witanime.site/posters/bleach-movie-1.jpg" alt="Bleach Movie 1">
+        <div class="absolute start-3 top-3 h-6 rounded-md bg-white px-2 text-xs font-bold leading-6 text-black">فيلم</div>
+        <div class="absolute end-3 top-3 flex h-6 items-center rounded-md bg-black/70 px-2 text-xs font-bold text-white backdrop-blur-sm"><span>7.6</span></div>
+        <h3 dir="ltr" class="mb-1 line-clamp-1 text-lg font-medium text-white">Bleach Movie 1: Memories of Nobody</h3>
+      </a>
+    </section>`;
+  const sections = parseWitAnimeSections(html);
+  assert.equal(sections.related[0].type, "فيلم");
+});
+
+test("legacy مقترحة heading still parses as the related rail", () => {
+  const html = `<section>
+      <h2>مقترحة</h2>
+      <a href="https://witanime.site/anime/bleach"><img src="https://images.witanime.site/posters/bleach.jpg" alt="Bleach"><h3>Bleach</h3></a>
+    </section>`;
+  assert.deepEqual(parseWitAnimeSections(html).related.map((c) => c.title), ["Bleach"]);
 });
 
 test("Witanime sections are empty when the page has no rails", () => {
@@ -247,6 +269,62 @@ test("current Anime4up anime page ignores stylesheet selectors and finds episode
       <a href="https://w1.anime4up.rest/episode/one-piece-%D8%A7%D9%84%D8%AD%D9%84%D9%82%D8%A9-1129/" class="overlay"></a>
     </div>`);
   assert.deepEqual(episodes.map((episode) => episode.number), [1129]);
+});
+
+test("anime3rb story scope stops at the story div, not a char cap (Kashin-tan regression)", () => {
+  // Captured live: the page had NEITHER toggle marker ("x-show=summary" /
+  // "summary = ! summary"), so the old +8000-char fallback swept the short
+  // re-telling and other description-like blocks in after the real story — the
+  // detail page showed "the description repeated in a different format".
+  // Card meta paragraphs (rating / episode count / season+year) must also stop
+  // the parse: the grid runs in groups and the paragraphs after a card meta
+  // are its per-season re-descriptions.
+  const page = `<div x-data="{summary: false}">
+  <div class="py-4 flex flex-col gap-2" x-show="! summary">
+    <p class="sm:text-[1.04rem] leading-loose text-justify">الجزء الختامي من «بليتش: حرب الألف عام».</p>
+    <p class="sm:text-[1.04rem] leading-loose text-justify">يُحطّم ملك الكوينسي حرسه الملكي، ثم يبدأ البطل معركته الأخيرة لحماية العوالم الثلاثة، وتبدأ التشوهات بالظهور في كل مكان.</p>
+    <p class="sm:text-[1.04rem] leading-loose text-justify">كوميدي ربيع 2016 التقييم 6.92 11 حلقات.</p>
+    <p class="sm:text-[1.04rem] leading-loose text-justify">وصف موسمي مكرر يجب ألا يظهر إطلاقاً في صفحة التفاصيل.</p>
+  </div>
+  <div class="flex flex-col gap-3 rounded-lg"><label>أسماء أخرى :</label><h2>Bleach: Thousand-Year Blood War</h2></div>
+  <div class="py-4" x-show="summary"><p class="sm:text-[1.04rem] leading-loose text-justify">يتابع الموسم الأخير معركة إيتشيغو الأخيرة ضد يهواتش لحماية العوالم من الانهيار الكامل.</p></div>
+  <p class="sm:text-[1.04rem] leading-loose text-justify">الموسم الثاني من بليتش تدور أحداثه بعد مرور عام على الأحداث السابقة.</p>
+</div>`;
+  const story = parseA3rbSynopsis(page);
+  assert.equal(story.includes("الجزء الختامي"), true);
+  assert.equal(story.includes("يُحطّم ملك الكوينسي"), true);
+  assert.equal(story.includes("وصف موسمي مكرر"), false);
+  assert.equal(story.includes("يتابع الموسم الأخير"), false);
+  assert.equal(story.includes("الموسم الثاني"), false);
+  assert.equal(parseA3rbSynopsis("<html><body>no story block</body></html>"), "");
+});
+
+test("anime3rb genres stay scoped to the anime, not the related-works cards (Re:Zero regression)", () => {
+  // Captured live: the anime page's own genres use /genre/ links with short
+  // Arabic labels; the "اعمال ذات صلة" carousel cards reuse the SAME markup
+  // inside an <a> that wraps the season/rating/episode badges AND the card's
+  // synopsis paragraph. A page-wide genre match captured the whole card
+  // ("كوميدي ربيع 2016 التقييم 6.92 11 حلقات <full synopsis>") and the detail
+  // screen rendered those captures as genre chips — the user saw "the
+  // description repeated in another format" right below the real genres.
+  const card = `<li class="glide__slide">
+      <a href="/titles/rezero-kara-hajimeru-break-time" class="details">
+        <div class="genres"><span href="/genre/comedy">كوميدي</span></div>
+        <p class="flex flex-wrap gap-1"><span class="badge">ربيع 2016</span><span class="badge">التقييم 6.92</span><span class="badge">11 حلقات</span></p>
+        <p class="synopsis">ينتقل سوبارو ناتسوكي فجأة إلى عالم آخر مليء بالتوتر واليأس، لكنه يجد فيه فرصة للراحة.</p>
+      </a>
+    </li>`;
+  const page = `
+    <div class="genres"><a href="/genre/thriller">تشويق</a><a href="/genre/isekai">إيسيكاي</a><a href="/genre/time-travel">سفر عبر الزمن</a></div>
+    <div class="py-4" x-show="! summary"><p class="leading-loose text-justify">القصة الحقيقية.</p></div>
+    <h3>اعمال ذات صلة (11)</h3>
+    <ul class="glide__slides titles-slider">${card}${card}</ul>`;
+  assert.deepEqual(parseA3rbGenres(page), ["تشويق", "إيسيكاي", "سفر عبر الزمن"]);
+
+  // No carousel marker at all (markup drift): the length/format guards must
+  // still reject a card-shaped capture.
+  const drifted = `<a href="/genre/action">أكشن</a><span href="/genre/comedy">كوميدي</span><p class="badge">ربيع 2016 التقييم 6.92 11 حلقات</p><p class="synopsis">قصة مكررة.</p></a>`;
+  assert.deepEqual(parseA3rbGenres(drifted), ["أكشن"]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

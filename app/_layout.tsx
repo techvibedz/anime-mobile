@@ -2,17 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit_800ExtraBold, Outfit_900Black } from "@expo-google-fonts/outfit";
-// Cairo is the Arabic UI font. Outfit (Latin-only) is kept ONLY for numerals and
-// the brand display (ranks, countdown digits, durations) — Latin glyphs that don't
-// have the Arabic measuring problem. All Arabic word labels use Cairo, because
-// Latin fonts under-measure Arabic glyphs and the text spilled out of tight rows
-// (e.g. filter pills overlapping their count badges).
-import { Cairo_500Medium, Cairo_600SemiBold, Cairo_700Bold } from "@expo-google-fonts/cairo";
-import { DMSans_400Regular, DMSans_500Medium, DMSans_600SemiBold, DMSans_700Bold } from "@expo-google-fonts/dm-sans";
-import { View, ActivityIndicator, I18nManager, InteractionManager, AppState } from "react-native";
+// Fonts are embedded NATIVELY via the expo-font config plugin (app.json) —
+// Android resolves `fontFamily: "Cairo_600SemiBold"` straight from
+// assets/fonts/Cairo_600SemiBold.ttf. No JS font loading, no first-paint gate,
+// and the 12 ttf files are no longer duplicated into the JS bundle.
+// (Cairo is the Arabic UI font; Outfit/DMSans cover numerals and Latin text.)
+import { View, ActivityIndicator, I18nManager, AppState } from "react-native";
 import * as Updates from "expo-updates";
 import * as SplashScreen from "expo-splash-screen";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { C } from "../lib/theme";
 
 // Keep the native splash screen up until our fonts are ready. Without this the
@@ -57,6 +55,7 @@ import { startUsageSession, endUsageSession } from "../lib/usage";
 import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
 import { syncDownloads } from "../lib/downloads";
+import { takePendingInvite } from "../lib/partyInvite";
 import "../global.css";
 
 function AuthGate() {
@@ -74,17 +73,35 @@ function AuthGate() {
     if (!user && !inAuth && !inDebug && !inCallback) {
       router.replace("/(auth)/welcome");
     } else if (user && inAuth) {
-      router.replace("/(tabs)");
+      // A watch-party invite that arrived while signed out was stashed by the
+      // watch-party screen; after sign-in, head back into the party instead of
+      // the home tabs.
+      void takePendingInvite().then((code) => {
+        router.replace(code ? { pathname: "/watch-party", params: { code } } : "/(tabs)");
+      });
     }
   }, [user, ready, isConfigured, segments, router]);
 
-  // Hydrate cloud data once on sign-in
+  // Hydrate cloud data once on sign-in — and at most every few minutes per
+  // user. This used to re-pull three full tables on every relaunch, so opening
+  // the app twice in a row paid three network round-trips + three full local
+  // read-modify-writes before the synced data settled.
   useEffect(() => {
-    if (user) {
+    if (!user) return;
+    let cancelled = false;
+    const key = `@cloud_pull_at:${user.id}`;
+    (async () => {
+      try {
+        const last = Number(await AsyncStorage.getItem(key)) || 0;
+        if (Date.now() - last < 5 * 60 * 1000) return;
+        await AsyncStorage.setItem(key, String(Date.now()));
+      } catch {}
+      if (cancelled) return;
       pullFavoritesFromCloud().catch(() => {});
       // History emits the final badge refresh after cloud completion has settled.
       pullCompletionFromCloud().catch(() => {}).then(() => pullHistoryFromCloud()).catch(() => {});
-    }
+    })();
+    return () => { cancelled = true; };
   }, [user?.id]);
 
   // Advertise this device as "online" via Supabase Realtime presence while a
@@ -137,16 +154,18 @@ function AuthGate() {
   useEffect(() => {
     if (!ready) return;
     // Notification channel setup + permission prompt aren't needed for the
-    // first frame — run them after the UI has settled so they don't compete
-    // with the home screen's initial render on slower devices.
-    const task = InteractionManager.runAfterInteractions(() => {
+    // first frame — defer with a plain timer so they don't compete with the
+    // home screen's initial render. (NOT InteractionManager.runAfterInteractions:
+    // the looping skeleton animations hold interaction handles and starve that
+    // callback — the same bug documented on the update check below.)
+    const timer = setTimeout(() => {
       (async () => {
         await setupNotifications();
         if (await getNotificationsEnabled()) {
           await requestNotificationPermission();
         }
       })().catch(() => {});
-    });
+    }, 2500);
 
     const sub = addNotificationTapListener((data) => {
       if (!data?.episodeHref) return;
@@ -172,7 +191,7 @@ function AuthGate() {
         router.push("/chat");
       }
     });
-    return () => { task.cancel(); sub.remove(); chatSub.remove(); };
+    return () => { clearTimeout(timer); sub.remove(); chatSub.remove(); };
   }, [ready]);
 
   useEffect(() => {
@@ -336,26 +355,12 @@ function AuthGate() {
 }
 
 export default function RootLayout() {
-  const [fontsLoaded] = useFonts({
-    Outfit_400Regular,
-    Outfit_600SemiBold,
-    Outfit_700Bold,
-    Outfit_800ExtraBold,
-    Outfit_900Black,
-    Cairo_500Medium,
-    Cairo_600SemiBold,
-    Cairo_700Bold,
-    DMSans_400Regular,
-    DMSans_500Medium,
-    DMSans_600SemiBold,
-    DMSans_700Bold,
-  });
-
-  // Kick off the ad SDK once the UI is interactive (no-op until ad IDs are
-  // configured). Deferring keeps it off the critical first-paint path.
+  // Kick off the ad SDK shortly after first paint (no-op until ad IDs are
+  // configured). A plain timer — see the notification effect above for why
+  // runAfterInteractions is unreliable while skeleton animations run.
   useEffect(() => {
-    const task = InteractionManager.runAfterInteractions(() => { initAds(); });
-    return () => task.cancel();
+    const timer = setTimeout(() => { initAds(); }, 3000);
+    return () => clearTimeout(timer);
   }, []);
 
   // Housekeeping: drop expired AsyncStorage cache entries so the (Android-
@@ -366,15 +371,11 @@ export default function RootLayout() {
     return () => clearTimeout(timer);
   }, []);
 
-  // Hand off from the native splash to the first real frame the moment fonts
-  // are ready — no spinner flash in between.
+  // Fonts are native now, so the very first JS frame is already fully styled —
+  // hand the splash off immediately (the root view paints in the same commit).
   useEffect(() => {
-    if (fontsLoaded) SplashScreen.hideAsync().catch(() => {});
-  }, [fontsLoaded]);
-
-  // Native splash is still covering the screen here, so render nothing rather
-  // than a spinner that the user would never actually see.
-  if (!fontsLoaded) return null;
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
 
   return (
     <SafeAreaProvider>

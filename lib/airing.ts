@@ -279,3 +279,148 @@ export async function fetchSeriesFinished(title: string, lastKnownEp?: number | 
   try { return await doFetchFinished(title, lastKnownEp); }
   catch { return false; }
 }
+
+/* ── Backfill filter for the "new episodes" feed ──────────────────
+ *
+ * anime4up's /episode/ archive (and its home widget) list whatever episode
+ * post was created last, so long-finished shows resurface as "new" whenever
+ * the site backfills them (e.g. Serial Experiments Lain (1998) — الحلقة 3).
+ * AniList is the only source that knows the real airing status, so drop
+ * recent items whose series is explicitly FINISHED and has no releasing
+ * season. Fail-open: an unresolved title or an AniList outage keeps the item
+ * rather than hiding a genuinely new episode. */
+
+/** Finished only when a trusted (exact/prefix) match exists, says FINISHED,
+ *  and no trusted match is still releasing (a later season under the same
+ *  base title must keep the episode). Untrusted candidates ⇒ false. */
+export function seriesIsFinished(candidates: any[], queries: string[]): boolean {
+  const ranked = rankedCandidates(candidates, queries);
+  if (ranked.some((c) => validAiring(c.nextAiringEpisode) || c.status === "RELEASING")) return false;
+  return ranked.some((c) => c.status === "FINISHED");
+}
+
+const BATCH_FIELDS =
+  "title { romaji english native } synonyms status episodes nextAiringEpisode { airingAt episode }";
+const BATCH_SIZE = 8;
+
+function batchQuery(count: number): string {
+  const vars = Array.from({ length: count }, (_, i) => `$s${i}: String`).join(", ");
+  const picks = Array.from(
+    { length: count },
+    (_, i) => `p${i}: Page(perPage: 5) { media(search: $s${i}, type: ANIME) { ${BATCH_FIELDS} } }`,
+  ).join(" ");
+  return `query (${vars}) { ${picks} }`;
+}
+
+// One POST resolves BATCH_SIZE titles at once (aliased Page lookups, so an
+// unknown title returns an empty media list instead of failing the request).
+async function searchTitlesBatch(words: string[]): Promise<any[][]> {
+  const out: any[][] = words.map(() => []);
+  const chunks: number[][] = [];
+  for (let i = 0; i < words.length; i += BATCH_SIZE) {
+    chunks.push(Array.from({ length: Math.min(BATCH_SIZE, words.length - i) }, (_, j) => i + j));
+  }
+  await Promise.all(
+    chunks.map(async (idxs) => {
+      const variables: Record<string, string> = {};
+      idxs.forEach((wordIdx, aliasIdx) => { variables[`s${aliasIdx}`] = words[wordIdx]; });
+      const res = await fetch(ANILIST_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ query: batchQuery(idxs.length), variables }),
+      });
+      if (!res.ok) return; // empty result ⇒ keep
+      const json = await res.json();
+      idxs.forEach((wordIdx, aliasIdx) => {
+        const media = json?.data?.[`p${aliasIdx}`]?.media;
+        if (Array.isArray(media)) out[wordIdx] = media;
+      });
+    }),
+  );
+  return out;
+}
+
+// v1: title → whether AniList says the series is finished.
+const FINISHED_CACHE_PREFIX = "@anime_finished_v1:";
+const FINISHED_TTL = 7 * 24 * 60 * 60 * 1000; // terminal until a new season entry appears
+const KEEP_TTL = 24 * 60 * 60 * 1000;         // releasing → re-check daily
+const finishedMem = new Map<string, boolean>();
+
+async function readFinishedCache(title: string): Promise<boolean | null> {
+  const key = norm(title);
+  if (!key) return null;
+  if (finishedMem.has(key)) return finishedMem.get(key)!;
+  try {
+    const raw = await AsyncStorage.getItem(FINISHED_CACHE_PREFIX + key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { finished?: boolean; ts?: number };
+    const ttl = parsed.finished ? FINISHED_TTL : KEEP_TTL;
+    if (typeof parsed.finished === "boolean" && typeof parsed.ts === "number" && Date.now() - parsed.ts < ttl) {
+      finishedMem.set(key, parsed.finished);
+      return parsed.finished;
+    }
+  } catch {}
+  return null;
+}
+
+function writeFinishedCache(title: string, finished: boolean) {
+  const key = norm(title);
+  if (!key) return;
+  finishedMem.set(key, finished);
+  AsyncStorage.setItem(FINISHED_CACHE_PREFIX + key, JSON.stringify({ finished, ts: Date.now() })).catch(() => {});
+}
+
+/** Keep only episodes that are not backfilled uploads of a finished series.
+ *  Never throws: every failure keeps the item. */
+export async function filterFinishedEpisodes<T extends { animeTitle?: string | null }>(
+  episodes: readonly T[],
+): Promise<T[]> {
+  const titles = [...new Set(episodes.map((e) => (e.animeTitle || "").trim()).filter(Boolean))].slice(0, 40);
+  if (titles.length === 0) return [...episodes];
+
+  const verdict = new Map<string, boolean>(); // norm(title) → finished?
+  const missing: string[] = [];
+  for (const title of titles) {
+    if (!norm(title)) { verdict.set(norm(title), false); continue; } // Arabic-only: AniList can't resolve
+    const cached = await readFinishedCache(title);
+    if (cached == null) missing.push(title);
+    else verdict.set(norm(title), cached);
+  }
+
+  if (missing.length) {
+    try {
+      // Wave 1 — the title as scraped. Wave 2 (base franchise name) only runs
+      // for titles whose raw search had no trusted match, e.g. arc-heavy names
+      // AniList doesn't index ("…: U-17 World Cup Kesshou Member Ketteisen").
+      const first = await searchTitlesBatch(missing);
+      const retry: string[] = [];
+      missing.forEach((title, i) => {
+        const candidates = first[i] || [];
+        const queries = [...new Set([norm(title), norm(baseTitle(title))].filter(Boolean))];
+        if (rankedCandidates(candidates, queries).length > 0) {
+          verdict.set(norm(title), seriesIsFinished(candidates, queries));
+        } else if (norm(baseTitle(title)) !== norm(title)) {
+          retry.push(title);
+        } else {
+          verdict.set(norm(title), false); // nothing trusted ⇒ keep
+        }
+      });
+      if (retry.length) {
+        const second = await searchTitlesBatch(retry.map((title) => baseTitle(title)));
+        retry.forEach((title, i) => {
+          const candidates = second[i] || [];
+          const queries = [...new Set([norm(title), norm(baseTitle(title))].filter(Boolean))];
+          verdict.set(
+            norm(title),
+            rankedCandidates(candidates, queries).length > 0 && seriesIsFinished(candidates, queries),
+          );
+        });
+      }
+      for (const title of missing) writeFinishedCache(title, verdict.get(norm(title)) ?? false);
+    } catch {
+      for (const title of missing) verdict.set(norm(title), false); // fail-open
+    }
+  }
+
+  return episodes.filter((e) => !verdict.get(norm((e.animeTitle || "").trim())));
+}

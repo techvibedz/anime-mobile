@@ -11,7 +11,7 @@ import {
   StyleSheet,
   Animated,
 } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -25,7 +25,7 @@ import { CardLayoutControl } from "../../components/CardLayoutControl";
 import { useCardLayout, type CardLayout } from "../../lib/cardLayout";
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
-import { useSidebar } from "../../components/Sidebar";
+import { useSidebarActions } from "../../components/Sidebar";
 import { C, S, R, TAr, ELEVATION_GLOW, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
@@ -112,7 +112,7 @@ const ResultCard = memo(function ResultCard({ item, width, layout }: { item: Sea
 export default function SearchScreen() {
   const cards = useCardLayout("search", GAP);
   const insets = useSafeAreaInsets();
-  const { openSidebar } = useSidebar();
+  const { openSidebar } = useSidebarActions();
   const { genre: genreParam, q: qParam } = useLocalSearchParams<{ genre?: string; q?: string }>();
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<SearchResult[]>([]);
@@ -205,7 +205,16 @@ export default function SearchScreen() {
     }
   }, []);
 
-  useEffect(() => { loadBrowse(); }, []);
+  // The tabs are pre-mounted (lazy:false) so switching never flashes. Loading
+  // the browse grid on MOUNT, however, queued a full all-anime scrape at app
+  // launch — competing with the home feed for the same WebView slots. Defer the
+  // first load until the tab is actually focused; later focuses keep the grid.
+  const browseLoadedRef = useRef(false);
+  useFocusEffect(useCallback(() => {
+    if (browseLoadedRef.current) return;
+    browseLoadedRef.current = true;
+    loadBrowse();
+  }, [loadBrowse]));
 
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim()) {
@@ -266,6 +275,17 @@ export default function SearchScreen() {
     modeRef.current = "genre";
     loadGenre(genre, 1);
   }, [loadBrowse, loadGenre]);
+
+  const renderResult = useCallback(
+    ({ item }: { item: SearchResult }) => (
+      <ResultCard item={item} width={cards.cardWidth} layout={cards.layout} />
+    ),
+    [cards.cardWidth, cards.layout],
+  );
+  // Stable key: href alone. The old `href + index` remounted every cell on any
+  // list refresh (all keys changed) — the whole grid flickered and re-decoded
+  // images.
+  const keyExtractor = useCallback((item: SearchResult) => item.href, []);
 
   const loadMoreGenre = useCallback(() => {
     if (loadingMore || !hasMore) return;
@@ -414,7 +434,7 @@ export default function SearchScreen() {
           key={`${cards.layout}-${cards.columns}`}
           data={items}
           numColumns={cards.columns}
-          keyExtractor={(item, i) => item.href + i}
+          keyExtractor={keyExtractor}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
           keyboardShouldPersistTaps="handled"
@@ -439,7 +459,7 @@ export default function SearchScreen() {
             <Text style={ss.resultsLabel}>{t.searchResultsFor(query.trim())}</Text>
           ) : null}
           ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
-          renderItem={({ item }) => <ResultCard item={item} width={cards.cardWidth} layout={cards.layout} />}
+          renderItem={renderResult}
         />
       ) : (
         <StateView

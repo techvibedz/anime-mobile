@@ -21,21 +21,26 @@ const PROBES = [
 
 /** Resolve true if any probe answers within `timeoutMs`, false otherwise. */
 export async function checkOnline(timeoutMs = 4000): Promise<boolean> {
-  for (const url of PROBES) {
-    try {
+  // Race all probes: sequentially, a network that blocks the first two hosts
+  // (common on restrictive carriers) made every check take 3× timeout. First
+  // response of ANY status means the network is reachable.
+  const probe = (url: string) =>
+    new Promise<boolean>((resolve) => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      try {
-        await fetch(url, { method: "GET", signal: ctrl.signal, cache: "no-store" });
-        return true; // a response of ANY status means the network is reachable
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch {
-      // try the next probe
+      const timer = setTimeout(() => { ctrl.abort(); resolve(false); }, timeoutMs);
+      fetch(url, { method: "GET", signal: ctrl.signal, cache: "no-store" })
+        .then(() => resolve(true), () => resolve(false))
+        .finally(() => clearTimeout(timer));
+    });
+  return new Promise<boolean>((resolve) => {
+    let remaining = PROBES.length;
+    for (const url of PROBES) {
+      void probe(url).then((ok) => {
+        if (ok) resolve(true);
+        else if (--remaining === 0) resolve(false);
+      });
     }
-  }
-  return false;
+  });
 }
 
 /**

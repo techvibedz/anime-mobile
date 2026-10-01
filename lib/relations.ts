@@ -322,6 +322,144 @@ export function pickBestMedia(
   return bestScore >= minScore ? best : null;
 }
 
+/* ── Source-resolution scoring (shared by the Related tab + rec rail) ──
+ * Resolving a card to a source page is the step that opens the actual wrong
+ * anime, so the season penalty is HARSHER here than in scoreMedia above:
+ * a "Season N" card must not settle for the base series when the site simply
+ * doesn't carry that season — better to report "not found" than open Season 1. */
+
+// Score how well a search result's title matches the wanted title. Latin-
+// folded equality/containment first, then token overlap, plus the harsh season
+// match bonus / mismatch penalty described above.
+export function scoreRelatedMatch(want: string, got: string): number {
+  const w = normLatin(want);
+  const g = normLatin(got);
+  if (!w || !g) return 0;
+  let s: number;
+  if (g === w) s = 100;
+  else if (g.startsWith(w) || w.startsWith(g)) s = 82;
+  else if (g.includes(w) || w.includes(g)) s = 70;
+  else {
+    const wt = w.split(" ").filter((x) => x.length > 1);
+    const gt = new Set(g.split(" ").filter((x) => x.length > 1));
+    let shared = 0;
+    for (const x of wt) if (gt.has(x)) shared++;
+    s = wt.length ? Math.round((shared / wt.length) * 64) : 0;
+  }
+  const ws = seasonNum(want);
+  const gs = relatedSeasonNum(got, ws);
+  if (ws > 0 && gs > 0) s += ws === gs ? 10 : -25;
+  else if (ws > 0 && gs === 0) s -= 14;
+  return s;
+}
+
+// Season number for a source result title. Besides the explicit markers
+// seasonNum() reads, source sites often number seasons with a bare trailing
+// digit ("Shiguang Dailiren 3") — but only trust that when we're LOOKING for a
+// later season, or "Jujutsu Kaisen 0" would read as season 0.
+export function relatedSeasonNum(title: string, expectedSeason = 0): number {
+  const explicit = seasonNum(title);
+  if (explicit > 0) return explicit;
+  if (expectedSeason <= 0) return 0;
+  const trailing = normLatin(title).match(/\b([2-9][0-9]?)$/);
+  return trailing ? parseInt(trailing[1], 10) : 0;
+}
+
+// Synthetic search variants for a later-season title: sources sometimes index
+// "Show 3" and sometimes "Show Season 3"; query both.
+export function relatedNumberedSeasonVariants(title: string): string[] {
+  const season = seasonNum(title);
+  if (season <= 0) return [];
+  const base = stripSeasonNoise(normLatin(title));
+  return base ? [`${base} ${season}`, `${base} Season ${season}`] : [];
+}
+
+/* ── AniList entry → source search queries ── */
+
+export interface AniListLookupEntry {
+  title: string;
+  titleEnglish?: string | null;
+  /** Extra known names (MAL alt-titles), fetched lazily from Jikan. */
+  lookupTitles?: string[];
+}
+
+/** Every name an AniList entry is known by: romaji, English, optional MAL
+ *  alt-titles, plus each title's numbered-season variants (deduped,
+ *  case-insensitively). Used for scoring against source search results. */
+export function aniListLookupTitles(entry: AniListLookupEntry): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (title: string | null | undefined) => {
+    const v = (title || "").trim();
+    const k = v.toLowerCase();
+    if (v && !seen.has(k)) { seen.add(k); out.push(v); }
+  };
+  add(entry.title);
+  add(entry.titleEnglish);
+  for (const title of entry.lookupTitles || []) add(title);
+  for (const title of out.slice()) {
+    for (const variant of relatedNumberedSeasonVariants(title)) add(variant);
+  }
+  return out;
+}
+
+/**
+ * Split lookup titles into search waves, in tap-priority order:
+ *   • primary   — names AniList already gave us (no Jikan wait; covers the
+ *     vast majority of cards).
+ *   • alternate — MAL alt-titles, paid ONLY when the primary wave missed
+ *     (Jikan is rate-limited and used to sit on the critical path).
+ * Both waves are capped so one tap can't flood the sources with a dozen
+ * overlapping searches.
+ */
+export function aniListLookupWaves(
+  entry: AniListLookupEntry,
+  altTitles: readonly string[],
+  caps: { primary?: number; alternate?: number } = {},
+): { primary: string[]; alternate: string[] } {
+  const primary = aniListLookupTitles(entry).slice(0, caps.primary ?? 5);
+  const primaryKeys = new Set(primary.map((q) => q.toLowerCase()));
+  const alternate = aniListLookupTitles({ ...entry, lookupTitles: [...altTitles] })
+    .filter((q) => !primaryKeys.has(q.toLowerCase()))
+    .slice(0, caps.alternate ?? 3);
+  return { primary, alternate };
+}
+
+/** Names a source result is known by: the displayed title AND its URL slug.
+ *  anime3rb lists Arabic titles under Latin slugs, and a slug is often cleaner
+ *  than a decorated scrape title — so matching tries both. Deduped. */
+export function sourceCandidateNames(result: { title: string; href: string }): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const add = (name: string | null | undefined) => {
+    const v = (name || "").trim();
+    const k = v.toLowerCase();
+    if (v && !seen.has(k)) { seen.add(k); names.push(v); }
+  };
+  add(result.title);
+  add(slugToTitle(result.href));
+  return names;
+}
+
+/** Best match of a source result against every name an AniList entry is known
+ *  by — across the result's own title AND slug. Returns the score plus the
+ *  candidate-side name that produced it (kept for cross-verification). */
+export function scoreEntryAgainstNames(
+  entry: AniListLookupEntry,
+  candidateNames: readonly string[],
+): { score: number; matchName: string } {
+  const titles = aniListLookupTitles(entry);
+  let best = 0;
+  let matchName = "";
+  for (const name of candidateNames) {
+    for (const title of titles) {
+      const s = scoreRelatedMatch(title, name);
+      if (s > best) { best = s; matchName = name; }
+    }
+  }
+  return { score: best, matchName };
+}
+
 /* ── Relation shaping ── */
 
 interface Accum {
@@ -433,3 +571,8 @@ export const RELATIONS_BY_ID_QUERY = `query($id:Int){Media(id:$id,type:ANIME){${
 // already resolves every anime against MAL (Jikan) for ratings, so this bridges
 // to AniList's richer relation graph WITHOUT any fuzzy title matching.
 export const RELATIONS_BY_MAL_QUERY = `query($idMal:Int){Media(idMal:$idMal,type:ANIME){${MEDIA_FIELDS}}}`;
+
+// Community "similar anime" recommendations, ranked by AniList's own upvote
+// counts. Powers the home "مقترح لك" rail; parsed by parseRecommendations().
+export const RECOMMENDATIONS_QUERY = `query($id:Int){Media(id:$id,type:ANIME){id recommendations(sort:RATING_DESC,perPage:12){nodes{rating mediaRecommendation{id type format seasonYear title{romaji english} coverImage{large}}}}}}`;
+

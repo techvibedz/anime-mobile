@@ -87,6 +87,11 @@ function wrapOnce(job: ScrapeJob): string {
   return `(function(){try{if(window.${key})return true;window.${key}=1;}catch(e){}\n${job.injectAfter}\n})();true;`;
 }
 
+// Idle source for a warm slot. Once a slot's WebView has been created it is
+// kept mounted (navigating to a blank page between jobs) so the next scrape
+// skips native WebView construction — the per-job cold-start cost.
+const BLANK_SOURCE = { html: "<!doctype html><html><head></head><body></body></html>", baseUrl: "about:blank" };
+
 function ScraperSlot({
   job,
   onDone,
@@ -96,6 +101,7 @@ function ScraperSlot({
 }) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webRef = useRef<WebView | null>(null);
+  const [everMounted, setEverMounted] = useState(false);
   const [attemptIndex, setAttemptIndex] = useState(0);
   const attemptIndexRef = useRef(0);
   const changingUrlRef = useRef(false);
@@ -111,6 +117,7 @@ function ScraperSlot({
     changingUrlRef.current = false;
     topLevelUrlRef.current = job?.urls[0] || job?.url || "";
     setAttemptIndex(0);
+    if (job) setEverMounted(true);
   }, [job?.id]);
 
   useEffect(() => {
@@ -202,11 +209,13 @@ function ScraperSlot({
     return true;
   }
 
-  if (!job) return null;
+  // Before first use: render nothing (don't pay WebView init at app start).
+  // After: stay mounted, blank between jobs (warm native view).
+  if (!job && !everMounted) return null;
   return (
     <WebView
       ref={webRef}
-      source={{ uri: currentUrl }}
+      source={job ? { uri: currentUrl } : BLANK_SOURCE}
       userAgent={VIDEO_USER_AGENT}
       javaScriptEnabled
       domStorageEnabled
@@ -220,17 +229,17 @@ function ScraperSlot({
       // ad/preview videos on the source pages from autoplaying inside the
       // hidden WebView and stealing bandwidth from the scrape itself on slow
       // connections.
-      mediaPlaybackRequiresUserAction={!job.injectBefore}
+      mediaPlaybackRequiresUserAction={!job?.injectBefore}
       allowsInlineMediaPlayback
       setSupportMultipleWindows={false}
       // Video-extraction jobs inject into ALL frames: some providers (videa
       // via vidvaita/vidit) nest the real player inside an iframe that the
       // main-frame script can't reach. Scrape jobs stay main-frame-only so a
       // stray ad iframe can't reject a job that the page itself would resolve.
-      injectedJavaScriptForMainFrameOnly={!job.allFrames}
-      injectedJavaScriptBeforeContentLoadedForMainFrameOnly={!job.allFrames}
-      injectedJavaScriptBeforeContentLoaded={ANTI_HIJACK_JS + (job.injectBefore || "")}
-      injectedJavaScript={wrapOnce(job)}
+      injectedJavaScriptForMainFrameOnly={!job?.allFrames}
+      injectedJavaScriptBeforeContentLoadedForMainFrameOnly={!job?.allFrames}
+      injectedJavaScriptBeforeContentLoaded={ANTI_HIJACK_JS + (job?.injectBefore || "")}
+      injectedJavaScript={job ? wrapOnce(job) : "true;"}
       onShouldStartLoadWithRequest={shouldStartLoad}
       onLoadStart={(e) => {
         topLevelUrlRef.current = e.nativeEvent.url;
@@ -268,47 +277,52 @@ export function ScraperHost() {
   const [slots, setSlots] = useState<(ScrapeJob | null)[]>(
     () => Array.from({ length: SLOT_COUNT }, () => null),
   );
+  // Source of truth for the slot grid. Bus mutations (_claimNext/_consumeCancelled)
+  // MUST happen outside a React state updater: React 19 may invoke updaters more
+  // than once (StrictMode / interrupted renders), and a replayed updater would
+  // claim a job the discarded state never received — the job then hangs forever.
+  const slotsRef = useRef<(ScrapeJob | null)[]>(slots);
 
   function fillSlots() {
-    setSlots((prev) => {
-      const next = [...prev];
-      let changed = false;
-      for (let i = 0; i < next.length; i++) {
-        if (next[i] && _consumeCancelled(next[i]!.id)) {
-          next[i] = null;
-          changed = true;
-        }
+    const next = [...slotsRef.current];
+    let changed = false;
+    for (let i = 0; i < next.length; i++) {
+      if (next[i] && _consumeCancelled(next[i]!.id)) {
+        next[i] = null;
+        changed = true;
       }
-      let bg = next.filter((j) => j && !j.priority).length;
-      for (let i = 0; i < next.length; i++) {
-        if (next[i] !== null || !_hasPending()) continue;
-        // Reserve one slot for user-facing (priority) video jobs. Background
-        // pre-resolves may hold at most SLOT_COUNT-1 slots — otherwise, on a
-        // slow connection, four in-flight background jobs (each up to a full
-        // timeout) make a tapped server queue ~40s before it even starts,
-        // which read as "servers keep loading forever". Priority only ordered
-        // the QUEUE; it never freed an in-flight slot.
-        const peeked = _peek();
-        if (!peeked) break;
-        if (!peeked.priority && bg >= SLOT_COUNT - 1) break;
-        const claimed = _claimNext();
-        if (claimed) {
-          next[i] = claimed.job;
-          if (!claimed.job.priority) bg++;
-          changed = true;
-        }
+    }
+    let bg = next.filter((j) => j && !j.priority).length;
+    for (let i = 0; i < next.length; i++) {
+      if (next[i] !== null || !_hasPending()) continue;
+      // Reserve one slot for user-facing (priority) video jobs. Background
+      // pre-resolves may hold at most SLOT_COUNT-1 slots — otherwise, on a
+      // slow connection, four in-flight background jobs (each up to a full
+      // timeout) make a tapped server queue ~40s before it even starts,
+      // which read as "servers keep loading forever". Priority only ordered
+      // the QUEUE; it never freed an in-flight slot.
+      const peeked = _peek();
+      if (!peeked) break;
+      if (!peeked.priority && bg >= SLOT_COUNT - 1) break;
+      const claimed = _claimNext();
+      if (claimed) {
+        next[i] = claimed.job;
+        if (!claimed.job.priority) bg++;
+        changed = true;
       }
-      return changed ? next : prev;
-    });
+    }
+    if (!changed) return;
+    slotsRef.current = next;
+    setSlots(next);
   }
 
   function clearSlot(idx: number) {
-    setSlots((prev) => {
-      if (prev[idx] === null) return prev;
-      const next = [...prev];
-      next[idx] = null;
-      return next;
-    });
+    const cur = slotsRef.current;
+    if (cur[idx] === null) return;
+    const next = [...cur];
+    next[idx] = null;
+    slotsRef.current = next;
+    setSlots(next);
     // Try to start another job after this one ends
     setTimeout(fillSlots, 0);
   }

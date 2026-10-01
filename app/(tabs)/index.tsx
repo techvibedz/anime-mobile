@@ -19,14 +19,21 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchHome } from "../../lib/api";
+import { fetchHome, fetchEpisodes } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
 import { episodeNumberFromUrl } from "../../lib/videoProviders";
 import { isEpisodeUrl, toAnimeUrl } from "../../lib/favorites";
-import { getContinueWatching, progressPercent, dismissFromContinue } from "../../lib/history";
+import { getContinueWatching, progressPercent, dismissFromContinue, animeTitleKey, normAnimeKey } from "../../lib/history";
 import type { WatchEntry } from "../../lib/history";
+import { getFavorites } from "../../lib/favorites";
+import { canonTitle } from "../../lib/relations";
+import { fetchAnimeRecommendations } from "../../lib/animeInfo";
+import type { RecItem } from "../../lib/animeInfo";
+import { pickSeeds, rankRecommendations, type RankedRec } from "../../lib/recommend";
+import { AniListPosterCard } from "../../components/AniListPosterCard";
+import { resolveEntryToSource } from "../../lib/anilistResolve";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
-import { useSidebar } from "../../components/Sidebar";
+import { useSidebarActions } from "../../components/Sidebar";
 import { Shimmer } from "../../components/Shimmer";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
@@ -213,7 +220,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { openSidebar } = useSidebar();
+  const { openSidebar } = useSidebarActions();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [featured, setFeatured] = useState<FeaturedItem[]>([]);
@@ -246,7 +253,18 @@ export default function HomeScreen() {
   const openEpisodePopup = useCallback((ep: EpisodeItem) => setEpisodePopup(ep), []);
   const closeEpisodePopup = useCallback(() => setEpisodePopup(null), []);
 
-  const load = useCallback(async () => {
+  // Stable handler so the memoized ContinueCard doesn't re-render every time
+  // the home screen state changes (focus refresh, popup open/close, badge).
+  const handleRemoveContinue = useCallback((href: string) => {
+    // Hide it immediately (optimistic) — the storage write must
+    // not be able to leave a card the user just closed.
+    setHistory((prev) => prev.filter((h) => h.episodeHref !== href));
+    dismissFromContinue(href)
+      .then(() => getContinueWatching().then(setHistory))
+      .catch(() => {});
+  }, []);
+
+  const load = useCallback(async (forceRefresh = false) => {
     // Start (or reuse) an absolute cold-start deadline so the skeleton can't
     // exceed ~25s TOTAL across retries regardless of per-scrape latency.
     if (coldStartDeadline.current === 0) coldStartDeadline.current = Date.now() + COLD_START_DEADLINE_MS;
@@ -264,7 +282,7 @@ export default function HomeScreen() {
             setFeatured(feat);
             setSections(secs);
           }
-        }),
+        }, { forceRefresh }),
         getContinueWatching(),
       ]);
       setHistory(hist);
@@ -329,7 +347,7 @@ export default function HomeScreen() {
     emptyRetry.current = 0;
     coldStartDeadline.current = 0; // fresh deadline for a user-initiated retry
     if (retryTimer.current) clearTimeout(retryTimer.current);
-    void load();
+    void load(true);
   }, [load]);
 
   useEffect(() => {
@@ -473,14 +491,7 @@ export default function HomeScreen() {
                 <ContinueCard
                   key={entry.episodeHref}
                   entry={entry}
-                  onRemove={(href) => {
-                    // Hide it immediately (optimistic) — the storage write must
-                    // not be able to leave a card the user just closed.
-                    setHistory((prev) => prev.filter((h) => h.episodeHref !== href));
-                    dismissFromContinue(href)
-                      .then(() => getContinueWatching().then(setHistory))
-                      .catch(() => {});
-                  }}
+                  onRemove={handleRemoveContinue}
                 />
               ))}
             </ScrollView>
@@ -488,6 +499,8 @@ export default function HomeScreen() {
         )}
 
         {/* ── Sections ─────────────────────── */}
+        <ForYouRail history={history} width={CARD_W} />
+
         {visibleSections.map((section, si) => {
           // The new-episodes rail always shows the newest 10 (fuller list
           // behind the See all button); anime rails keep the wider preview.
@@ -666,6 +679,107 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
       topRight={<MalCardBadge title={item.title} />}
       bottomRight={<CompletionBadge hrefs={[item.href, ...Object.values(item.sourceHrefs || {})]} titles={[item.title]} />}
     />
+  );
+});
+
+/* ── For You (recommendations) ──
+   Personalised rail seeded by watch history: the 3 most recent distinct anime
+   are resolved against AniList and their community recommendations merged +
+   ranked (lib/recommend). Tapping a card resolves it to a source page via the
+   shared AniListPosterCard. Hidden entirely when there's nothing to show — a
+   secondary rail must never render as an empty hole. */
+const seedKeyOf = (e: { animeTitle: string; animeHref: string }) =>
+  normAnimeKey(e.animeHref) || animeTitleKey(e.animeTitle);
+
+const ForYouRail = memo(function ForYouRail({ history, width }: { history: WatchEntry[]; width: number }) {
+  const [items, setItems] = useState<RankedRec[]>([]);
+  const historyRef = useRef(history);
+  historyRef.current = history;
+
+  // Refetch only when the seed SET changes (a newly watched anime, or one
+  // drops out) — not on every progress tick / focus refresh.
+  const seedKey = useMemo(
+    () => pickSeeds(history, seedKeyOf, 3).map((s) => s.animeTitle).join("|"),
+    [history],
+  );
+
+  useEffect(() => {
+    const seeds = pickSeeds(historyRef.current, seedKeyOf, 3);
+    if (seeds.length === 0) { setItems([]); return; }
+    let alive = true;
+    void (async () => {
+      const [batches, favorites] = await Promise.all([
+        Promise.all(seeds.map((s) => fetchAnimeRecommendations(s.animeTitle, s.animeHref).catch(() => [] as RecItem[]))),
+        getFavorites().catch(() => []),
+      ]);
+      // Nothing the user already watched / bookmarked may come back as a rec.
+      const keys = new Set<string>();
+      const canons = new Set<string>();
+      const remember = (title: string | null | undefined) => {
+        if (!title) return;
+        const k = animeTitleKey(title);
+        if (k) keys.add(k);
+        canons.add(canonTitle(title));
+      };
+      for (const e of historyRef.current) remember(e.animeTitle);
+      for (const f of favorites) remember(f.title);
+      const excluded = (item: RecItem) =>
+        [item.title, item.titleEnglish].some((title) => {
+          if (!title) return false;
+          return keys.has(animeTitleKey(title)) || canons.has(canonTitle(title));
+        });
+      const ranked = rankRecommendations(batches, { excluded, cap: 15 });
+      if (alive) setItems(ranked);
+    })();
+    return () => { alive = false; };
+  }, [seedKey]);
+
+  // Warm the first cards in the background so the likeliest tap opens instantly:
+  // resolve the source URL AND preload the detail payload, so the tapped page
+  // renders from cache instead of paying a cold scrape under the tap. Delayed
+  // so it never competes with the home feed's own scrapes.
+  // ponytail: capped at 2 cards — more would hammer the sources for guesses
+  // the user may never tap.
+  useEffect(() => {
+    if (items.length === 0) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        for (const item of items.slice(0, 2)) {
+          if (cancelled) return;
+          const href = await resolveEntryToSource(item).catch(() => null);
+          if (!href || cancelled) continue;
+          await fetchEpisodes(href).catch(() => null);
+        }
+      })();
+    }, 4000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [items]);
+
+  if (items.length === 0) return null;
+  return (
+    <View style={ss.section}>
+      <View style={ss.sectionHeader}>
+        <View style={ss.sectionTitleRow}>
+          <Ionicons name="sparkles-outline" size={13} color={C.accent} />
+          <Text style={ss.sectionTitle}>{t.recsForYou}</Text>
+        </View>
+      </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
+      >
+        {items.map((item) => (
+          <AniListPosterCard
+            key={item.anilistId}
+            entry={item}
+            width={width}
+            topRight={<MalCardBadge title={item.title} />}
+          />
+        ))}
+      </ScrollView>
+    </View>
   );
 });
 

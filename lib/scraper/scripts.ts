@@ -53,10 +53,22 @@ function _siteCards() {
   });
   return out;
 }
-function _siteEpisodes() {
+// Root element of a home rail by its <h2> heading text. Current witanime
+// renders each rail as a <section>; returns null when the heading is absent
+// (legacy layouts).
+function _headingRoot(heading) {
+  var headings = document.querySelectorAll('h2');
+  for (var i = 0; i < headings.length; i++) {
+    if ((headings[i].textContent || '').trim() === heading) {
+      return headings[i].closest('section') || headings[i].parentElement;
+    }
+  }
+  return null;
+}
+function _siteEpisodes(root) {
   var seen = {};
   var out = [];
-  document.querySelectorAll('a[href*="/watch/"]').forEach(function (a) {
+  (root || document).querySelectorAll('a[href*="/watch/"]').forEach(function (a) {
     var href = _absUrl(a.getAttribute('href') || '', location.origin);
     var match = href.match(/\\/watch\\/(?!movie\\/)([^/?#]+)\\/(\\d+)(?:[/?#]|$)/i);
     var titleEl = a.querySelector('h3');
@@ -157,21 +169,16 @@ function heroSlides() {
 function headingCards(heading) {
   var out = [];
   var seen = {};
-  var headings = document.querySelectorAll('h2');
-  for (var i = 0; i < headings.length; i++) {
-    if ((headings[i].textContent || '').trim() !== heading) continue;
-    var root = headings[i].closest('section') || headings[i].parentElement;
-    if (!root) return out;
-    root.querySelectorAll('a[href*="/anime/"], a[href*="/movie/"]').forEach(function (a) {
-      var href = _absUrl(a.getAttribute('href') || '', location.origin);
-      var h3 = a.querySelector('h3');
-      var title = h3 ? (h3.textContent || '').trim() : '';
-      if (!href || !title || seen[href]) return;
-      seen[href] = true;
-      out.push({ title: title, href: href, image: _bestImg(a), type: null, status: null, description: null, isNew: false, rating: null });
-    });
-    return out;
-  }
+  var root = _headingRoot(heading);
+  if (!root) return out;
+  root.querySelectorAll('a[href*="/anime/"], a[href*="/movie/"]').forEach(function (a) {
+    var href = _absUrl(a.getAttribute('href') || '', location.origin);
+    var h3 = a.querySelector('h3');
+    var title = h3 ? (h3.textContent || '').trim() : '';
+    if (!href || !title || seen[href]) return;
+    seen[href] = true;
+    out.push({ title: title, href: href, image: _bestImg(a), type: null, status: null, description: null, isNew: false, rating: null });
+  });
   return out;
 }
 function homeRails() {
@@ -185,7 +192,11 @@ function scrape() {
   var rails = homeRails();
   var hero = heroSlides();
   var siteAnimes = _siteCards().filter(function (item) { return item.href.indexOf('/anime/') >= 0; });
-  var siteEpisodes = _siteEpisodes();
+  // Latest-episodes rail only: the home page renders an "الأكثر مشاهدة"
+  // (most-watched) rail of /watch/ links ahead of it, whose popularity-ranked
+  // older episodes must not leak into the new-episodes feed. Fall back to the
+  // whole document on legacy layouts without the heading.
+  var siteEpisodes = _siteEpisodes(_headingRoot('أحدث الحلقات') || document);
   if (hero.length || siteAnimes.length || siteEpisodes.length) {
     return Object.assign({
       featured: hero.length ? hero : siteAnimes.slice(0, 5).map(function (item) {
@@ -669,11 +680,19 @@ _waitFor(
 // ──────────────────────────────────────────────────────────────
 export const EXTRACT_RENDERED_HTML = (marker: string) => `(function(){${HELPERS}
 var MARKER = ${JSON.stringify(marker || "")};
+var _htmlTick = 0;
 _waitFor(
   function(){
+    if (!MARKER) return document.readyState === 'complete';
+    // Cheap check first: textContent covers script text, where the markers
+    // (video_url / video_sources) actually live. Only serialize the full DOM
+    // every ~4th tick (the old predicate re-serialized a 1-2MB page every
+    // 350ms for up to 20s) — still catches markers that only appear in markup.
+    try { if ((document.documentElement.textContent || '').indexOf(MARKER) >= 0) return true; } catch (e) {}
+    _htmlTick++;
+    if (_htmlTick % 4 !== 0) return false;
     var html = document.documentElement ? document.documentElement.innerHTML : '';
-    if (MARKER) return html.indexOf(MARKER) >= 0;
-    return document.readyState === 'complete';
+    return html.indexOf(MARKER) >= 0;
   },
   function(){
     try { _send('result', { data: { html: document.documentElement.outerHTML } }); }
@@ -1435,6 +1454,7 @@ export const COLLECT_VIDEO_AFTER = `
     //    start before falling back to the HTML-extracted URL.
     var htmlUrl = null;
     var lastTrigger = Date.now();
+    var lastHtmlScan = 0;
     var doodRetried = false;
     while (Date.now() - start < 28000) {
       var h = pickHooked();
@@ -1450,7 +1470,11 @@ export const COLLECT_VIDEO_AFTER = `
         if (dd2) return done(dd2);
       }
 
-      if (!htmlUrl && !isIntermediaryHost) {
+      // Full-DOM extraction is expensive (serializes the page + ~10 regexes).
+      // Run it on the first tick, then at most ~1/s — the 250ms cadence was
+      // competing with the player's own JS on the same renderer thread.
+      if (!htmlUrl && !isIntermediaryHost && Date.now() - lastHtmlScan > 900) {
+        lastHtmlScan = Date.now();
         // documentElement can be null when the script was early-injected into
         // a document whose first bytes haven't produced a root element yet.
         var found = extractFromHtml((document.documentElement && document.documentElement.outerHTML) || '');

@@ -17,6 +17,7 @@ import {
   RELATIONS_PAGE_QUERY,
   RELATIONS_BY_ID_QUERY,
   RELATIONS_BY_MAL_QUERY,
+  RECOMMENDATIONS_QUERY,
   buildSearchQueries,
   slugToTitle,
   pickBestMedia,
@@ -26,8 +27,10 @@ import {
   type AniListMedia,
   type RelatedAnimeEntry,
 } from "./relations";
+import { parseRecommendations, type RecItem } from "./recommend";
 
 export type { RelatedAnimeEntry } from "./relations";
+export type { RecItem } from "./recommend";
 
 export interface AnimeInfoField {
   label: string;
@@ -612,11 +615,14 @@ export async function getAltTitles(query: string): Promise<string[]> {
 }
 
 /* ── Related anime (AniList relations) ──────────────
- * witanime/anime4up/anime3rb detail pages carry NO related-anime section, so
- * "other seasons / side stories / spin-offs" can't be scraped. AniList's
- * GraphQL API returns an anime's full relation graph — relation type, title,
- * cover image and format — in a SINGLE keyless request (Jikan's relations
- * endpoint omits images and would need one extra fetch per entry).
+ * The fallback source for the Related tab: the Witanime page's own "ذات صلة"
+ * rail is preferred (scraped in lib/api's fetchWitanimeSections); when it's
+ * empty — the anime isn't on Witanime, or the rail itself is empty — the app
+ * falls back to this. AniList's GraphQL API returns an anime's full relation
+ * graph — relation type, title, cover image and format — in a SINGLE keyless
+ * request (Jikan's relations endpoint omits images and would need one extra
+ * fetch per entry). anime4up/anime3rb detail pages carry no related rail at
+ * all.
  *
  * The pure selection/shaping logic (variant generation, candidate scoring,
  * de-dupe, self-exclusion) lives in ./relations so it's unit-testable without
@@ -783,6 +789,136 @@ export async function fetchAnimeRelations(title: string, href?: string | null): 
     }
   })();
   relInflight.set(key, p);
+  return p;
+}
+
+/* ── Recommendations ("مقترح لك") ──────────────────────────────────────────
+ * The home rail's engine: resolve a WATCHED anime to its AniList entry, then
+ * pull AniList's community recommendations for it. The pure parsing/ranking
+ * lives in ./recommend; this section only does the network + caching.
+
+ * Cache: per seed (title + slug), memory-first with a week-long AsyncStorage
+ * fallback — exactly the fetchAnimeRelations pattern. Only non-empty results
+ * are cached so a transient failure can't freeze an empty rail. */
+
+const REC_CACHE_PREFIX = "@anime_recs_v1:";
+const recMem = new Map<string, RecItem[]>();
+const recInflight = new Map<string, Promise<RecItem[]>>();
+
+// Direct AniList title search over generated variants — the fast path (no
+// Jikan). Returns the best candidate above the confidence threshold, or null.
+async function fetchMediaByQueries(variants: string[]): Promise<AniListMedia | null> {
+  for (const query of variants) {
+    const json = await anilistPost(RELATIONS_PAGE_QUERY, { search: query });
+    const medias: AniListMedia[] | undefined = json?.data?.Page?.media;
+    if (!Array.isArray(medias) || medias.length === 0) continue;
+    const best = pickBestMedia(medias, query);
+    if (best) return best;
+  }
+  return null;
+}
+
+/* ── Source-result cross-verification ──
+ * AniList id for a source-result title — proves a resolved candidate is really
+ * the SAME anime the card points at before the app opens it. Same id = open;
+ * a different id = a different show, so never open it. Null means AniList
+ * couldn't confidently resolve the name (Arabic-only, decorated), which
+ * callers treat as "unverified", not as a mismatch. Mem + disk cached (7 days)
+ * — the same handful of titles is checked across sessions. */
+
+const ANILIST_ID_CACHE_PREFIX = "@anilist_id_v1:";
+const anilistIdMem = new Map<string, number | null>();
+
+export async function fetchAniListIdForTitle(title: string): Promise<number | null> {
+  const q = (title || "").trim();
+  if (!q) return null;
+  const key = q.toLowerCase();
+  if (anilistIdMem.has(key)) return anilistIdMem.get(key) ?? null;
+  try {
+    const raw = await AsyncStorage.getItem(ANILIST_ID_CACHE_PREFIX + key);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { ts?: number; id?: number | null };
+      if (typeof parsed?.ts === "number" && Date.now() - parsed.ts < CACHE_TTL) {
+        const id = typeof parsed.id === "number" ? parsed.id : null;
+        anilistIdMem.set(key, id);
+        return id;
+      }
+    }
+  } catch {}
+  try {
+    const media = await fetchMediaByQueries(buildSearchQueries([q], null));
+    const id = typeof media?.id === "number" ? media.id : null;
+    anilistIdMem.set(key, id);
+    try {
+      await AsyncStorage.setItem(ANILIST_ID_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), id }));
+    } catch {}
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+// Resolve a scraped title (optionally sharpened by its source slug) to its
+// AniList media via the SAME pipeline the Related tab trusts: direct title
+// search first, then the Jikan→MAL-id bridge for Arabic / decorated titles
+// that AniList's Latin-only search can't find. The slug acts as a confidence
+// anchor on the bridge (same guard as doFetchRelations).
+async function resolveMediaForTitle(title: string, href?: string | null): Promise<AniListMedia | null> {
+  const slugTitle = slugToTitle(href);
+  const direct = await fetchMediaByQueries(buildSearchQueries([title], slugTitle));
+  if (direct) return direct;
+
+  const mal = await getMalMatch(title).catch(() => ({ malId: null as number | null, titles: [] as string[] }));
+  if (mal.malId != null) {
+    const json = await anilistPost(RELATIONS_BY_MAL_QUERY, { idMal: mal.malId });
+    const media = json?.data?.Media as AniListMedia | undefined;
+    if (media && (!slugTitle || scoreMedia(media, slugTitle) >= 50)) return media;
+  }
+  return fetchMediaByQueries(buildSearchQueries(mal.titles, slugTitle));
+}
+
+/** AniList community recommendations for a watched title. Resolves the title
+ *  to AniList first (slug-sharpened, MAL-bridged), caches per seed for a week,
+ *  and returns [] on any miss. */
+export async function fetchAnimeRecommendations(title: string, href?: string | null): Promise<RecItem[]> {
+  if (!title || !title.trim()) return [];
+  const slug = slugToTitle(href).toLowerCase();
+  const key = `${title.toLowerCase().trim()}|${slug}`;
+  const cached = recMem.get(key);
+  if (cached) return cached;
+  const pending = recInflight.get(key);
+  if (pending) return pending;
+
+  const p = (async (): Promise<RecItem[]> => {
+    try {
+      const raw = await AsyncStorage.getItem(REC_CACHE_PREFIX + key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Date.now() - parsed.ts < CACHE_TTL) {
+          recMem.set(key, parsed.data);
+          return parsed.data as RecItem[];
+        }
+      }
+    } catch {}
+    try {
+      const media = await resolveMediaForTitle(title, href);
+      if (!media) return [];
+      const json = await anilistPost(RECOMMENDATIONS_QUERY, { id: media.id });
+      const items = parseRecommendations(json?.data?.Media?.recommendations?.nodes);
+      if (items.length > 0) {
+        recMem.set(key, items);
+        try {
+          await AsyncStorage.setItem(REC_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), data: items }));
+        } catch {}
+      }
+      return items;
+    } catch {
+      return [];
+    } finally {
+      recInflight.delete(key);
+    }
+  })();
+  recInflight.set(key, p);
   return p;
 }
 

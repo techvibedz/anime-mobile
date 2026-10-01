@@ -29,6 +29,17 @@ export function subscribeFavorites(listener: FavoriteListener): () => void {
   return () => listeners.delete(listener);
 }
 
+// In-memory cache: every screen that reads favorites (home, mylist, sidebar,
+// profile, notifications) used to re-parse the whole JSON blob from storage.
+let favCache: FavoriteAnime[] | null = null;
+
+async function loadFavorites(): Promise<FavoriteAnime[]> {
+  if (favCache) return favCache;
+  const raw = await AsyncStorage.getItem(KEY);
+  favCache = raw ? (JSON.parse(raw) as FavoriteAnime[]) : [];
+  return favCache;
+}
+
 async function pushFavoriteToCloud(fav: FavoriteAnime) {
   if (!isSupabaseConfigured) return;
   const user = await getSessionUser();
@@ -69,13 +80,13 @@ export async function pullFavoritesFromCloud() {
     list: (row.list || "planned") as FavoriteList,
     addedAt: new Date(row.added_at).getTime(),
   }));
+  favCache = list;
   await AsyncStorage.setItem(KEY, JSON.stringify(list));
   emitFavoritesChanged();
 }
 
 export async function getFavorites(filterList?: FavoriteList): Promise<FavoriteAnime[]> {
-  const raw = await AsyncStorage.getItem(KEY);
-  const list: FavoriteAnime[] = raw ? JSON.parse(raw) : [];
+  const list = await loadFavorites();
   // Filter out legacy episode URLs; default `list` to "planned" for migrated entries.
   const cleaned: FavoriteAnime[] = [];
   const seen = new Set<string>();
@@ -106,6 +117,7 @@ export async function addFavorite(
   if (existing) {
     if (existing.list !== targetList) {
       const updated = all.map((f) => favoriteKey(f.href) === key ? { ...f, list: targetList } : f);
+      favCache = updated;
       await AsyncStorage.setItem(KEY, JSON.stringify(updated));
       pushFavoriteToCloud({ ...existing, list: targetList }).catch(() => {});
       emitFavoritesChanged();
@@ -114,6 +126,7 @@ export async function addFavorite(
   }
   const newFav: FavoriteAnime = { title: anime.title, href, image: anime.image, addedAt: Date.now(), list: targetList };
   all.unshift(newFav);
+  favCache = all;
   await AsyncStorage.setItem(KEY, JSON.stringify(all));
   pushFavoriteToCloud(newFav).catch(() => {});
   emitFavoritesChanged();
@@ -121,11 +134,11 @@ export async function addFavorite(
 }
 
 export async function removeFavorite(href: string) {
-  const raw = await AsyncStorage.getItem(KEY);
-  const list: FavoriteAnime[] = raw ? JSON.parse(raw) : [];
+  const list = await loadFavorites();
   const key = favoriteKey(href);
   const removedHrefs = list.filter((f) => favoriteKey(f.href) === key).map((f) => f.href);
   const filtered = list.filter((f) => favoriteKey(f.href) !== key);
+  favCache = filtered;
   await AsyncStorage.setItem(KEY, JSON.stringify(filtered));
   deleteFavoritesFromCloud(removedHrefs.length ? removedHrefs : [href]).catch(() => {});
   emitFavoritesChanged();

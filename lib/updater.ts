@@ -17,8 +17,18 @@ export interface UpdateInfo {
  * Checks for APK update from GitHub version.json.
  * Returns null if no update, or UpdateInfo if a new APK is available.
  */
+// Foreground re-checks happen on every AppState "active"; once a check ran in
+// this session, skip the next ones for a while. The cache-buster below makes
+// each check uncacheable, so without this an up-to-date user hit GitHub every
+// time they switched apps. (Module state resets on cold start, so the launch
+// check always runs.)
+const APK_RECHECK_GAP_MS = 6 * 60 * 60 * 1000;
+let lastApkCheckAt = 0;
+
 export async function checkForApkUpdate(): Promise<UpdateInfo | null> {
   if (__DEV__) return null;
+  if (lastApkCheckAt && Date.now() - lastApkCheckAt < APK_RECHECK_GAP_MS) return null;
+  lastApkCheckAt = Date.now();
   try {
     const base =
       Constants.expoConfig?.extra?.versionJsonUrl ??

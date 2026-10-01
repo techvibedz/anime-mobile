@@ -37,6 +37,30 @@ export function genCode(len = 5): string {
   return out;
 }
 
+const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4,8}$/;
+
+/** Where the static "join a party" web page lives (landing/join.html). */
+export const PARTY_WEB_URL = "https://pantoufa-join.pages.dev/join";
+
+/** Clickable invite link shared with friends — opens the web join page. */
+export function partyInviteLink(code: string): string {
+  return `${PARTY_WEB_URL}?code=${code}`;
+}
+
+/**
+ * Accepts a raw room code, a deep link (anime-mobile://watch-party?code=X), the
+ * web invite link, or any pasted text containing one; returns the clean code or
+ * null. Used to heal pasted invite links in the join input.
+ */
+export function normalizePartyCode(input: string | null | undefined): string | null {
+  if (!input) return null;
+  const raw = String(input).trim().toUpperCase();
+  if (CODE_RE.test(raw)) return raw;
+  const m = raw.match(/[?&]CODE=([A-Z0-9]{4,8})/);
+  if (m && CODE_RE.test(m[1])) return m[1];
+  return null;
+}
+
 /**
  * Given the host's broadcast `state`, the client's local position and `now`,
  * decide whether to seek and what play state to hold. A seek only fires when

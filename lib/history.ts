@@ -13,8 +13,15 @@ export function subscribeHistory(cb: () => void): () => void {
   return () => { historyListeners.delete(cb); };
 }
 
+// In-memory read-through cache. Every reader used to AsyncStorage.getItem +
+// JSON.parse the full (up to 200-entry) list — the watch screen's 5s save loop,
+// getProgress, getCompletedSets, etc. all paid that repeatedly. All writes go
+// through saveHistory, so the cache is always current within this module.
+let historyCache: WatchEntry[] | null = null;
+
 let localWriteFailureLogged = false;
 async function saveHistory(list: WatchEntry[]) {
+  historyCache = list;
   const payload = JSON.stringify(list);
   try {
     await AsyncStorage.setItem(KEY, payload);
@@ -146,18 +153,46 @@ export async function pullHistoryFromCloud() {
 }
 
 export async function getHistory(): Promise<WatchEntry[]> {
+  if (historyCache) return historyCache.slice();
   const raw = await AsyncStorage.getItem(KEY);
-  if (!raw) return [];
+  if (!raw) { historyCache = []; return []; }
   try {
-    return JSON.parse(raw) as WatchEntry[];
+    historyCache = JSON.parse(raw) as WatchEntry[];
+    return historyCache.slice();
   } catch {
     // ponytail: a partial write (crash mid-setItem / an older incompatible
     // build) leaves garbage here for ONE user and throws on every read —
     // poisoning getContinueWatching/saveProgress too. Reset to empty; the
     // cloud pull on sign-in rehydrates it.
     void AsyncStorage.removeItem(KEY).catch(() => {});
+    historyCache = [];
     return [];
   }
+}
+
+// Cloud pushes are coalesced: the watch screen saves every 5s, and each push
+// used to be a network upsert + session read. Pushing the latest state per
+// episode at most every 30s (trailing flush) keeps the cloud current without
+// waking the radio on every tick.
+const CLOUD_PUSH_MIN_GAP_MS = 30_000;
+let lastCloudPushAt = 0;
+let cloudPushTimer: ReturnType<typeof setTimeout> | null = null;
+const pendingCloud = new Map<string, WatchEntry>();
+
+function flushCloudPushes() {
+  if (cloudPushTimer) { clearTimeout(cloudPushTimer); cloudPushTimer = null; }
+  if (pendingCloud.size === 0) return;
+  lastCloudPushAt = Date.now();
+  const batch = [...pendingCloud.values()];
+  pendingCloud.clear();
+  for (const entry of batch) void pushToCloud(entry).catch(() => {});
+}
+
+function scheduleCloudPush(entry: WatchEntry) {
+  pendingCloud.set(entry.episodeHref, entry);
+  const wait = CLOUD_PUSH_MIN_GAP_MS - (Date.now() - lastCloudPushAt);
+  if (wait <= 0) { flushCloudPushes(); return; }
+  if (!cloudPushTimer) cloudPushTimer = setTimeout(flushCloudPushes, wait);
 }
 
 export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
@@ -172,6 +207,20 @@ export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
     dismissed: false,
   };
   if (merged.completed !== true && autoCompleted(merged)) merged.completed = true;
+  // No-op guard: a paused/backgrounded player re-sends the identical position
+  // every 5s. Skip the storage write + cloud push when nothing changed.
+  const prev = idx >= 0 ? list[idx] : null;
+  if (
+    prev &&
+    prev.positionMs === merged.positionMs &&
+    prev.durationMs === merged.durationMs &&
+    prev.completed === merged.completed &&
+    prev.dismissed === merged.dismissed &&
+    prev.episodeTitle === merged.episodeTitle &&
+    prev.animeTitle === merged.animeTitle
+  ) {
+    return;
+  }
   if (idx >= 0) {
     list[idx] = merged;
   } else {
@@ -180,7 +229,7 @@ export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
   }
   list.sort((a, b) => b.updatedAt - a.updatedAt);
   await saveHistory(list);
-  pushToCloud(merged).catch(() => {});
+  scheduleCloudPush(merged);
 }
 
 /**
@@ -199,6 +248,7 @@ export async function getProgress(episodeHref: string): Promise<WatchEntry | nul
 
 export async function removeFromHistory(episodeHref: string) {
   const list = await getHistory();
+  pendingCloud.delete(episodeHref);
   await saveHistory(list.filter((e) => e.episodeHref !== episodeHref));
   deleteFromCloud(episodeHref).catch(() => {});
 }
@@ -308,19 +358,28 @@ export function animeTitleKey(s: string | null | undefined): string {
   const raw = s || "";
   const cached = titleKeyCache.get(raw);
   if (cached !== undefined) return cached;
-  // Tokenize on the RAW string (Arabic stays composed) so decoration words can
-  // be filtered by exact token, then NFKD-fold the survivors for Latin diacritics.
-  // Tokens are joined WITHOUT a separator so a title stored with punctuation
-  // ("Re:Zero") keys identically to the same name without it ("Rezero").
+  // Fold BEFORE tokenizing so combining marks survive to the fold step: the
+  // old order replaced "é" with a space first, turning "Café Étoile" into
+  // "caftoile" while "Cafe Etoile" became "cafeetoile" — the two spellings of
+  // one title never matched. Same for Arabic orthography variants (hamza
+  // forms, taa marbuta, alef maqsura, tashkeel, tatweel, Arabic-Indic digits)
+  // that different sources' scrapes produce for the SAME anime.
+  // Decoration tokens are still filtered on the folded tokens; the set carries
+  // both hamza spellings of each word.
   const key = raw
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\u064B-\u0655\u0640\u0670]/g, "")
     .toLowerCase()
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
     .replace(/[^a-z0-9؀-ۿ]+/g, " ")
     .trim()
     .split(" ")
     .filter((tok) => tok && !TITLE_DECORATION.has(tok))
-    .join("")
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "");
+    .join("");
   if (titleKeyCache.size > 2000) titleKeyCache.clear();
   titleKeyCache.set(raw, key);
   return key;
@@ -337,7 +396,7 @@ function deriveEpNum(e: WatchEntry): number | null {
     try { d = decodeURIComponent(s); } catch {}
     let m =
       d.match(/الحلقة[\s\-_]*(\d+)/) ||
-      d.match(/\/episode\/[^/]+\/(\d+)/i) ||
+      d.match(/\/(?:episode|watch)\/[^/]+\/(\d+)(?:\/|$)/i) ||
       d.match(/\bepisode\s*(\d+)/i);
     return m ? parseInt(m[1], 10) : null;
   };
@@ -378,13 +437,20 @@ export function isEpisodeCompleted(
 export interface CompletedSets {
   hrefs: Set<string>;
   numbersByTitle: Map<string, Set<number>>;
+  /** Title keys that appear in history AT ALL (completed or not). Lets callers
+   *  tell "explicitly unwatched" apart from "no tracked history under this
+   *  title" (title drift between sources) — see reconcileCompletionFromEpisodes. */
+  knownTitles: Set<string>;
 }
 
 export async function getCompletedSets(): Promise<CompletedSets> {
   const list = await getHistory();
   const hrefs = new Set<string>();
   const numbersByTitle = new Map<string, Set<number>>();
+  const knownTitles = new Set<string>();
   for (const e of list) {
+    const tkAll = animeTitleKey(e.animeTitle);
+    if (tkAll) knownTitles.add(tkAll);
     if (!isCompleted(e)) continue;
     hrefs.add(normHref(e.episodeHref));
     const n = deriveEpNum(e);
@@ -395,7 +461,7 @@ export async function getCompletedSets(): Promise<CompletedSets> {
       set.add(n);
     }
   }
-  return { hrefs, numbersByTitle };
+  return { hrefs, numbersByTitle, knownTitles };
 }
 
 /** True if an episode is watched by EITHER a same-source href match OR a

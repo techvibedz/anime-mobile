@@ -21,7 +21,7 @@ import { useCardLayout, type CardLayout } from "../../lib/cardLayout";
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
 import { useAuth } from "../../lib/auth";
-import { useSidebar } from "../../components/Sidebar";
+import { useSidebarActions } from "../../components/Sidebar";
 import { C, S, R, TAr } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
@@ -34,7 +34,7 @@ export default function MyListScreen() {
   const cards = useCardLayout("mylist", GAP);
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { openSidebar } = useSidebar();
+  const { openSidebar } = useSidebarActions();
   const [favorites, setFavorites] = useState<FavoriteAnime[]>([]);
   const [filter, setFilter] = useState<ListFilter>("all");
   const [refreshing, setRefreshing] = useState(false);

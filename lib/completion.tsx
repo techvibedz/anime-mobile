@@ -46,16 +46,26 @@ function uniq(arr: (string | null | undefined)[]): string[] {
   return out;
 }
 
+// In-memory cache: every record/reconcile/notify used to re-read + re-parse the
+// whole map from AsyncStorage (and the provider's refresh re-parsed it again on
+// every change event). All writes go through saveCompletionMap.
+let completionCache: Record<string, AnimeCompletion> | null = null;
+
 export async function getCompletionMap(): Promise<Record<string, AnimeCompletion>> {
+  if (completionCache) return completionCache;
+  let loaded: Record<string, AnimeCompletion>;
   try {
     const raw = await AsyncStorage.getItem(KEY);
-    return raw ? JSON.parse(raw) : {};
+    loaded = raw ? JSON.parse(raw) : {};
   } catch {
-    return {};
+    loaded = {};
   }
+  completionCache = loaded;
+  return loaded;
 }
 
 async function saveCompletionMap(map: Record<string, AnimeCompletion>) {
+  completionCache = map;
   try { await AsyncStorage.setItem(KEY, JSON.stringify(map)); } catch {}
 }
 
@@ -214,17 +224,27 @@ export async function reconcileCompletionFromEpisodes(
 
     if (!sets) sets = await getCompletedSets();
     let watchedNewest = false;
+    let tracked = false; // history exists for this anime under one of its known titles
     for (const tt of rec.titles) {
-      const nums = sets.numbersByTitle.get(animeTitleKey(tt));
+      const tk = animeTitleKey(tt);
+      if (!tk) continue;
+      if (sets.knownTitles.has(tk)) tracked = true;
+      const nums = sets.numbersByTitle.get(tk);
       if (nums && nums.has(newest)) { watchedNewest = true; break; }
     }
-
-    const finished = rec.finished && watchedNewest && newest === rec.lastEpNum;
-    if (rec.lastEpNum === newest && rec.caughtUp === watchedNewest && rec.finished === finished) continue;
+    // Absence of evidence is not evidence of absence: when NO known title has
+    // any tracked history (title drift between sources, or the watched entry
+    // aged out of the history cap), keep the existing badge state instead of
+    // clearing it. This reconciliation runs on every home focus, so a spurious
+    // clear here is what made badges "sometimes disappear". A title that IS
+    // tracked but lacks the number still clears (explicit unmark / new episode).
+    const caughtUp = watchedNewest || (tracked ? false : rec.caughtUp);
+    const finished = rec.finished && caughtUp && newest === rec.lastEpNum;
+    if (rec.lastEpNum === newest && rec.caughtUp === caughtUp && rec.finished === finished) continue;
     map[key] = {
       ...rec,
       lastEpNum: newest,
-      caughtUp: watchedNewest,
+      caughtUp,
       finished,
       updatedAt: Date.now(),
     };
@@ -243,23 +263,40 @@ export async function reconcileCompletionFromEpisodes(
  * called from the player when an episode crosses the "completed" threshold, so
  * the badge updates without reopening the detail page.
  *
- * Only acts when a completion record already exists (the detail page is what
- * establishes the highest-available episode number, `lastEpNum`) AND the
- * just-watched episode is that latest one. It then re-checks AniList for finale
- * status: `finished` when the series is no longer airing, else `caughtUp`.
- * Never downgrades — a non-final episode (epNum < lastEpNum) is a no-op here;
- * the detail page owns the full recompute.
+ * When a record already exists (the detail page / feed reconcile establishes
+ * `lastEpNum`), the just-watched episode must be that latest one before the
+ * record is touched. When NO record exists and the opener told us this is the
+ * last episode (`isLast` — the detail grid passes nextEp="" for the finale),
+ * the player establishes the record itself so the badge appears even though
+ * the detail page was never opened. Never downgrades.
  */
 export async function recordEpisodeWatched(opts: {
   animeHref?: string | null;
   animeTitle?: string | null;
   epNum: number | null;
+  /** The opener knew this was the last available episode. */
+  isLast?: boolean;
 }): Promise<void> {
   if (opts.epNum == null || opts.epNum <= 0) return;
   const map = await getCompletionMap();
-  if (Object.keys(map).length === 0) return;
-  const rec = buildLookup(map).get({ hrefs: [opts.animeHref], titles: [opts.animeTitle] });
-  if (!rec) return;                       // detail page hasn't tracked this anime yet
+  let rec = buildLookup(map).get({ hrefs: [opts.animeHref], titles: [opts.animeTitle] });
+  if (!rec) {
+    if (!opts.isLast) return; // nothing to attach the completion to yet
+    const key = normAnimeKey(opts.animeHref || "") || animeTitleKey(opts.animeTitle);
+    if (!key) return;
+    // `finished` stays false here — the detail page upgrades it with the
+    // AniList airing check on its next visit; the badge shows as caught-up.
+    rec = {
+      key,
+      hrefs: uniq([opts.animeHref]),
+      titles: uniq([opts.animeTitle]),
+      lastEpNum: opts.epNum,
+      caughtUp: false,
+      finished: false,
+      updatedAt: 0,
+    };
+    map[key] = rec;
+  }
   if (opts.epNum < rec.lastEpNum) return; // not the latest available episode
   if (rec.caughtUp && rec.finished) return; // already fully marked
 

@@ -54,7 +54,9 @@ export interface SeasonOption {
 }
 
 const ANILIST_URL = "https://graphql.anilist.co";
-const KITSU_UPCOMING_URL = "https://kitsu.io/api/edge/anime?filter%5Bstatus%5D=upcoming%2Cunreleased&page%5Blimit%5D=20&sort=-userCount&include=mappings&fields%5Banime%5D=canonicalTitle,titles,posterImage,coverImage,subtype,averageRating,episodeCount,status,startDate,userCount,ageRating,mappings&fields%5Bmappings%5D=externalSite,externalId";
+// Kitsu moved from kitsu.io to kitsu.app; the old host no longer answers, so
+// every upcoming fetch used to come back empty (first page from cache only).
+const KITSU_UPCOMING_URL = "https://kitsu.app/api/edge/anime?filter%5Bstatus%5D=upcoming%2Cunreleased&page%5Blimit%5D=20&sort=-userCount&include=mappings&fields%5Banime%5D=canonicalTitle,titles,posterImage,coverImage,subtype,averageRating,episodeCount,status,startDate,userCount,ageRating,mappings&fields%5Bmappings%5D=externalSite,externalId";
 // v2: added `popularity` to the cached shape (powers the Upcoming filter).
 const CACHE_PREFIX = "@anime_catalog_v2:";
 const TTL = 6 * 60 * 60 * 1000; // 6h
@@ -237,7 +239,7 @@ export async function fetchAniListDetail(id: number, kitsuId?: number): Promise<
 
 async function fetchKitsuDetail(kitsuId: number, id: number): Promise<AniListDetail | null> {
   if (!kitsuId) return null;
-  const url = `https://kitsu.io/api/edge/anime/${kitsuId}?include=categories,animeProductions.producer,mediaRelationships.destination`;
+  const url = `https://kitsu.app/api/edge/anime/${kitsuId}?include=categories,animeProductions.producer,mediaRelationships.destination`;
   const res = await fetch(url, { headers: { Accept: "application/vnd.api+json" } }).catch(() => null);
   if (!res?.ok) return null;
   const json = await res.json().catch(() => null);
@@ -279,7 +281,7 @@ async function fetchKitsuDetail(kitsuId: number, id: number): Promise<AniListDet
     startAt: startDateToUnix(a.startDate),
     studios: included.filter((r: any) => r.type === "producers").map((r: any) => r.attributes?.name).filter(Boolean),
     trailerYoutube: a.youtubeVideoId || null,
-    externalLinks: a.slug ? [{ site: "Kitsu", url: `https://kitsu.io/anime/${a.slug}` }] : [],
+    externalLinks: a.slug ? [{ site: "Kitsu", url: `https://kitsu.app/anime/${a.slug}` }] : [],
     relations,
   };
   detailCache.set(id, detail);
@@ -376,15 +378,19 @@ async function collect(query: string, baseVars: Record<string, unknown>, maxPage
   return out;
 }
 
-async function fetchKitsuUpcomingPage(page: number): Promise<CatalogAnime[]> {
+async function fetchKitsuUpcomingPage(page: number): Promise<{ items: CatalogAnime[]; hasNext: boolean }> {
   const seen = new Set<number>();
   const out: CatalogAnime[] = [];
-  // Kitsu treats offset=20 as page one; page two starts at offset=40.
-  const offset = page === 1 ? 0 : page * 20;
+  // JSON:API offset is a plain item offset: page 1 = 0, page 2 = 20. The old
+  // `page * 20` skipped a whole page (20 items) on every load-more.
+  const offset = (page - 1) * 20;
   const url = `${KITSU_UPCOMING_URL}&page%5Boffset%5D=${offset}`;
   const res = await fetch(url, { headers: { Accept: "application/vnd.api+json" } }).catch(() => null);
-  if (!res?.ok) return out;
+  // Throw instead of returning [] so a transient failure isn't mistaken for
+  // "no more pages" (which used to end the list for the rest of the session).
+  if (!res?.ok) throw new Error(`upcoming page ${page}: HTTP ${res?.status ?? "network"}`);
   const json: any = await res.json().catch(() => null);
+  if (!json) throw new Error(`upcoming page ${page}: bad response`);
   const mappings = new Map(
     (json?.included || []).filter((m: any) => m?.type === "mappings").map((m: any) => [String(m.id), m.attributes]),
   );
@@ -413,14 +419,34 @@ async function fetchKitsuUpcomingPage(page: number): Promise<CatalogAnime[]> {
       popularity: typeof a.userCount === "number" ? a.userCount : 0,
     });
   }
-  return out;
+  // Kitsu's own pagination is authoritative: links.next disappears on the last
+  // page, even when this page's entries were all filtered out.
+  return { items: out, hasNext: !!json.links?.next };
 }
 
-/** One page of announced, not-yet-released anime in popularity order. */
+const UPCOMING_CACHE_PREFIX = "@upcoming_pages_v1:";
+
+/** One page of announced, not-yet-released anime in popularity order. Throws
+ *  when the page can't be fetched so the caller keeps pagination alive and can
+ *  retry on the next scroll instead of ending the list. */
 export async function fetchUpcomingAnimePage(page: number, force = false): Promise<{ items: CatalogAnime[]; hasNext: boolean }> {
   const safePage = Math.max(1, Math.floor(page));
-  const items = await loadCatalog(`upcoming-v3-${safePage}`, () => fetchKitsuUpcomingPage(safePage), force);
-  return { items, hasNext: items.length > 0 };
+  if (!force) {
+    try {
+      const raw = await AsyncStorage.getItem(UPCOMING_CACHE_PREFIX + safePage);
+      if (raw) {
+        const parsed: { ts: number; items: CatalogAnime[]; hasNext: boolean } = JSON.parse(raw);
+        if (Date.now() - parsed.ts < TTL && Array.isArray(parsed.items)) {
+          return { items: parsed.items, hasNext: parsed.hasNext };
+        }
+      }
+    } catch {}
+  }
+  const result = await fetchKitsuUpcomingPage(safePage);
+  if (result.items.length > 0) {
+    try { await AsyncStorage.setItem(UPCOMING_CACHE_PREFIX + safePage, JSON.stringify({ ts: Date.now(), ...result })); } catch {}
+  }
+  return result;
 }
 
 export function sortUpcomingAnime(items: CatalogAnime[], mode: "popular" | "soon"): CatalogAnime[] {

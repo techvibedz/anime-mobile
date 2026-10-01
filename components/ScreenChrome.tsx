@@ -13,7 +13,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { C, R, S, TAr } from "../lib/theme";
-import { useSidebar } from "./Sidebar";
+import { useSidebarActions } from "./Sidebar";
 import { t } from "../lib/i18n";
 import { StateView } from "./StateView";
 
@@ -71,7 +71,7 @@ export function ScreenHeader({
   showMenu?: boolean;
 }) {
   const backIcon = I18nManager.isRTL ? "chevron-forward" : "chevron-back";
-  const { openSidebar } = useSidebar();
+  const { openSidebar } = useSidebarActions();
   return (
     <View style={hs.header}>
       <GlassIconButton icon={backIcon} onPress={onBack ?? (() => router.back())} />

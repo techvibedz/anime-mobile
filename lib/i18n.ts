@@ -85,6 +85,7 @@ export const ar = {
 
   // Home
   continueWatching: "تابع المشاهدة",
+  recsForYou: "مقترح لك",
   trendingNow: "الأكثر رواجًا",
   recentlyUpdated: "حلقات جديدة",
   tvSeries: "مسلسلات",
@@ -179,6 +180,10 @@ export const ar = {
   nextEpisode: "الحلقة التالية",
   prevEpisode: "الحلقة السابقة",
   skipIntro: "تخطّي المقدمة",
+  skipOutro: "تخطّي الخاتمة",
+  introSkipped: "تم تخطّي المقدمة",
+  outroSkipped: "تم تخطّي الخاتمة",
+  skip85s: "+85 ثانية",
   resolving: "جاري التحضير…",
   loadingPlayer: "جاري تحميل المشغّل…",
   connecting: "جارٍ الاتصال…",
@@ -316,6 +321,8 @@ export const ar = {
   scopeMyList: "قائمتي فقط",
   settingsAutoplay: "التشغيل التلقائي للحلقة التالية",
   settingsAutoplayDesc: "شغّل الحلقة التالية تلقائيًا عند انتهاء الحالية",
+  settingsAutoSkipIntro: "تخطي الشارة تلقائياً",
+  settingsAutoSkipIntroDesc: "تخطي شارة البداية والنهاية تلقائياً عند توفر التوقيت",
   settingsData: "البيانات والتخزين",
   settingsClearCache: "مسح الذاكرة المؤقتة",
   settingsClearCacheDesc: "يحذف بيانات التصفّح المؤقتة دون التأثير على قائمتك",
@@ -511,6 +518,8 @@ export const ar = {
   wpConnError: "تعذر الاتصال بالغرفة. تحقق من اتصالك.",
   wpNoHost: "تعذر العثور على الغرفة — تأكد من الرمز أو أن المضيف ما زال داخلها.",
   wpStartAnyway: "ابدأ على أي حال",
+  wpInvite: "مشاركة الدعوة",
+  wpInviteText: (code: string) => `انضم إليّ لمشاهدة الأنمي معًا على بانتوفة!\nرمز الغرفة: ${code}`,
 
   // Admin — OTA info section (admin-only, shown in Settings)
   adminOtaSection: "معلومات التحديثات (مشرف)",

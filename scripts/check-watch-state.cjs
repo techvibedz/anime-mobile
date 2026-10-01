@@ -56,6 +56,29 @@ function load(file) {
   assert.equal(Object.values(await c.getCompletionMap())[0].caughtUp, true);
   await c.reconcileCompletionFromEpisodes([{ ...meta, epNum: 13 }]);
   assert.equal(Object.values(await c.getCompletionMap())[0].caughtUp, false, 'new unwatched episode clears badge');
+
+  // Title-key folding: spellings that previously produced different keys must
+  // now produce the same key (Latin diacritics, Arabic hamza/taa-marbuta/
+  // tashkeel, Arabic-Indic digits) — drift between two sources' scrapes.
+  assert.equal(h.animeTitleKey('Café Étoile'), h.animeTitleKey('Cafe Etoile'));
+  assert.equal(h.animeTitleKey('النمر الأسود'), h.animeTitleKey('النمر الاسود'));
+  assert.equal(h.animeTitleKey('مُشاهدة أنمي'), h.animeTitleKey('مشاهدة انمي'));
+  assert.equal(h.animeTitleKey('الموسم ٢'), h.animeTitleKey('الموسم 2'));
+
+  // The player can establish the badge on the finale when no record exists yet
+  // (opened from a rail, detail page never visited) — only when the opener said
+  // this IS the last episode (detail grid passes nextEp="").
+  await c.recordEpisodeWatched({ animeHref: 'https://witanime.you/anime/fresh', animeTitle: 'Fresh Anime', epNum: 1, isLast: true });
+  assert.equal((await c.getCompletionMap())['witanime/anime/fresh']?.caughtUp, true, 'isLast creates the finale badge');
+  await c.recordEpisodeWatched({ animeHref: 'https://witanime.you/anime/other', animeTitle: 'Other Anime', epNum: 5 });
+  assert.equal('witanime/anime/other' in (await c.getCompletionMap()), false, 'non-final watch without a record creates nothing');
+
+  // Drift guard: reconcile must NOT clear the badge when none of the record's
+  // titles have tracked history (title drift / evicted entries) — that spurious
+  // clear made badges "sometimes disappear" on home focus.
+  await c.recordAnimeCompletion({ hrefs: ['https://witanime.you/anime/drifted'], titles: ['Drifted Title'], lastEpNum: 12, caughtUp: true, finished: false });
+  await c.reconcileCompletionFromEpisodes([{ animeHref: 'https://witanime.you/anime/drifted', animeTitle: 'Drifted Title', epNum: 12 }]);
+  assert.equal((await c.getCompletionMap())['witanime/anime/drifted']?.caughtUp, true, 'drifted title keeps the badge');
   stop();
   console.log('Watch history and cold-start completion checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

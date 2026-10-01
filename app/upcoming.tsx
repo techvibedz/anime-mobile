@@ -101,7 +101,6 @@ export default function UpcomingScreen() {
     try {
       const result = await fetchUpcomingAnimePage(nextPage);
       if (genRef.current !== gen) return;
-      if (result.items.length === 0) { hasMoreRef.current = false; return; }
       const current = itemsRef.current || [];
       const seen = new Set(current.map((item) => item.id));
       const fresh = result.items.filter((item) => !seen.has(item.id));
@@ -112,6 +111,9 @@ export default function UpcomingScreen() {
       }
       pageRef.current = nextPage;
       hasMoreRef.current = result.hasNext;
+    } catch {
+      // Failed page — keep hasMore so the next scroll retries instead of
+      // silently ending the list (refresh always works too).
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);

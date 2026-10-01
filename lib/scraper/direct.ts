@@ -362,7 +362,10 @@ export function parseWitCards(html: string): WitCard[] {
     const imageMatch = body.match(/<img[^>]*\bsrc=["']([^"']+)["'][^>]*>/i);
     const title = htmlDecode((titleMatch?.[1] || "").replace(/<[^>]+>/g, ""));
     if (!title || !imageMatch) continue;
-    const badges = [...body.matchAll(/<div[^>]*\btop-2\b[^>]*>([\s\S]*?)<\/div>/gi)]
+    // Type badges sit top-3 in the current layout (top-2 in older cards); the
+    // score badge is also top-3 but its text (a number) never matches the
+    // whitelist below.
+    const badges = [...body.matchAll(/<div[^>]*\btop-(?:2|3)\b[^>]*>([\s\S]*?)<\/div>/gi)]
       .map((m) => htmlDecode(m[1].replace(/<[^>]+>/g, "")));
     const type = badges.find((value) => /^(?:TV|TV Short|OVA|ONA|Special|Music|PV|CM|فيلم)$/i.test(value)) || null;
     seen.add(href);
@@ -407,10 +410,11 @@ export async function fetchWitListingDirect(url: string): Promise<WitCard[] | nu
 /* ── Witanime anime-page recommendation widgets ─────────────────────────────
  * The detail page carries two recommendation sections that the app's Related
  * tab / "you may like" rail are sourced from:
- *   <h2>مقترحة</h2>        — same-franchise / suggested titles (banner cards)
+ *   <h2>ذات صلة</h2>        — same-franchise / suggested titles (banner cards)
  *   <h2>قد يعجبك أيضًا</h2> — "you may also like" (poster grid)
- * Both are plain static anchors with an <h3> + <img>, so the existing card
- * parser handles them once the HTML is sliced to the section. */
+ * Older HTML used the heading مقترحة for the first rail — still parsed as a
+ * fallback. Both are plain static anchors with an <h3> + <img>, so the existing
+ * card parser handles them once the HTML is sliced to the section. */
 
 function witSectionSlice(html: string, heading: RegExp): string {
   const m = heading.exec(html);
@@ -421,9 +425,11 @@ function witSectionSlice(html: string, heading: RegExp): string {
 }
 
 export function parseWitAnimeSections(html: string): { related: WitCard[]; mayLike: WitCard[] } {
+  const slice = (heading: RegExp) => parseWitCards(witSectionSlice(html, heading));
+  const related = slice(/<h2[^>]*>\s*ذات\s*صلة\s*<\/h2>/);
   return {
-    related: parseWitCards(witSectionSlice(html, /<h2[^>]*>\s*مقترحة\s*<\/h2>/)),
-    mayLike: parseWitCards(witSectionSlice(html, /<h2[^>]*>\s*قد\s*يعجبك\s*أيضًا\s*<\/h2>/)),
+    related: related.length > 0 ? related : slice(/<h2[^>]*>\s*مقترحة\s*<\/h2>/),
+    mayLike: slice(/<h2[^>]*>\s*قد\s*يعجبك\s*أيضًا\s*<\/h2>/),
   };
 }
 
@@ -580,13 +586,20 @@ function parseWitHomeAnimes(html: string): WitHomeAnime[] {
   return toWitHomeAnimes(parseWitCards(html));
 }
 
-// Slice one server-rendered home section (from its <h2> heading to the end of
-// its <section>) and parse its cards with the shared card parser.
-function witSectionCards(html: string, heading: string): WitCard[] {
+// Slice one server-rendered home section: from its <h2> heading to the
+// section's closing tag (or the rest of the page if the section never closes).
+function witSectionHtml(html: string, heading: string): string {
   const m = new RegExp(`<h2[^>]*>\\s*${heading}\\s*</h2>`).exec(html);
-  if (!m || m.index == null) return [];
+  if (!m || m.index == null) return "";
   const end = html.indexOf("</section>", m.index);
-  return parseWitCards(end > m.index ? html.slice(m.index, end) : html.slice(m.index));
+  return end > m.index ? html.slice(m.index, end) : html.slice(m.index);
+}
+
+// Slice one server-rendered home section and parse its cards with the shared
+// card parser.
+function witSectionCards(html: string, heading: string): WitCard[] {
+  const section = witSectionHtml(html, heading);
+  return section ? parseWitCards(section) : [];
 }
 
 // The three witanime home rails the app shows below "latest episodes": latest
@@ -604,14 +617,19 @@ export function parseWitHomeRails(html: string): {
   };
 }
 
-// Parse the recent-episode cards (.episodes-card-container). Each block carries
-// the episode link + label, a thumbnail, and the parent anime's title + URL.
-function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
+// Parse the recent-episode cards from the "أحدث الحلقات" (latest episodes)
+// rail. The home page also renders an "الأكثر مشاهدة" (most-watched) rail of
+// /watch/ links BEFORE it, whose episodes are popularity-ranked and often from
+// earlier weeks — scanning the whole page mixed those into the new-episodes
+// feed. Scope the scan to the latest rail's <section>; legacy cached HTML
+// without the heading keeps the old whole-page behavior.
+export function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
   const out: WitHomeEpisode[] = [];
   const seen = new Set<string>();
   const currentRe = /<a\b[^>]*href=["']([^"']*\/watch\/([^"']+?)\/(\d+))["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const scope = witSectionHtml(html, "أحدث الحلقات") || html;
   let current: RegExpExecArray | null;
-  while ((current = currentRe.exec(html))) {
+  while ((current = currentRe.exec(scope))) {
     const href = htmlDecode(current[1]);
     const slug = current[2];
     const number = parseInt(current[3], 10);
@@ -630,7 +648,7 @@ function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
       isNew: true,
     });
   }
-  const blocks = html.split("episodes-card-container");
+  const blocks = scope.split("episodes-card-container");
   for (let i = 1; i < blocks.length; i++) {
     const b = blocks[i];
     const epM = b.match(/episodes-card-title[^>]*>\s*<h3[^>]*>\s*<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
@@ -658,7 +676,10 @@ function parseWitHomeEpisodes(html: string): WitHomeEpisode[] {
 // so the caller falls back to the WebView home scrape.
 export async function fetchWitHomeDirect(): Promise<WitHome | null> {
   const base = await getWitBase();
-  const html = await fetchHtml(base + "/", base + "/");
+  // Single short attempt: a WebView fallback follows immediately, so a
+  // 3-attempt/48s retry chain (same CF block would fail all three) only makes
+  // the home screen wait longer before trying the path that actually works.
+  const html = await fetchHtml(base + "/", base + "/", [7000]);
   if (!html) return null;
   const animes = parseWitHomeAnimes(html);
   const episodes = parseWitHomeEpisodes(html);
@@ -2303,20 +2324,40 @@ function parseA3rbEpisodesFromTitle(html: string, slug: string): A3rbEpisode[] {
 // across `leading-loose text-justify` paragraphs (the page renders a collapsed
 // first-paragraph copy plus a full copy under an Alpine toggle), so collect
 // every distinct paragraph and join them. Returns "" when none are found.
-function parseA3rbSynopsis(html: string): string {
+export function parseA3rbSynopsis(html: string): string {
   // CRUCIAL: scope to the story block only. anime3rb reuses the
   // `leading-loose text-justify` paragraph class for the cards in its
   // "related works" / seasons grid (genres + season + year + rating + episode
   // count + a synopsis snippet each). A page-wide scan swept those in and the
   // detail page showed a wall of per-season blocks instead of the real story.
   // The story lives in the default-visible block `<div … x-show="! summary">`;
-  // its sibling `x-show="summary"` is the short version and the toggle button
-  // follows — slice between them so only the real summary paragraphs match.
+  // its sibling `x-show="summary"` is a short re-telling of the SAME story.
+  // Find the story div's own closing tag by walking <div> depth. The old
+  // "next marker or +8000 chars" scope overshot on pages whose toggle markup
+  // changed (both markers missing, e.g. Bleach: Kashin-tan), sweeping the
+  // short version / grid text in right after the real story.
   const start = html.indexOf('x-show="! summary"');
-  if (start < 0) return ""; // structure changed → caller falls back to og:description
-  let end = html.indexOf('x-show="summary"', start);
-  if (end < 0) end = html.indexOf("summary = ! summary", start);
-  const scope = html.slice(start, end > start ? end : start + 8000);
+  if (start < 0) return ""; // structure changed → caller leaves the synopsis empty
+  const openEnd = html.indexOf(">", start);
+  if (openEnd < 0) return "";
+  let scopeEnd = -1;
+  {
+    const tagRe = /<\/?div\b[^>]*>/gi;
+    tagRe.lastIndex = openEnd + 1;
+    let depth = 1;
+    let t: RegExpExecArray | null;
+    while ((t = tagRe.exec(html))) {
+      depth += t[0].charAt(1) === "/" ? -1 : 1;
+      if (depth === 0) { scopeEnd = t.index; break; }
+    }
+  }
+  if (scopeEnd < 0) {
+    // Malformed nesting — keep the old conservative cap.
+    let markerEnd = html.indexOf('x-show="summary"', openEnd);
+    if (markerEnd < 0) markerEnd = html.indexOf("summary = ! summary", openEnd);
+    scopeEnd = markerEnd > openEnd ? markerEnd : Math.min(html.length, openEnd + 8000);
+  }
+  const scope = html.slice(openEnd + 1, scopeEnd);
   const re = /<p[^>]*class=["'][^"']*leading-loose[^"']*text-justify[^"']*["'][^>]*>([\s\S]*?)<\/p>/gi;
   let m: RegExpExecArray | null;
   const seen = new Set<string>();
@@ -2325,14 +2366,50 @@ function parseA3rbSynopsis(html: string): string {
   // smells like a listing/card row — a rating label ("التقييم"), an episode
   // count ("N حلقات"), or an air-season+year badge ("صيف 1998"). This guarantees
   // a layout change can never leak the seasons/related grid into the synopsis.
+  // Once one card paragraph is seen, STOP: the grid runs in groups, and the
+  // paragraphs that follow a card meta are the card DESCRIPTIONS (the same
+  // story re-told per season) — keeping them made the detail page show "the
+  // description repeated in another format" right after the real story.
   const JUNK = /التقييم|\d+\s*حلقات|(?:صيف|شتاء|ربيع|خريف)\s*\d{4}/;
   while ((m = re.exec(scope))) {
-    const txt = htmlDecode(m[1].replace(/<[^>]+>/g, ""));
-    if (!txt || seen.has(txt) || JUNK.test(txt)) continue;
+    const txt = htmlDecode(m[1].replace(/<[^>]+>/g, "")).trim();
+    if (!txt || seen.has(txt)) continue;
+    if (JUNK.test(txt)) break;
     seen.add(txt);
     parts.push(txt);
   }
   return parts.join("\n\n");
+}
+
+// Genres: anime3rb links them under /genres/<name> (best-effort). SCOPE: the
+// page reuses the same /genre/ markup inside the "اعمال ذات صلة" carousel's
+// cards, and a card's genre span sits inside an <a> that wraps the card's
+// season/year, rating and episode-count badges AND its synopsis paragraph —
+// so a page-wide match captured "كوميدي … ربيع 2016 … التقييم 6.92 11 حلقات
+// <full synopsis>" up to the card's </a>. The detail screen rendered each
+// capture as a genre chip, which showed up as "the description repeated in
+// another format" under the real genres. Only look ABOVE the related-works
+// carousels, and reject any capture that is not a short genre name.
+export function parseA3rbGenres(html: string): string[] {
+  const relatedAt = (() => {
+    const marks = ['li class="glide__slide"', "اعمال ذات صلة", "أعمال ذات صلة", "أنميات مشابهة", "أنمي مشابه"];
+    let cut = -1;
+    for (const mk of marks) {
+      const i = html.indexOf(mk);
+      if (i >= 0 && (cut < 0 || i < cut)) cut = i;
+    }
+    return cut >= 0 ? cut : html.length;
+  })();
+  const scope = html.slice(0, relatedAt);
+  const genres: string[] = [];
+  const seenG = new Set<string>();
+  const gre = /\/genres?\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let gm: RegExpExecArray | null;
+  while ((gm = gre.exec(scope)) && genres.length < 12) {
+    const g = htmlDecode(gm[1].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+    if (g && g.length <= 40 && !/[.!؟،]/.test(g) && !seenG.has(g)) { seenG.add(g); genres.push(g); }
+  }
+  return genres;
 }
 
 // Scrape a full anime3rb anime page (detail + episodes). Returns null on a
@@ -2359,15 +2436,7 @@ export async function scrapeAnime3rbTitlePage(titleUrl: string): Promise<A3rbDet
   // hides the synopsis) than to display the boilerplate.
   const synopsis = parseA3rbSynopsis(html);
 
-  // Genres: anime3rb links them under /genres/<name> (best-effort).
-  const genres: string[] = [];
-  const seenG = new Set<string>();
-  const gre = /\/genres?\/[^"']+["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let gm: RegExpExecArray | null;
-  while ((gm = gre.exec(html)) && genres.length < 12) {
-    const g = htmlDecode(gm[1].replace(/<[^>]+>/g, ""));
-    if (g && !seenG.has(g)) { seenG.add(g); genres.push(g); }
-  }
+  const genres = parseA3rbGenres(html);
 
   const episodes = parseA3rbEpisodesFromTitle(html, slug);
   return { title, poster, synopsis, genres, episodes };

@@ -4,7 +4,7 @@
 // anime detail page directly (no AniList, no per-tap resolution). Mirrors the
 // seasons screen's grid structure.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View, Text, FlatList, RefreshControl, ActivityIndicator, StyleSheet,
 } from "react-native";
@@ -56,7 +56,29 @@ export default function PopularScreen() {
 
   const onRefresh = useCallback(() => { setRefreshing(true); setItems(null); load(); }, [load]);
 
-  const data = items ?? [];
+  // Stable card objects + renderItem: toCard used to allocate a new object on
+  // every render, so CatalogCard's memo never hit and every mounted card
+  // re-rendered on any parent state change (online status, refresh, resize).
+  const data = useMemo(() => (items ?? []).map(toCard), [items]);
+  const renderItem = useCallback(
+    ({ item }: { item: CatalogCardData }) => (
+      <CatalogCard
+        item={item}
+        width={cards.cardWidth}
+        layout={cards.layout}
+        onPress={() => { if (item.href) router.push(`/anime/${encodeURIComponent(item.href)}`); }}
+      />
+    ),
+    [cards.cardWidth, cards.layout],
+  );
+  const listHeader = useMemo(
+    () => (
+      <View style={s.listHead}>
+        <Text style={s.listHeadCount}>{t.scheduleCount(data.length)}</Text>
+      </View>
+    ),
+    [data.length],
+  );
 
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
@@ -82,20 +104,9 @@ export default function PopularScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
           }
-          ListHeaderComponent={
-            <View style={s.listHead}>
-              <Text style={s.listHeadCount}>{t.scheduleCount(data.length)}</Text>
-            </View>
-          }
+          ListHeaderComponent={listHeader}
           ListEmptyComponent={<OfflineNotice offline={online === false} onRetry={onRefresh} />}
-          renderItem={({ item }) => (
-            <CatalogCard
-              item={toCard(item)}
-              width={cards.cardWidth}
-              layout={cards.layout}
-              onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
-            />
-          )}
+          renderItem={renderItem}
         />
       )}
     </View>

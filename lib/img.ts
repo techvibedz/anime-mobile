@@ -34,6 +34,20 @@ export function buildPhotonUrl(src: string, targetPx: number, maxPx = 800): stri
   return `https://i0.wp.com/${u.hostname}${u.pathname}?w=${bucketPx(targetPx, maxPx)}&quality=75&strip=all&ssl=1`;
 }
 
+// posterUrl runs inside card render for every visible card on every render —
+// new URL() + PixelRatio.get() per call added up during scrolls. The mapping is
+// pure and small (src × width bucket), so memoize it. PixelRatio is read once,
+// lazily (lazy require keeps this module importable in node tests without RN).
+const posterUrlCache = new Map<string, string>();
+let dprCache: number | null = null;
+function devicePixelRatio(): number {
+  if (dprCache === null) {
+    try { dprCache = Math.min(require("react-native").PixelRatio.get() || 2, 2); }
+    catch { dprCache = 2; }
+  }
+  return dprCache;
+}
+
 /**
  * Poster URL sized for a `width`-dp display slot. Caps device pixel ratio at 2×
  * (a 2:3 poster gains nothing from 3× density). Returns undefined for empty input,
@@ -42,7 +56,11 @@ export function buildPhotonUrl(src: string, targetPx: number, maxPx = 800): stri
 export function posterUrl(src?: string | null, width?: number, maxPx = 800): string | undefined {
   if (!src) return undefined;
   if (!width) return src;
-  // Lazy require so pure helpers stay importable in node (tests) without RN.
-  const dpr = Math.min(require("react-native").PixelRatio.get() || 2, 2);
-  return buildPhotonUrl(src, Math.ceil(width * dpr), maxPx);
+  const key = `${src}|${width}|${maxPx}`;
+  const hit = posterUrlCache.get(key);
+  if (hit !== undefined) return hit;
+  const out = buildPhotonUrl(src, Math.ceil(width * devicePixelRatio()), maxPx);
+  if (posterUrlCache.size > 2000) posterUrlCache.clear();
+  posterUrlCache.set(key, out);
+  return out;
 }

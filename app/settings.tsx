@@ -20,6 +20,8 @@ import {
   setNotificationsEnabled,
   getAutoplayNext,
   setAutoplayNext,
+  getAutoSkipIntro,
+  setAutoSkipIntro,
   getNotificationScope,
   setNotificationScope,
   clearContentCache,
@@ -55,6 +57,7 @@ export default function SettingsScreen() {
   const admin = isAdmin(user?.email);
   const [notifs, setNotifs] = useState(true);
   const [autoplay, setAutoplay] = useState(true);
+  const [autoSkip, setAutoSkip] = useState(false);
   const [scope, setScope] = useState<NotificationScope>("all");
   const [permGranted, setPermGranted] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -68,6 +71,7 @@ export default function SettingsScreen() {
     useCallback(() => {
       getNotificationsEnabled().then(setNotifs);
       getAutoplayNext().then(setAutoplay);
+      getAutoSkipIntro().then(setAutoSkip);
       getNotificationScope().then(setScope);
       hasNotificationPermission().then(setPermGranted);
     }, []),
@@ -124,6 +128,11 @@ export default function SettingsScreen() {
   const toggleAutoplay = useCallback(async (value: boolean) => {
     setAutoplay(value);
     await setAutoplayNext(value);
+  }, []);
+
+  const toggleAutoSkip = useCallback(async (value: boolean) => {
+    setAutoSkip(value);
+    await setAutoSkipIntro(value);
   }, []);
 
   const onClearCache = useCallback(async () => {
@@ -259,6 +268,15 @@ export default function SettingsScreen() {
             desc={t.settingsAutoplayDesc}
             value={autoplay}
             onChange={toggleAutoplay}
+          />
+          <Divider />
+          <ToggleRow
+            icon="play-skip-forward-outline"
+            tint={C.cyan}
+            title={t.settingsAutoSkipIntro}
+            desc={t.settingsAutoSkipIntroDesc}
+            value={autoSkip}
+            onChange={toggleAutoSkip}
           />
         </View>
 

@@ -22,6 +22,9 @@
 # SAFETY: only republish JS that is compatible with the OLD native binaries.
 # If this update needs a native API the old APK doesn't have, it will CRASH that
 # old install — push those users to the APK download prompt instead (version.json).
+# ⚠ SDK 57 (3.4.3) JS does NOT run on the SDK 54 runtimes (3.4.2 and older):
+# publishing to them would crash those installs. Use RECENT_RUNTIMES=1 until
+# those runtimes are retired or rebuilt on SDK 57.
 set -euo pipefail
 
 MSG="${1:-OTA update}"
@@ -86,9 +89,18 @@ CURRENT_RUNTIME=$(node -e "try{console.log(require('./app.json').expo.version)}c
 # (OTA_RUNTIME unset) — that reaches installs built from the current tree.
 # Then we republish to the discovered runtimes so older APKs get the same JS.
 for BRANCH in $BRANCHES; do
+  # Non-interactive runs (CI, piped shells) REQUIRE --environment and reject
+  # the all-platform export (web bundling fails on the AppLovin native module),
+  # so pin Android and map the branch to an environment. The project has no
+  # server-side env vars (Supabase config has baked-in fallbacks), any valid
+  # environment name works.
+  ENVIRONMENT=production
+  if [ "$BRANCH" = "preview" ] || [ "$BRANCH" = "staging" ]; then
+    ENVIRONMENT=preview
+  fi
   echo ""
   echo ">> Publishing to current runtime on branch '$BRANCH'"
-  eas update --branch "$BRANCH" --message "$MSG"
+  eas update --branch "$BRANCH" --message "$MSG" --platform android --environment "$ENVIRONMENT"
 
   for RT in $RUNTIMES; do
     if [ -n "$CURRENT_RUNTIME" ] && [ "$RT" = "$CURRENT_RUNTIME" ]; then
@@ -96,7 +108,7 @@ for BRANCH in $BRANCHES; do
       continue
     fi
     echo ">> Republishing to runtime $RT on branch '$BRANCH'"
-    OTA_RUNTIME="$RT" eas update --branch "$BRANCH" --message "$MSG (runtime $RT)"
+    OTA_RUNTIME="$RT" eas update --branch "$BRANCH" --message "$MSG (runtime $RT)" --platform android --environment "$ENVIRONMENT"
   done
 done
 

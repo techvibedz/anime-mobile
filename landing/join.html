@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>دعوة مشاهدة مشتركة — بانتوفة</title>
+  <meta name="robots" content="noindex" />
+  <meta name="theme-color" content="#0A0A0B" />
+  <link rel="icon" href="./assets/favicon.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;900&family=Outfit:wght@500;600;700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+
+  <style>
+    .join { position: relative; z-index: 2; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 40px 20px; text-align: center; }
+    .join__logo { width: 76px; height: 76px; border-radius: 22px; box-shadow: 0 16px 40px rgba(0, 0, 0, .5); }
+    .join__kicker { font-family: Outfit, sans-serif; font-weight: 700; letter-spacing: 2px; color: #FF5A2C; font-size: 13px; text-transform: uppercase; }
+    .join__title { font-family: Cairo, sans-serif; font-weight: 900; font-size: 30px; color: #F4F1EA; margin: 0; }
+    .join__code { font-family: Outfit, sans-serif; font-weight: 900; font-size: 44px; letter-spacing: 10px; color: #FF5A2C; background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .09); border-radius: 18px; padding: 14px 30px; }
+    .join__hint { font-family: Cairo, sans-serif; color: rgba(244, 241, 234, .65); font-size: 15px; line-height: 1.9; max-width: 430px; margin: 0; }
+    .join__err { font-family: Cairo, sans-serif; color: #FF6B6B; font-size: 16px; max-width: 430px; }
+    .join .btn { min-width: 260px; justify-content: center; }
+  </style>
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-blobs" aria-hidden="true">
+    <span class="blob blob--violet"></span>
+    <span class="blob blob--cyan"></span>
+    <span class="blob blob--magenta"></span>
+  </div>
+
+  <main class="join">
+    <img src="./assets/logo.png" alt="بانتوفة" class="join__logo" />
+    <span class="join__kicker">Pantoufa Watch Party</span>
+    <h1 class="join__title">دعوة لمشاهدة مشتركة</h1>
+    <p class="join__hint" id="joinHint">جارٍ قراءة رمز الغرفة…</p>
+    <div class="join__code" id="codeBox" style="display:none"></div>
+    <a class="btn btn--primary btn--lg" id="openBtn" href="#" style="display:none">
+      <span>افتح في بانتوفة</span>
+    </a>
+    <p class="join__hint" id="downloadHint" style="display:none">التطبيق غير مثبّت؟ حمّله ثم افتح الرابط من جديد، أو أدخل الرمز يدويًا في شاشة «المشاهدة المشتركة».</p>
+    <a class="btn btn--ghost" href="https://github.com/techvibedz/anime-mobile/releases/latest">تحميل بانتوفة</a>
+  </main>
+
+  <script>
+    (function () {
+      var FALLBACK = "https://github.com/techvibedz/anime-mobile/releases/latest";
+      var code = (new URLSearchParams(location.search).get("code") || "").trim().toUpperCase();
+      // Same unambiguous alphabet as the app (genCode in lib/watchPartySync.ts).
+      var valid = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4,8}$/.test(code);
+      var hint = document.getElementById("joinHint");
+      var box = document.getElementById("codeBox");
+      var openBtn = document.getElementById("openBtn");
+      var downloadHint = document.getElementById("downloadHint");
+
+      if (!valid) {
+        hint.className = "join__err";
+        hint.textContent = "الرابط لا يحتوي رمز غرفة صالحًا. اطلب من صديقك إرسال دعوة جديدة.";
+        return;
+      }
+
+      box.textContent = code;
+      box.style.display = "block";
+      hint.textContent = "سيتم الانضمام تلقائيًا إلى غرفة صديقك عند فتح التطبيق.";
+      downloadHint.style.display = "block";
+
+      // Android intent: opens the app straight into the room. If the app is
+      // not installed, Chrome follows S.browser_fallback_url to the release
+      // page instead of showing an error.
+      var intent = "intent://watch-party?code=" + code +
+        "#Intent;scheme=anime-mobile;package=com.anime.mobile" +
+        ";S.browser_fallback_url=" + encodeURIComponent(FALLBACK) + ";end";
+      openBtn.href = intent;
+      openBtn.style.display = "inline-flex";
+
+      // One tap is the whole point of an invite — go straight in on Android.
+      if (/Android/i.test(navigator.userAgent)) {
+        setTimeout(function () { if (!document.hidden) location.href = intent; }, 900);
+      }
+    })();
+  </script>
+</body>
+</html>

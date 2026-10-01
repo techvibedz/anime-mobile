@@ -7,9 +7,10 @@ import {
   Pressable,
   TextInput,
   ActivityIndicator,
+  Share,
 } from "react-native";
 import { Image } from "expo-image";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -23,10 +24,13 @@ import {
   subscribeMembers,
   subscribeState,
   subscribeStatus,
+  getRoom,
   type PartyConnStatus,
   type PartyMember,
   type PartyRole,
 } from "../lib/watchParty";
+import { normalizePartyCode, partyInviteLink } from "../lib/watchPartySync";
+import { setPendingInvite, takePendingInvite } from "../lib/partyInvite";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
@@ -84,6 +88,27 @@ export default function WatchPartyScreen() {
   useEffect(() => subscribeMembers(setMembers), []);
   useEffect(() => subscribeStatus(setConn), []);
 
+  // Invite links — the ?code= may arrive while signed out (AuthGate sends the
+  // user through sign-in and back here). Stash it, then auto-join once auth is
+  // ready. A code that arrives while already in a room is ignored (the room
+  // you're hosting wins; leave first to accept an invite).
+  const { code: codeParam } = useLocalSearchParams<{ code?: string }>();
+  const inviteCode = Array.isArray(codeParam) ? codeParam[0] : codeParam;
+  useEffect(() => {
+    if (inviteCode) setPendingInvite(inviteCode);
+  }, [inviteCode]);
+  useEffect(() => {
+    if (!ready || !user) return;
+    let alive = true;
+    void (async () => {
+      if (getRoom()) { await takePendingInvite(); return; }
+      const invite = await takePendingInvite();
+      if (!alive || !invite) return;
+      try { await joinRoom(invite, user); } catch { if (alive) setErr(t.wpInvalidCode); }
+    })();
+    return () => { alive = false; };
+  }, [ready, user?.id]);
+
   // A client whose room has no host (wrong code, host left / app killed) used
   // to sit on the "host is picking" spinner FOREVER. Once the channel is
   // online, give presence a short grace to sync, then say so out loud.
@@ -119,12 +144,21 @@ export default function WatchPartyScreen() {
 
   const onJoin = useCallback(async () => {
     if (!user) { setErr(t.wpSignInRequired); return; }
-    const code = codeInput.trim().toUpperCase();
+    // Heals pasted invite links: pulls the code out of a URL/message, falls
+    // back to the raw typed input for anything else.
+    const code = normalizePartyCode(codeInput) ?? codeInput.trim().toUpperCase();
     if (code.length < 4) { setErr(t.wpInvalidCode); return; }
     setBusy(true); setErr(null);
     try { await joinRoom(code, user); } catch { setErr(t.wpInvalidCode); }
     setBusy(false);
   }, [user, codeInput]);
+
+  const onShare = useCallback(() => {
+    if (!roomInfo) return;
+    void Share.share({
+      message: `${t.wpInviteText(roomInfo.code)}\n${partyInviteLink(roomInfo.code)}`,
+    }).catch(() => {});
+  }, [roomInfo]);
 
   const onLeave = useCallback(async () => { await leaveRoom(); }, []);
 
@@ -151,7 +185,13 @@ export default function WatchPartyScreen() {
               <Text style={s.codeLabel}>{t.wpRoomCode}</Text>
               <Text style={s.codeText}>{roomInfo.code}</Text>
               {roomInfo.role === "host" ? (
-                <Text style={s.codeHint}>{t.wpShareHint}</Text>
+                <>
+                  <Text style={s.codeHint}>{t.wpShareHint}</Text>
+                  <Pressable style={s.shareBtn} onPress={onShare}>
+                    <Ionicons name="share-social-outline" size={16} color={C.black} />
+                    <Text style={s.shareBtnText}>{t.wpInvite}</Text>
+                  </Pressable>
+                </>
               ) : (
                 <Text style={s.codeHint}>{t.wpHostPicking}</Text>
               )}
@@ -221,12 +261,15 @@ export default function WatchPartyScreen() {
               <TextInput
                 style={s.codeInput}
                 value={codeInput}
-                onChangeText={(v) => setCodeInput(v.toUpperCase())}
+                onChangeText={(v) => {
+                  const extracted = normalizePartyCode(v);
+                  setCodeInput(extracted && extracted !== v.trim().toUpperCase() ? extracted : v.toUpperCase());
+                }}
                 placeholder={t.wpJoinPlaceholder}
                 placeholderTextColor={C.textMuted}
                 autoCapitalize="characters"
                 autoCorrect={false}
-                maxLength={6}
+                maxLength={200}
                 textAlign="center"
               />
               <Pressable style={[s.joinBtn, busy && { opacity: 0.6 }]} onPress={onJoin} disabled={busy}>
@@ -254,6 +297,12 @@ const s = StyleSheet.create({
   codeLabel: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_600SemiBold" },
   codeText: { color: C.accent, fontSize: 40, letterSpacing: 5, fontFamily: "Outfit_700Bold", marginTop: 12 },
   codeHint: { color: C.textMuted, fontSize: 12, marginTop: 10, textAlign: "center", fontFamily: "Cairo_500Medium" },
+
+  shareBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: 16, height: 44, paddingHorizontal: 22, borderRadius: R.md, backgroundColor: C.accent,
+  },
+  shareBtnText: { color: C.black, fontSize: 14, fontFamily: "Cairo_700Bold" },
 
   waitRow: { flexDirection: "row-reverse", alignItems: "center", marginTop: 22, marginBottom: 4 },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.success, marginLeft: 8 },

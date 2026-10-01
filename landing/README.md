@@ -7,6 +7,8 @@ Anime hero art generated with Higgsfield (soul_2).
 - `index.html` — markup
 - `styles.css` — all styling + animations
 - `app.js` — particles, scroll reveal, tilt, and **live auto-update**
+- `join.html` — watch-party invite landing (reads `?code=`, deep-links into the
+  app via `intent://` with a release-page fallback, download CTA)
 - `assets/` — `logo.png`, `favicon.png`, `hero.jpg`
 
 ## Live auto-update (no redeploy on new versions)

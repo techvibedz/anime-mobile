@@ -23,6 +23,13 @@ import {
   buildRelations,
   collectFranchise,
   formatCat,
+  scoreRelatedMatch,
+  relatedSeasonNum,
+  relatedNumberedSeasonVariants,
+  aniListLookupTitles,
+  aniListLookupWaves,
+  sourceCandidateNames,
+  scoreEntryAgainstNames,
   type AniListMedia,
 } from "./relations";
 
@@ -320,6 +327,80 @@ test("collectFranchise with no extra fetches equals one-hop relations", async ()
   const walked = await collectFranchise(GRAPH[1], "Saga", fetchById, { maxFetch: 0 });
   const oneHop = buildRelations(GRAPH[1], "Saga");
   assert.deepEqual(walked.map((r) => r.anilistId), oneHop.map((r) => r.anilistId));
+});
+
+/* ── source-resolution scoring (Related tab + For You rail) ── */
+
+test("scoreRelatedMatch: exact and containment tiers", () => {
+  assert.equal(scoreRelatedMatch("Naruto", "Naruto"), 100);
+  assert.ok(scoreRelatedMatch("Naruto", "Naruto Shippuden") >= 82);
+  assert.ok(scoreRelatedMatch("One Piece", "The One Piece Movie") >= 70);
+});
+
+test("scoreRelatedMatch: season mismatch is punished, never the base series", () => {
+  const same = scoreRelatedMatch("Saga Season 2", "Saga Season 2");
+  const base = scoreRelatedMatch("Saga Season 2", "Saga");
+  assert.ok(same > base, "season-matching candidate must outscore the base series");
+  assert.ok(base < same - 20, "base-series score must carry the harsh mismatch penalty");
+});
+
+test("relatedSeasonNum: explicit markers win, bare trailing digits only when expected", () => {
+  assert.equal(relatedSeasonNum("Shiguang Dailiren 3", 3), 3);
+  assert.equal(relatedSeasonNum("Shiguang Dailiren 3", 0), 0); // no expected season → not a season
+  assert.equal(relatedSeasonNum("Saga Season 4"), 4);
+  // "Jujutsu Kaisen 0" must never read as season 0 / season number.
+  assert.equal(relatedSeasonNum("Jujutsu Kaisen 0", 2), 0);
+});
+
+test("relatedNumberedSeasonVariants synthesizes source-search variants", () => {
+  const variants = relatedNumberedSeasonVariants("Shiguang Dailiren III");
+  assert.ok(variants.includes("shiguang dailiren 3"));
+  assert.ok(variants.includes("shiguang dailiren Season 3"));
+  assert.deepEqual(relatedNumberedSeasonVariants("Naruto"), []);
+});
+
+/* ── AniList entry → search waves (tap resolution speed) ── */
+
+test("aniListLookupTitles: romaji, English and derived season variants, deduped", () => {
+  const titles = aniListLookupTitles({ title: "Shiguang Dailiren III", titleEnglish: "Link Click 3" });
+  assert.equal(titles[0], "Shiguang Dailiren III");
+  assert.ok(titles.includes("Link Click 3"), "English name missing");
+  assert.ok(titles.includes("shiguang dailiren 3"), "bare-number season variant missing");
+  assert.ok(titles.includes("shiguang dailiren Season 3"), "Season-N variant missing");
+  assert.equal(new Set(titles.map((t) => t.toLowerCase())).size, titles.length, "duplicates present");
+});
+
+test("aniListLookupWaves: Jikan names start in the alternate wave, not the primary", () => {
+  const { primary, alternate } = aniListLookupWaves(
+    { title: "Naruto", titleEnglish: "Naruto" },
+    ["NARUTO", "Naruto Shippuuden", "Naruto: Shippuden"],
+  );
+  assert.deepEqual(primary, ["Naruto"]);
+  assert.ok(!alternate.some((q) => q.toLowerCase() === "naruto"), "primary leaked into alternate");
+  assert.ok(alternate.includes("Naruto Shippuuden"));
+  assert.ok(alternate.includes("Naruto: Shippuden"));
+});
+
+test("aniListLookupWaves respects caps so one tap cannot flood the sources", () => {
+  const alts = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
+  const { primary, alternate } = aniListLookupWaves({ title: "Show" }, alts, { primary: 1, alternate: 2 });
+  assert.deepEqual(primary, ["Show"]);
+  assert.equal(alternate.length, 2);
+});
+
+/* ── Source-result matching (title + slug, cross-verification input) ── */
+
+test("sourceCandidateNames tries the URL slug alongside the title", () => {
+  const names = sourceCandidateNames({ title: "قاتل الشياطين", href: "https://anime3rb.com/titles/kimetsu-no-yaiba" });
+  assert.ok(names.includes("قاتل الشياطين"));
+  assert.ok(names.includes("kimetsu no yaiba"), "Latin slug missing");
+});
+
+test("scoreEntryAgainstNames matches Arabic-titled results through their Latin slug", () => {
+  const names = sourceCandidateNames({ title: "قاتل الشياطين", href: "https://anime3rb.com/titles/kimetsu-no-yaiba" });
+  const { score, matchName } = scoreEntryAgainstNames({ title: "Kimetsu no Yaiba" }, names);
+  assert.equal(score, 100);
+  assert.equal(matchName, "kimetsu no yaiba");
 });
 
 /* ── summary ── */

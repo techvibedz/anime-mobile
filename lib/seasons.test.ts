@@ -39,10 +39,12 @@ globalThis.fetch = (async (input) => {
       { id: "32978", type: "mediaRelationships", attributes: { role: "prequel" }, relationships: { destination: { data: { type: "anime", id: "42951" } } } },
     ],
   }), { status: 200, headers: { "Content-Type": "application/vnd.api+json" } });
-  if (url.includes("page%5Boffset%5D=40")) return new Response(JSON.stringify({ data: [], included: [] }), {
+  if (url.includes("page%5Boffset%5D=20")) return new Response(JSON.stringify({ data: [], included: [], links: { next: null } }), {
     status: 200,
     headers: { "Content-Type": "application/vnd.api+json" },
   });
+  // A failed page must THROW, not read as "no more items".
+  if (url.includes("page%5Boffset%5D=40")) return new Response("", { status: 500 });
   return new Response(JSON.stringify({
     data: [{
       id: "45666",
@@ -65,7 +67,7 @@ globalThis.fetch = (async (input) => {
       id: "313567",
       attributes: { externalSite: "anilist/anime", externalId: "143103" },
     }],
-    links: { next: null },
+    links: { next: "https://kitsu.app/api/edge/anime?page%5Boffset%5D=20" },
   }), { status: 200, headers: { "Content-Type": "application/vnd.api+json" } });
 }) as typeof fetch;
 
@@ -108,6 +110,9 @@ async function main() {
     const lastPage = await fetchUpcomingAnimePage(2);
     assert.equal(lastPage.hasNext, false);
     assert.deepEqual(lastPage.items, []);
+    // Page 2 must request offset 20 (item offset), not page*20=40 which
+    // skipped a whole page.
+    assert(calls[1].includes("page%5Boffset%5D=20"));
     const detail = await fetchAniListDetail(143103, 45666);
     assert.equal(calls.length, 4);
     assert.equal(detail?.description, "A detailed synopsis.");
@@ -123,6 +128,7 @@ async function main() {
       format: "TV",
       relation: "PREQUEL",
     });
+    await assert.rejects(() => fetchUpcomingAnimePage(3), /HTTP 500/);
     console.log("seasons fallback tests passed");
   } finally {
     globalThis.fetch = originalFetch;

@@ -26,7 +26,8 @@ import { saveProgress, getProgress } from "../../lib/history";
 import { recordEpisodeWatched } from "../../lib/completion";
 import { getDownloadByEpisode, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
 import { DownloadPicker } from "../../components/DownloadPicker";
-import { getAutoplayNext } from "../../lib/settings";
+import { getAutoplayNext, getAutoSkipIntro } from "../../lib/settings";
+import { getEpisodeSkipTimes, activeSkipInterval, type EpisodeSkipTimes, type ActiveSkip } from "../../lib/aniskip";
 import { maybeShowInterstitial } from "../../lib/ads";
 import { useAuth } from "../../lib/auth";
 import { useWatchPartySync, createRoom } from "../../lib/watchParty";
@@ -36,6 +37,7 @@ import { useReducedMotion } from "../../lib/motion";
 import {
   bufferAheadSeconds,
   createGenerationGuard,
+  episodeNumberFromUrl,
   providerFailureMode,
   providerRank,
   providerSupportsAdaptivePlayback,
@@ -373,7 +375,32 @@ export default function WatchScreen() {
   const partyPulseRef = useRef<(playing?: boolean) => void>(() => {});
 
   // Load the autoplay preference once; reset the per-episode guard on change.
-  useEffect(() => { getAutoplayNext().then((v) => { autoplayRef.current = v; }); }, []);
+  useEffect(() => {
+    getAutoplayNext().then((v) => { autoplayRef.current = v; });
+    getAutoSkipIntro().then((v) => { autoSkipIntroRef.current = v; });
+  }, []);
+
+  // AniSkip states & Auto-Skip preferences
+  const [skipTimes, setSkipTimes] = useState<EpisodeSkipTimes | null>(null);
+  const [activeSkip, setActiveSkip] = useState<ActiveSkip | null>(null);
+  const autoSkipIntroRef = useRef(false);
+  const skippedIntervalsRef = useRef<Set<string>>(new Set());
+
+  // HUD Toast feedback
+  const [toastText, setToastText] = useState<string | null>(null);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToastText(msg);
+    Animated.timing(toastOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    toastTimer.current = setTimeout(() => {
+      Animated.timing(toastOpacity, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
+        setToastText(null);
+      });
+    }, 2200);
+  }, [toastOpacity]);
   // Once per episode: marks the completion badge when the LAST episode is
   // finished, so it doesn't wait for a detail-page revisit.
   const completionMarkedRef = useRef(false);
@@ -386,6 +413,9 @@ export default function WatchScreen() {
     setServerStartPositionMs(0);
     setLocked(false);
     setSelfReady(false); // re-buffer for the new episode → re-arm the party gate
+    skippedIntervalsRef.current.clear();
+    setActiveSkip(null);
+    setSkipTimes(null);
     // Re-arm the server-selection gate for the new episode, unless this is an
     // auto-play hop (next/prev/autoplay) or an offline file — those play directly.
     setPicked(!!autoParam || !!localParam);
@@ -403,27 +433,28 @@ export default function WatchScreen() {
   }, []);
 
   // Mark the anime "caught up"/"finished" the moment this episode crosses the
-  // 80% watched threshold — same bar history uses for "completed". If it's the
-  // latest available episode, the poster badge flips immediately instead of
-  // waiting for the user to reopen the anime's detail page. Recording is gated
-  // on a real completion record existing (the detail page establishes the
-  // highest-available episode number); it then re-checks AniList for finale
-  // status internally. Runs at most once per episode.
+  // 80% watched threshold — same bar history uses for "completed". The poster
+  // badge flips immediately instead of waiting for the detail page. The episode
+  // number falls back to the href via episodeNumberFromUrl (parses "الحلقة-N"
+  // AND /episode|watch/<slug>/<N> — witanime episode URLs are /watch/<slug>/N,
+  // which the old inline regex missed), and the once-per-episode flag only
+  // burns once a number is in hand — a failed derive must not disable recording
+  // for the rest of the episode.
   const maybeMarkCompleted = useCallback((pos: number, dur: number) => {
     if (completionMarkedRef.current) return;
     if (dur <= 0 || pos / dur < 0.8) return;
-    completionMarkedRef.current = true;
     let epNum: number | null = paramEpNum;
-    if (epNum == null && episode) {
-      const u = decodeURIComponent(episode);
-      const m = u.match(/الحلقة[\s\-_]*(\d+)/) || u.match(/\/episode\/[^/]+\/(\d+)/);
-      if (m) epNum = parseInt(m[1], 10);
-    }
-    if (epNum == null) return;
-    const aTitle = (animeTitleParam ? decodeURIComponent(animeTitleParam) : "") || animeTitle;
-    const aHref = animeHref || (animeParam ? decodeURIComponent(animeParam) : "");
-    recordEpisodeWatched({ animeHref: aHref, animeTitle: aTitle, epNum }).catch(() => {});
-  }, [paramEpNum, episode, animeTitle, animeHref, animeTitleParam, animeParam]);
+    if (epNum == null && episode) epNum = episodeNumberFromUrl(episode);
+    if (epNum == null) return; // retry on the next tick (e.g. after the scrape lands)
+    completionMarkedRef.current = true;
+    const dec = (v: string) => { try { return decodeURIComponent(v); } catch { return v; } };
+    const aTitle = (animeTitleParam ? dec(animeTitleParam) : "") || animeTitle;
+    const aHref = animeHref || (animeParam ? dec(animeParam) : "");
+    // The detail grid passes nextEp="" for the last episode — that lets the
+    // player establish a missing completion record (badge) on the finale even
+    // when the detail page was never opened.
+    recordEpisodeWatched({ animeHref: aHref, animeTitle: aTitle, epNum, isLast: nextEpParam === "" }).catch(() => {});
+  }, [paramEpNum, episode, animeTitle, animeHref, animeTitleParam, animeParam, nextEpParam]);
 
   // Keep serversRef in sync so timers/async handlers can read the live count.
   useEffect(() => { serversRef.current = servers; }, [servers]);
@@ -669,24 +700,32 @@ export default function WatchScreen() {
       }
     };
 
-    // Poll for "started playing" every 250ms; once we see motion, lock in.
-    const watchdog = setInterval(() => {
-      if (cancelled || healing || !focusedRef.current) return; // don't heal a blurred screen
-      try {
-        if (player.duration > 0 || player.currentTime > 0) {
-          hasStarted = true;
-          if (player.currentTime > 0) lastPosMs = Math.round(player.currentTime * 1000);
-        }
-      } catch {}
-      try {
-        if ((player.status as string) === "error") {
-          if (!errorSince) errorSince = Date.now();
-          else if (Date.now() - errorSince >= 1500) { errorSince = 0; void heal(); }
-        } else {
-          errorSince = 0;
-        }
-      } catch {}
-    }, 250);
+    // Poll for "started playing" + errors. Fast (250ms) only until playback
+    // starts; after that 1s is plenty (error healing already requires a 1.5s
+    // persistent error) and the 250ms cadence was waking the JS thread 4×/s for
+    // the entire episode.
+    let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+    const watchdogTick = () => {
+      if (cancelled) return;
+      if (!healing && focusedRef.current) { // don't heal a blurred screen
+        try {
+          if (player.duration > 0 || player.currentTime > 0) {
+            hasStarted = true;
+            if (player.currentTime > 0) lastPosMs = Math.round(player.currentTime * 1000);
+          }
+        } catch {}
+        try {
+          if ((player.status as string) === "error") {
+            if (!errorSince) errorSince = Date.now();
+            else if (Date.now() - errorSince >= 1500) { errorSince = 0; void heal(); }
+          } else {
+            errorSince = 0;
+          }
+        } catch {}
+      }
+      watchdogTimer = setTimeout(watchdogTick, hasStarted ? 1000 : 250);
+    };
+    watchdogTimer = setTimeout(watchdogTick, 250);
 
     // Startup deadline: if the player never produced a byte by the deadline,
     // recover. But if it is STILL actively loading (slow connection, big
@@ -715,7 +754,7 @@ export default function WatchScreen() {
 
     return () => {
       cancelled = true;
-      clearInterval(watchdog);
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       clearInterval(deadline);
     };
   }, [videoUrl, player, activeIdx]);
@@ -848,6 +887,9 @@ export default function WatchScreen() {
             url4up: url4up ? decodeURIComponent(url4up) : undefined,
             epNum: paramEpNum ?? undefined,
           });
+          // Leaving inside the final <5s tick must not skip the completion
+          // mark — the save just carried the same 80% evidence.
+          maybeMarkCompleted(pos, dur);
         }
       } catch {}
     };
@@ -918,6 +960,7 @@ export default function WatchScreen() {
           url4up: url4up ? decodeURIComponent(url4up) : undefined,
           epNum: paramEpNum ?? undefined,
         });
+        maybeMarkCompleted(pos, dur);
       }
     };
   }, [isWebView, episode, title, animeTitle, animeHref, url4up, imgParam, maybeMarkCompleted]);
@@ -1342,6 +1385,22 @@ export default function WatchScreen() {
     partyPulseRef.current();
   }, [isPlaying, isWebView, player]);
 
+  const performSkip = useCallback((active: ActiveSkip) => {
+    if (partyClientRef.current) return;
+    const targetTime = active.interval.endTime;
+    if (isPlaying && player) {
+      try { player.currentTime = targetTime; } catch {}
+    } else if (isWebView) {
+      webViewRef.current?.injectJavaScript(`
+        try{var v=document.querySelector('video');if(v)v.currentTime=${targetTime};
+        else if(typeof jwplayer==='function'){var p=jwplayer();if(p)p.seek(${targetTime});}
+        }catch(e){}
+      `);
+    }
+    partyPulseRef.current();
+    showToast(active.type === "op" ? t.introSkipped : t.outroSkipped);
+  }, [isPlaying, isWebView, player, showToast]);
+
   // Next episode — carry cross-source url4up + anime context so the
   // anime4up servers keep showing on the next episode.
   const goNextEpisode = useCallback((keepAutoplay = false) => {
@@ -1495,6 +1554,71 @@ export default function WatchScreen() {
     createRoom(user).catch(() => {});
     setPartyPanelOpen(true);
   }, [user]);
+
+  // Fetch AniSkip timestamps for the current episode. Gate on having SOME way
+  // to identify the anime (title or anime URL): on mount both were empty, so
+  // the lookup ran against the episode URL, failed, then ran AGAIN once the
+  // scrape filled the title in. `duration` is intentionally not a dep — it
+  // flips 0 → real once playback starts and must not re-trigger the lookup.
+  useEffect(() => {
+    if (!episode) return;
+    const resolvedTitle = (animeTitleParam ? decodeURIComponent(animeTitleParam) : "") || animeTitle;
+    if (!resolvedTitle && !animeHref) return;
+    let cancelled = false;
+    let epNum = paramEpNum;
+    if (epNum == null) epNum = episodeNumberFromUrl(episode);
+    const resolvedSlug = (animeParam ? decodeURIComponent(animeParam) : "") || animeHref || episode;
+
+    getEpisodeSkipTimes({
+      title: resolvedTitle,
+      episodeNumber: epNum,
+      slugOrUrl: resolvedSlug,
+      durationSeconds: duration,
+    }).then((res) => {
+      if (!cancelled && res && res.found) {
+        setSkipTimes(res);
+      }
+    }).catch(() => {});
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [episode, paramEpNum, animeTitleParam, animeTitle, animeParam, animeHref]);
+
+  // Observe playback time to detect active OP/ED interval and handle auto-skip
+  useEffect(() => {
+    if (!isPlaying || !skipTimes || !skipTimes.found) {
+      if (activeSkip) setActiveSkip(null);
+      return;
+    }
+
+    const checkInterval = () => {
+      let cur = 0;
+      if (player) {
+        try { cur = player.currentTime || 0; } catch {}
+      } else if (isWebView) {
+        cur = playbackPositionMsRef.current / 1000;
+      }
+      if (cur <= 0) return;
+
+      const currentActive = activeSkipInterval(cur, skipTimes);
+      if (currentActive) {
+        if (autoSkipIntroRef.current) {
+          if (!skippedIntervalsRef.current.has(currentActive.type)) {
+            skippedIntervalsRef.current.add(currentActive.type);
+            performSkip(currentActive);
+          }
+        } else {
+          setActiveSkip((prev) => (prev?.type === currentActive.type ? prev : currentActive));
+        }
+      } else {
+        setActiveSkip((prev) => (prev ? null : prev));
+      }
+    };
+
+    checkInterval();
+    const intervalTimer = setInterval(checkInterval, 500);
+    return () => clearInterval(intervalTimer);
+  }, [isPlaying, skipTimes, player, isWebView, performSkip, activeSkip]);
 
   // Poll player state every 500ms — ONLY while the controls are on screen.
   // The seek bar / time labels these values drive aren't rendered when the
@@ -2039,6 +2163,25 @@ export default function WatchScreen() {
         </View>
       )}
 
+      {/* Smart skip — floating pill while an OP/ED interval is active (manual
+          mode only: auto-skip seeks inside performSkip, so activeSkip never
+          gets set). Hidden for party clients (host drives) and locked screens. */}
+      {isPlaying && activeSkip && !locked && !isPartyClient && (
+        <Pressable onPress={() => performSkip(activeSkip)} style={ss.skipPill} hitSlop={8}>
+          <Ionicons name="play-forward" size={15} color={C.textOnAccent} />
+          <Text style={ss.skipPillText}>
+            {activeSkip.type === "op" ? t.skipIntro : t.skipOutro}
+          </Text>
+        </Pressable>
+      )}
+
+      {/* HUD toast — skip feedback ("تم تخطّي المقدمة") for auto-skip + taps */}
+      {toastText != null && (
+        <Animated.View style={[ss.toast, { opacity: toastOpacity }]} pointerEvents="none">
+          <Text style={ss.toastText}>{toastText}</Text>
+        </Animated.View>
+      )}
+
       {/* Custom Controls Overlay */}
       {isPlaying && !pickerOpen && controlsVisible && !locked && (
         <View style={ss.controlsOverlay} pointerEvents="box-none">
@@ -2166,7 +2309,7 @@ export default function WatchScreen() {
             <View style={ss.ctrlRow}>
               <Pressable onPress={skipForward85} style={ss.chipBtn}>
                 <Ionicons name="play-forward-circle-outline" size={16} color={C.white} />
-                <Text style={ss.chipBtnText}>{t.skipIntro}</Text>
+                <Text style={ss.chipBtnText}>{t.skip85s}</Text>
               </Pressable>
 
               <View style={{ flexDirection: "row", gap: 8 }}>
@@ -2530,6 +2673,22 @@ const ss = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.72)", borderWidth: 1, borderColor: C.border,
   },
   partyWaitText: { color: C.text, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+
+  // Smart skip pill + HUD toast (AniSkip)
+  skipPill: {
+    position: "absolute", bottom: 118, right: 24, zIndex: 6,
+    flexDirection: "row-reverse", alignItems: "center", gap: 8,
+    paddingHorizontal: 18, paddingVertical: 12, borderRadius: 100,
+    backgroundColor: C.accent,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10, elevation: 8,
+  },
+  skipPillText: { color: C.textOnAccent, fontSize: 13, fontFamily: "Cairo_700Bold" },
+  toast: {
+    position: "absolute", bottom: 180, alignSelf: "center", zIndex: 8,
+    paddingHorizontal: 18, paddingVertical: 10, borderRadius: 100,
+    backgroundColor: "rgba(0,0,0,0.78)", borderWidth: 1, borderColor: C.border,
+  },
+  toastText: { color: C.text, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
 
   // Screen-lock overlay
   lockLayer: { ...ABSOLUTE_FILL, alignItems: "center", justifyContent: "center" },

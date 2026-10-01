@@ -3,7 +3,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import PantoufaDownloads from "../modules/pantoufa-downloads";
-import { resolveWitanimeEpisode, matchWitanimeTitle, witTitleVariants } from "./witanimeMatch";
+import { resolveWitanimeEpisode, matchWitanimeTitle, witRelatedCards, witRelationMark, witSearchNames, witTitleScore } from "./witanimeMatch";
 import {
   scrapeWitanimeHome,
   scrapeEpisodesPage,
@@ -49,6 +49,7 @@ import {
   fetchWitHomeDirect,
   fetchWitanimeAnimeSections,
   type WitHome,
+  type WitHomeEpisode,
   type WitCard,
   type MediaSubtitle,
 } from "./scraper/direct";
@@ -57,7 +58,9 @@ import { fuzzyScore, sourceSearchQueries } from "./fuzzy";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 import { writeCloudHome } from "./homeCloudCache";
 import { loadWitanimeHome, mergeRecentEpisodes } from "./homeSourceSelection";
+import { filterFinishedEpisodes } from "./airing";
 import { remoteLog } from "./remoteLog";
+import { cleanSynopsis } from "./animeDetail";
 import { createRequestCache, withTimeout } from "./requestCache";
 import {
   anime4upEpisodeUrl,
@@ -88,7 +91,13 @@ import {
 // pre-v8 payloads (wrong section ids) are discarded too.
 const HOME_CACHE_KEY = "@home_cache_v8";
 const HOME_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const DETAIL_CACHE_PREFIX = "@detail_v2:";
+// Serve an expired payload for up to a day while revalidating in the background:
+// blocking the first paint on a live scrape (which can take ~1 min when a
+// source is slow/CF-challenged) is far worse than showing slightly old rails.
+const HOME_SERVE_TTL = 24 * 60 * 60 * 1000; // 24 h
+// v3: v2 payloads could carry anime3rb related-card text (genre chips polluted
+// by the page-wide /genre/ match) — the prefix bump purges them on next run.
+const DETAIL_CACHE_PREFIX = "@detail_v3:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const UP4_CACHE_PREFIX = "@up4_eps_v2:";
 const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
@@ -109,16 +118,19 @@ const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL
 const completeVideoServerRequests = createRequestCache<VideoServersPayload>(30_000);
 const videoResolutionRequests = createRequestCache<ResolveVideoResult>(90_000);
 
-async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
+async function readCacheEntry<T>(key: string, ttlMs: number): Promise<{ data: T; ts: number } | null> {
   try {
     const raw = await AsyncStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (Date.now() - parsed.ts > ttlMs) return null;
-    return parsed.data as T;
+    return { data: parsed.data as T, ts: parsed.ts };
   } catch {
     return null;
   }
+}
+async function readCache<T>(key: string, ttlMs: number): Promise<T | null> {
+  return (await readCacheEntry<T>(key, ttlMs))?.data ?? null;
 }
 async function writeCache(key: string, data: unknown) {
   try {
@@ -268,35 +280,6 @@ function imgOrEmpty(s: string | null | undefined): string {
   return s ?? "";
 }
 
-// Strip the SEO boilerplate the source sites bake into an anime page's "story"
-// field so the detail screen never shows junk like "تحميل ومشاهدة جميع حلقات
-// أنمي … اون لاين بجودة عالية … Anime3rb". A real Arabic synopsis is kept intact;
-// pure boilerplate collapses to "" and the synopsis block simply hides.
-const SYNOPSIS_JUNK =
-  /تحميل\s*و?\s*مشاهدة|مشاهدة\s*و?\s*تحميل|اون\s*لاين|أون\s*لاين|أونلاين|بجودة\s*عالية|جميع\s*(?:ال)?حلقات|anime3rb|anime4up|witanime|أنمي\s*عرب|انمي\s*عرب|حصريا?ً?\s*على|موقع\s*انمي|تابعنا|شاهد\s*الآن|بدون\s*إعلانات/i;
-function cleanSynopsis(raw: string | null | undefined): string {
-  let s = (raw || "").replace(/\s+/g, " ").trim();
-  if (!s) return "";
-  // Drop a leading "قصة الأنمي:" / "القصة:" / "Story:" label.
-  s = s.replace(/^\s*(?:قصة\s*(?:الأنمي|الانمي)?|القصة|story|synopsis)\s*[:：\-–]?\s*/i, "").trim();
-  if (SYNOPSIS_JUNK.test(s)) {
-    // Remove only the segments carrying the boilerplate markers; keep any real
-    // story sentences that may sit alongside them. anime3rb's SEO blurb has no
-    // sentence punctuation (it chains alt-titles with " - "/"|"/"،"), so split
-    // on those separators too — otherwise the whole run survived as one segment.
-    const kept = s
-      .split(/[.!؟\n|،]+|\s[-–—]\s/)
-      .map((p) => p.trim())
-      .filter((p) => p && !SYNOPSIS_JUNK.test(p));
-    s = kept.join(". ").trim();
-    // If boilerplate markers still survive after segmenting, the text is SEO
-    // junk through-and-through — drop it entirely rather than show a fragment.
-    if (SYNOPSIS_JUNK.test(s)) return "";
-  }
-  // Anything shorter than a clause is almost certainly a leftover fragment.
-  return s.length < 25 ? "" : s;
-}
-
 // Strip the SEO/source decoration the sites bake into an anime's TITLE so the
 // detail page shows just the anime's name. anime3rb's og:title arrives as
 // "أنمي <Name> مترجم - Anime3rb أنمي عرب" — a leading "أنمي" word, a trailing
@@ -379,7 +362,7 @@ function buildHomePayload(wit: {
 }
 
 async function fetchHomeFresh(): Promise<HomePayload> {
-  const [home, anime4upRecent] = await Promise.all([loadWitanimeHome<WitHome>(
+  const [home, up4Episodes] = await Promise.all([loadWitanimeHome<WitHome>(
     async () => {
       const direct = await fetchWitHomeDirect();
       return sourceHomeHasContent(direct) ? direct : null;
@@ -388,8 +371,12 @@ async function fetchHomeFresh(): Promise<HomePayload> {
       const viaWebView = await scrapeWitanimeHome();
       return sourceHomeHasContent(viaWebView) ? viaWebView : null;
     },
-  ), fetchAnime4upRecentPageDirect(1).catch(() => null)]);
-  if (!home && !anime4upRecent?.episodes.length) {
+  ), fetchAnime4upRecentPageDirect(1)
+    // anime4up backfills old episodes of finished shows into its archive;
+    // they must not surface as "new episodes" (see filterFinishedEpisodes).
+    .then((r) => (r ? filterFinishedEpisodes(r.episodes) : []))
+    .catch(() => [] as WitHomeEpisode[])]);
+  if (!home && !up4Episodes.length) {
     void remoteLog("warn", "home", "Witanime home unavailable", { witanime: "empty" });
     return { success: true, data: { featured: [], sections: [] } };
   }
@@ -398,7 +385,7 @@ async function fetchHomeFresh(): Promise<HomePayload> {
   // failed/empty anime4up page must not wipe Witanime's own recent episodes.
   // Merge instead of replace: anime4up page 1 is often one batch upload, so
   // its per-anime de-dupe alone shrinks the rail to a couple of cards.
-  const recentEps = mergeRecentEpisodes(anime4upRecent?.episodes ?? [], baseHome.episodes);
+  const recentEps = mergeRecentEpisodes(up4Episodes, baseHome.episodes);
   const result = buildHomePayload({ ...baseHome, episodes: recentEps });
   // Only persist a payload that actually has content. Caching an empty scrape
   // would freeze "zero content" for the whole TTL and the SWR path would keep
@@ -428,14 +415,22 @@ function homeSignature(p: HomePayload): string {
   );
 }
 
-export async function fetchHome(onUpdated?: (p: HomePayload) => void): Promise<HomePayload> {
-  // Stale-while-revalidate: return cached payload immediately if present,
-  // then kick off a background refresh. When the fresh scrape lands with
-  // visibly different content, push it to the open screen via onUpdated so the
-  // user sees new episodes WITHOUT a manual pull-to-refresh.
-  const cached = await readCache<HomePayload>(HOME_CACHE_KEY, HOME_CACHE_TTL);
+export async function fetchHome(
+  onUpdated?: (p: HomePayload) => void,
+  options: { forceRefresh?: boolean } = {},
+): Promise<HomePayload> {
+  // Stale-while-revalidate: return cached payload immediately if present
+  // (even past its freshness TTL — up to HOME_SERVE_TTL), then kick off a
+  // background refresh. When the fresh scrape lands with visibly different
+  // content, push it to the open screen via onUpdated so the user sees new
+  // episodes WITHOUT a manual pull-to-refresh. A still-fresh cache skips the
+  // background scrape entirely (a full home scrape on every visit is wasteful);
+  // pull-to-refresh passes forceRefresh to revalidate anyway.
+  const entry = await readCacheEntry<HomePayload>(HOME_CACHE_KEY, HOME_SERVE_TTL);
+  const cached = entry?.data ?? null;
   if (homeHasContent(cached)) {
-    if (!bgRefreshInFlight) {
+    const stale = !entry || Date.now() - entry.ts > HOME_CACHE_TTL;
+    if ((stale || options.forceRefresh) && !bgRefreshInFlight) {
       bgRefreshInFlight = true;
       void fetchHomeFreshShared()
         .then((fresh) => {
@@ -660,6 +655,19 @@ function detailSignature(p: EpisodesPayload): string {
   return `${p.data.totalEpisodes}:${eps.length}:${eps[0]?.href || ""}:${eps[eps.length - 1]?.href || ""}`;
 }
 
+// Dedupe concurrent scrapes of the SAME anime URL: the home For You rail
+// warms a resolved card's detail payload in the background, and the detail
+// screen opening that same card moments later must SHARE that one scrape
+// instead of queueing a second WebView job behind the serial scraper bus.
+const episodesFreshInflight = new Map<string, Promise<EpisodesPayload>>();
+function fetchEpisodesFreshOnce(animeUrl: string): Promise<EpisodesPayload> {
+  const existing = episodesFreshInflight.get(animeUrl);
+  if (existing) return existing;
+  const p = fetchEpisodesFresh(animeUrl).finally(() => episodesFreshInflight.delete(animeUrl));
+  episodesFreshInflight.set(animeUrl, p);
+  return p;
+}
+
 export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPayload) => void): Promise<EpisodesPayload> {
   // Re-clean the title AND synopsis on every return path so entries
   // cached/uploaded by an older build display cleanly too. Crucial for the
@@ -682,7 +690,7 @@ export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPa
   //    so a newly-aired episode shows without a manual refresh.
   const cached = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
   if (cached) {
-    void fetchEpisodesFresh(animeUrl)
+    void fetchEpisodesFreshOnce(animeUrl)
       .then((fresh) => {
         if (onUpdated && fresh?.data && detailSignature(fresh) !== detailSignature(cached))
           onUpdated(clean(fresh));
@@ -698,7 +706,7 @@ export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPa
   if (cloud?.payload?.data) {
     void writeCache(DETAIL_CACHE_PREFIX + animeUrl, cloud.payload);
     if (cloud.stale)
-      void fetchEpisodesFresh(animeUrl)
+      void fetchEpisodesFreshOnce(animeUrl)
         .then((fresh) => {
           if (onUpdated && fresh?.data && detailSignature(fresh) !== detailSignature(cloud.payload))
             onUpdated(clean(fresh));
@@ -707,7 +715,7 @@ export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPa
     return clean(cloud.payload);
   }
   // 3) Cold path — live scrape on the residential IP, then scout-upload.
-  return clean(await fetchEpisodesFresh(animeUrl));
+  return clean(await fetchEpisodesFreshOnce(animeUrl));
 }
 
 /**
@@ -722,7 +730,13 @@ export async function fetchEpisodesUp4(
 ): Promise<{ merged: { anime4up: string } | null; episodes4up: Episode[] }> {
   const isAnime4up = /anime4up/i.test(animeUrl);
   if (isAnime4up) {
-    // anime4up is the primary; just re-use what fetchEpisodes already had.
+    // anime4up is the primary; reuse the payload fetchEpisodes just scraped
+    // (written to the detail cache) instead of scraping the same page a second
+    // time — two identical 35s WebView jobs per detail open.
+    const detail = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
+    if (detail?.data?.episodes?.length) {
+      return { merged: { anime4up: animeUrl }, episodes4up: detail.data.episodes };
+    }
     const d = await scrapeEpisodesPage(animeUrl).catch(() => null);
     return { merged: { anime4up: animeUrl }, episodes4up: d?.episodes ?? [] };
   }
@@ -766,6 +780,9 @@ export interface RelatedAnimeCard {
   href: string;
   image: string | null;
   type: string | null;
+  /** AniList-style relation mark ("الموسم القادم" / "الموسم السابق" / "تكملة" …)
+   * derived from the source page's own titles/formats. Related rail only. */
+  mark?: string;
 }
 
 export interface WitanimeSections {
@@ -773,7 +790,9 @@ export interface WitanimeSections {
   mayLike: RelatedAnimeCard[];
 }
 
-const WIT_SECTIONS_CACHE_PREFIX = "@wit_sections_v1:";
+// v4: related cards now carry an AniList-style relation mark — earlier caches
+// hold cards without it.
+const WIT_SECTIONS_CACHE_PREFIX = "@wit_sections_v4:";
 const WIT_SECTIONS_TTL = 6 * 60 * 60 * 1000; // 6 h
 
 const emptySections = (): WitanimeSections => ({ related: [], mayLike: [] });
@@ -782,9 +801,18 @@ const emptySections = (): WitanimeSections => ({ related: [], mayLike: [] });
 // ambiguity-rejecting matcher the episode resolver uses. A plain cross-source
 // title search could lock onto another season/spin-off, which surfaced a
 // different anime's rail. Direct static search only — no WebView.
-async function resolveWitanimeAnimeForTitle(title: string): Promise<string | null> {
+//
+// The name list it searches and scores includes decoration-stripped spellings
+// ("Bleach (2022)" → "Bleach", years dropped) and the source page's own slug
+// ("bleach-sennen-kessen-hen" → the site's romaji form), so symbols/format
+// differences on either side don't block the match. The full list is returned
+// with the href so the caller's page-identity check uses the same spellings.
+async function resolveWitanimeAnimeForTitle(
+  title: string,
+  animeHref?: string | null,
+): Promise<{ href: string; names: string[]; cardTitle: string } | null> {
   if (!title) return null;
-  const names = [title, ...[...title.matchAll(/[([]([^)\]]+)[)\]]/g)].map((m) => m[1])];
+  const names = witSearchNames(title, animeHref ? titleFromSlug(animeHref) : "");
   const tried = new Set<string>();
   const cards: WitCard[] = [];
   const find = async (queries: string[]) => {
@@ -793,30 +821,29 @@ async function resolveWitanimeAnimeForTitle(title: string): Promise<string | nul
       tried.add(query);
       const results = await searchWitanimeDirect(query).catch(() => null);
       if (results?.length) cards.push(...results);
-      const match = matchWitanimeTitle(names, cards, tm_seasonNum);
+      // allowLoose: rails-only (see matchWitanimeTitle) — the site often files
+      // an anime under a longer official title than the one we scraped.
+      const match = matchWitanimeTitle(names, cards, tm_seasonNum, { allowLoose: true });
       if (match) return match;
     }
     return null;
   };
   let found = await find(sourceSearchQueries(title, 4));
-  if (!found) {
-    const alt = await getAltTitles(title).catch(() => []);
-    names.push(...alt.filter((name) => !names.includes(name)).slice(0, 4));
-    found = await find(names.slice(1).flatMap((name) => sourceSearchQueries(name, 2)));
-  }
-  return found;
+  if (found) return { href: found, names, cardTitle: cards.find((card) => card.href === found)?.title || "" };
+  const alt = await getAltTitles(title).catch(() => []);
+  names.push(...alt.filter((name) => !names.includes(name)).slice(0, 4));
+  found = await find(names.slice(1).flatMap((name) => sourceSearchQueries(name, 2)));
+  return found ? { href: found, names, cardTitle: cards.find((card) => card.href === found)?.title || "" } : null;
 }
 
 // The fetched page must really be this anime — a search result can be a
-// renamed/redirected page. Same symmetric fuzzy score the matcher uses.
-function witanimePageMatchesTitle(expected: string, pageTitle: string): boolean {
+// renamed/redirected page. Reuses the matcher's cleaning + variant scoring
+// against EVERY name the anime is known by (title, decoration-stripped forms,
+// slug, aliases) plus the matched card's own title, so a page matched via an
+// alias or a long official title isn't vetoed after being resolved.
+function witanimePageMatchesTitle(names: string[], pageTitle: string): boolean {
   if (!pageTitle) return true; // unparseable title: trust the matcher's pick
-  const variants = witTitleVariants([expected]);
-  return variants.some((name) => {
-    const a = fuzzyScore(name, pageTitle);
-    const b = fuzzyScore(pageTitle, name);
-    return Math.min(a, b) >= 0.8;
-  });
+  return witTitleScore(names, pageTitle) >= 0.8;
 }
 
 export async function fetchWitanimeSections(
@@ -835,15 +862,31 @@ export async function fetchWitanimeSections(
   if (cached) return cached;
   const direct = animeHref && /witanime\./i.test(animeHref) ? animeHref : null;
   let url = direct;
-  if (!url && title) url = await resolveWitanimeAnimeForTitle(title);
+  let names = [title];
+  if (!url && title) {
+    const resolved = await resolveWitanimeAnimeForTitle(title, animeHref);
+    if (resolved) {
+      url = resolved.href;
+      names = resolved.cardTitle && !resolved.names.includes(resolved.cardTitle)
+        ? [...resolved.names, resolved.cardTitle]
+        : resolved.names;
+    }
+  }
   if (!url) return emptySections();
   const sections = await fetchWitanimeAnimeSections(url).catch(() => null);
   if (!sections) return emptySections();
   // Only a page found by SEARCH needs the identity check; a page the user
   // opened directly is authoritative.
-  if (!direct && title && !witanimePageMatchesTitle(title, sections.title)) return emptySections();
+  if (!direct && title && !witanimePageMatchesTitle(names, sections.title)) return emptySections();
+  const bases = [...names, sections.title];
   const payload: WitanimeSections = {
-    related: sections.related.map(toCard),
+    // The site's related rail is padded with genre-similar suggestions when an
+    // anime has no genuine relations — keep only entries that share the base
+    // title (either spelling). An empty result falls back to AniList upstream.
+    related: witRelatedCards(bases, sections.related).map((card) => ({
+      ...toCard(card),
+      mark: witRelationMark(bases, card, tm_seasonNum),
+    })),
     mayLike: sections.mayLike.map(toCard),
   };
   if (payload.related.length > 0 || payload.mayLike.length > 0) void writeCache(key, payload);
@@ -1207,7 +1250,9 @@ export async function fetchRecent(page = 1): Promise<{
         }
       }
       r = await scrapeRecent(page);
-      const episodes: EpisodeItem[] = r.episodes.map((e) => ({
+      // Later pages are anime4up's raw archive: same backfill pollution.
+      const fresh = await filterFinishedEpisodes(r.episodes);
+      const episodes: EpisodeItem[] = fresh.map((e) => ({
         title: e.title,
         href: e.href,
         image: imgOrEmpty(e.image),

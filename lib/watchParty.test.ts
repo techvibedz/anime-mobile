@@ -5,7 +5,7 @@
 // host's play/pause, and seek ONLY when drift exceeds the tolerance window.
 
 import assert from "node:assert";
-import { computeSync, DRIFT_TOLERANCE_MS, genCode, type PartyState } from "./watchPartySync";
+import { computeSync, DRIFT_TOLERANCE_MS, genCode, normalizePartyCode, partyInviteLink, type PartyState } from "./watchPartySync";
 
 const base = (over: Partial<PartyState> = {}): PartyState => ({
   episode: "ep",
@@ -84,6 +84,43 @@ test("genCode: 5 unambiguous chars", () => {
   const c = genCode();
   assert.strictEqual(c.length, 5);
   assert.ok(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]+$/.test(c), c);
+});
+
+// Invite normalization: raw codes, deep links and web links all resolve.
+test("normalizePartyCode: raw code (case-insensitive)", () => {
+  assert.strictEqual(normalizePartyCode("abcde"), "ABCDE");
+});
+
+test("normalizePartyCode: deep link", () => {
+  assert.strictEqual(normalizePartyCode("anime-mobile://watch-party?code=ABC23"), "ABC23");
+});
+
+test("normalizePartyCode: web invite link", () => {
+  assert.strictEqual(normalizePartyCode(partyInviteLink("XYZ34")), "XYZ34");
+});
+
+test("normalizePartyCode: pasted invite message", () => {
+  assert.strictEqual(
+    normalizePartyCode(
+      "انضم إليّ لمشاهدة الأنمي معًا على بانتوفة!\nرمز الغرفة: ABC23\nhttps://pantoufa-join.pages.dev/join?code=abc23",
+    ),
+    "ABC23",
+  );
+});
+
+test("normalizePartyCode: ambiguous glyphs rejected", () => {
+  assert.strictEqual(normalizePartyCode("AB0DE"), null);
+  assert.strictEqual(normalizePartyCode("ABCD1"), null);
+});
+
+test("normalizePartyCode: garbage rejected", () => {
+  assert.strictEqual(normalizePartyCode(""), null);
+  assert.strictEqual(normalizePartyCode(null), null);
+  assert.strictEqual(normalizePartyCode("hello there friend"), null);
+});
+
+test("partyInviteLink embeds the code", () => {
+  assert.ok(partyInviteLink("ABC23").endsWith("?code=ABC23"));
 });
 
 console.log(`\n${passed} passed`);

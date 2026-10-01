@@ -179,16 +179,25 @@ async function adoptFinishedFile(item: DownloadItem): Promise<boolean> {
 function updateMonitor() {
   const hasActive = !!items?.some((it) => it.status === "downloading" && it.downloadId != null);
   if (hasActive && !monitor) {
-    monitor = setInterval(() => { void syncDownloads(); }, 1000);
+    monitor = setInterval(() => { void syncDownloads(true); }, 1000);
   } else if (!hasActive && monitor) {
     clearInterval(monitor);
     monitor = null;
   }
 }
 
+// getDownloads() runs on every downloads-screen visit and the root layout
+// re-syncs on every foreground; each reconcile is a native round-trip per item.
+// Skip repeats within a short window unless forced (the 1s progress monitor
+// passes force so live progress still updates).
+const SYNC_MIN_GAP_MS = 2000;
+let lastSyncAt = 0;
+
 /** Reconcile persisted records with Android's system-owned download jobs. */
-export async function syncDownloads(): Promise<void> {
+export async function syncDownloads(force = false): Promise<void> {
   if (syncPromise) return syncPromise;
+  if (!force && Date.now() - lastSyncAt < SYNC_MIN_GAP_MS) return;
+  lastSyncAt = Date.now();
   syncPromise = reconcileDownloads().finally(() => { syncPromise = null; });
   return syncPromise;
 }

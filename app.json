@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pantoufa",
     "slug": "injaz",
-    "version": "3.4.5",
+    "version": "3.4.6",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "anime-mobile",
@@ -12,7 +12,7 @@
       "bundleIdentifier": "com.anime.mobile"
     },
     "android": {
-      "versionCode": 345,
+      "versionCode": 346,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#08090C"
@@ -78,7 +78,13 @@
         }
       ],
       "expo-asset",
-      "expo-video",
+      [
+        "expo-video",
+        {
+          "supportsPictureInPicture": true,
+          "supportsBackgroundPlayback": true
+        }
+      ],
       [
         "expo-font",
         {

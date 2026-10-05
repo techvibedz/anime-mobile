@@ -75,6 +75,12 @@ const ratioCache = new Map<string, number>();
 // Natural pixel width (memory-only) — feeds the "original size" fit mode and
 // intrinsic-size fit mode.
 const naturalWidthCache = new Map<string, number>();
+// Last measured page ratio (session-only). Consecutive pages in a chapter are
+// almost always the same shape, so seeding the next page's box with the
+// previous page's ratio lets it decode once at (nearly) its final size instead
+// of decoding a small placeholder bitmap and re-decoding at full size on every
+// first read.
+let recentRatio = 0;
 
 /** Keep intrinsic dimensions without retaining decoded image references. */
 function noteNaturalWidth(uri: string, width: number): number {
@@ -112,6 +118,7 @@ function persistRatioCache(): void {
 
 function rememberRatio(uri: string, ratio: number): void {
   if (!(ratio > 0) || ratioCache.get(uri) === ratio) return;
+  if (ratio > 0.4 && ratio < 16) recentRatio = ratio;
   ratioCache.set(uri, ratio);
   if (ratioCache.size > 4500) {
     const keys = ratioCache.keys();
@@ -247,6 +254,10 @@ export default function MangaReaderScreen() {
   // can lose the race against the chapter fetch). Re-renders the vertical pages
   // so they pick up exact heights instead of the 1.45× placeholder.
   const [ratioTick, setRatioTick] = useState(0);
+  // True from touch-down through a fling (plus a short tail). Background
+  // prefetch decodes full-size pages; running those while the user scrolls
+  // competes with the visible page's decode and is what made scrolling stutter.
+  const [scrolling, setScrolling] = useState(false);
 
   const verticalRef = useRef<FlatList<string>>(null);
   const pagedRef = useRef<FlatList<string>>(null);
@@ -266,6 +277,7 @@ export default function MangaReaderScreen() {
   const zoomedRef = useRef(false);
   const restoringRef = useRef(false);
   const scrollToTargetRef = useRef<(target: number) => void>(() => {});
+  const scrollSettleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   pagesRef.current = pages;
   indexRef.current = index;
@@ -489,16 +501,43 @@ export default function MangaReaderScreen() {
     jumpRetryRef.current.timer = null;
   }, []);
 
+  // Drag end fires just before momentum begins; the short tail keeps prefetch
+  // paused across that gap (momentum begin cancels the pending stop).
+  const markScrolling = useCallback((on: boolean) => {
+    if (scrollSettleRef.current) {
+      clearTimeout(scrollSettleRef.current);
+      scrollSettleRef.current = null;
+    }
+    if (on) {
+      setScrolling(true);
+    } else {
+      scrollSettleRef.current = setTimeout(() => {
+        scrollSettleRef.current = null;
+        setScrolling(false);
+      }, 140);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (scrollSettleRef.current) clearTimeout(scrollSettleRef.current);
+  }, []);
+
   // Viewport coverage, not item visibility: a webtoon page taller than the
   // screen can never be 60% visible, so itemVisiblePercentThreshold would
   // silently stop saving progress in continuous mode.
   const viewabilityConfig = useRef({ viewAreaCoveragePercentThreshold: 15, minimumViewTime: 250 }).current;
 
   // ── prefetch: pages ahead + the next chapter near the end ──────────────────
+  // Prefetching decodes a full-size page on Android, so it only runs once the
+  // scroll settles: during a drag or fling the decode would fight the visible
+  // page for CPU/memory and drop frames.
   useEffect(() => {
-    if (!pages || pages.length === 0) return;
-    for (const target of [index + 1, index + 2, index - 1]) {
-      if (target < 0 || target >= pages.length || prefetchedPagesRef.current.has(target)) continue;
+    if (!pages || pages.length === 0 || scrolling) return;
+    for (const target of [index + 1, index + 2]) {
+      if (target >= pages.length || prefetchedPagesRef.current.has(target)) continue;
+      // A page already on screen is in the image cache — prefetching it again
+      // is a wasted full-size decode.
+      if (displayedPagesRef.current.has(pages[target])) continue;
       prefetchedPagesRef.current.add(target);
       // Warm the exact URL the page cell will render (quality upgrade applied),
       // otherwise the prefetch would warm a bitmap that never displays.
@@ -506,7 +545,7 @@ export default function MangaReaderScreen() {
         .then((ok) => { if (!ok) prefetchedPagesRef.current.delete(target); })
         .catch(() => { prefetchedPagesRef.current.delete(target); });
     }
-  }, [index, pages, imageHeaders]);
+  }, [index, pages, imageHeaders, scrolling]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
@@ -528,13 +567,13 @@ export default function MangaReaderScreen() {
   const olderChapter = currentIdx >= 0 && currentIdx < chapters.length - 1 ? chapters[currentIdx + 1] : null;
 
   useEffect(() => {
-    if (!pages || !newerChapter || !newerChapter.id) return;
+    if (!pages || !newerChapter || !newerChapter.id || scrolling) return;
     if (index < pages.length - 5) return;
     if (nextChapterPrefetchRef.current === `${newerChapter.source}:${newerChapter.id}`) return;
     nextChapterPrefetchRef.current = `${newerChapter.source}:${newerChapter.id}`;
     void fetchMangaChapter(newerChapter.source, newerChapter.mangaId, newerChapter.id)
       .catch(() => {});
-  }, [index, pages, newerChapter]);
+  }, [index, pages, newerChapter, scrolling]);
 
   const goToChapter = useCallback(
     (chapter: MergedChapter) => {
@@ -644,6 +683,26 @@ export default function MangaReaderScreen() {
     return prefs.direction === "rtl" ? [...pages].reverse() : pages;
   }, [pages, prefs.direction]);
 
+  // Stable identities so VirtualizedList cells don't re-render when only the
+  // visible page index changes (progress ticks re-render this whole screen).
+  const renderVerticalItem = useCallback(
+    ({ item, index: page }: { item: string; index: number }) => (
+      <VerticalPage
+        page={page}
+        headers={imageHeaders}
+        onDisplayed={onPageDisplayed}
+        uri={item}
+        screenWidth={width}
+        screenHeight={height}
+        fit={prefs.fit}
+        dpr={dpr}
+        ratioTick={ratioTick}
+      />
+    ),
+    [imageHeaders, onPageDisplayed, width, height, prefs.fit, dpr, ratioTick],
+  );
+  const maintainVisible = useMemo(() => ({ minIndexForVisible: 0 }), []);
+
   if (!decoded) {
     return (
       <View style={s.root}>
@@ -674,30 +733,22 @@ export default function MangaReaderScreen() {
               data={pages}
               extraData={ratioTick}
               keyExtractor={(uri, i) => `${i}:${uri}`}
-              renderItem={({ item, index: page }) => (
-                <VerticalPage
-                  page={page}
-                  headers={imageHeaders}
-                  onDisplayed={onPageDisplayed}
-                  uri={item}
-                  screenWidth={width}
-                  screenHeight={height}
-                  fit={prefs.fit}
-                  dpr={dpr}
-                  ratioTick={ratioTick}
-                />
-              )}
+              renderItem={renderVerticalItem}
               onViewableItemsChanged={onViewableItemsChanged}
               viewabilityConfig={viewabilityConfig}
               // A page's height changes after its bitmap decodes (placeholder →
               // measured ratio). Without this, changing content above the
               // viewport shifts the raw offset and the reader visibly jumps
               // mid-scroll. RN keeps the first visible item pinned instead.
-              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+              maintainVisibleContentPosition={maintainVisible}
               onScrollBeginDrag={() => {
                 beginInteraction();
                 setChrome(false);
+                markScrolling(true);
               }}
+              onMomentumScrollBegin={() => markScrolling(true)}
+              onScrollEndDrag={() => markScrolling(false)}
+              onMomentumScrollEnd={() => markScrolling(false)}
               onScrollToIndexFailed={(info) => {
                 verticalRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
                 const retry = jumpRetryRef.current;
@@ -927,7 +978,7 @@ export default function MangaReaderScreen() {
         <Pressable style={s.modalBackdrop} onPress={() => setJumpOpen(false)} />
         <View style={[s.jumpSheet, { paddingBottom: insets.bottom + 18 }]}>
           <View style={s.sheetHeader}><Pressable style={s.sheetClose} onPress={() => setJumpOpen(false)} accessibilityRole="button" accessibilityLabel={t.cancel}><Ionicons name="close" size={20} color={M.ink} /></Pressable><Text style={s.sheetTitle}>انتقل إلى صفحة</Text></View>
-          <PageSlider total={total} index={index} onJump={(target) => { setJumpOpen(false); jumpTo(target); }} />
+          {jumpOpen && <PageSlider total={total} index={index} onJump={(target) => { setJumpOpen(false); jumpTo(target); }} />}
         </View>
       </Modal>
 
@@ -955,7 +1006,7 @@ export default function MangaReaderScreen() {
               />
             </View>
           )}
-          <FlatList
+          {listOpen && <FlatList
             keyboardShouldPersistTaps="handled"
             ListEmptyComponent={<Text style={s.sheetHint}>{chapterQuery ? "لا توجد فصول مطابقة" : t.loading}</Text>}
             data={filteredChapters}
@@ -993,7 +1044,7 @@ export default function MangaReaderScreen() {
             initialNumToRender={18}
             windowSize={9}
             removeClippedSubviews
-          />
+          />}
           <Text style={s.sheetHint}>{t.mangaReadHint}</Text>
         </View>
         </KeyboardAvoidingView>
@@ -1011,8 +1062,10 @@ export default function MangaReaderScreen() {
           </View>
 
           {/* Scrollable body: six fit chips + three choice rows overflow short
-              screens; the sheet is capped so it can never run off the top. */}
-          <ScrollView
+              screens; the sheet is capped so it can never run off the top.
+              Built only while the sheet is open so page-progress re-renders
+              don't reconcile the whole chip grid. */}
+          {settingsOpen && <ScrollView
             style={s.settingsScroll}
             contentContainerStyle={s.settingsBody}
             showsVerticalScrollIndicator={false}
@@ -1102,7 +1155,7 @@ export default function MangaReaderScreen() {
               />
               </>)}
             </SettingBlock>
-          </ScrollView>
+          </ScrollView>}
         </View>
       </Modal>
     </View>
@@ -1314,8 +1367,8 @@ const VerticalPage = memo(function VerticalPage({ uri, page, headers, onDisplaye
   uri: string; page: number; headers: Record<string, string>; onDisplayed: (uri: string) => void;
   screenWidth: number; screenHeight: number; fit: FitMode; dpr: number; ratioTick: number;
 }) {
-  const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? 0);
-  useEffect(() => { setRatio(ratioCache.get(uri) ?? 0); }, [uri, ratioTick]);
+  const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? recentRatio);
+  useEffect(() => { setRatio(ratioCache.get(uri) ?? recentRatio); }, [uri, ratioTick]);
   const dims = ratio > 0
     ? verticalDims(fit, screenWidth, screenHeight, ratio, naturalWidthCache.get(uri) ?? 0, dpr)
     : { width: screenWidth, height: screenWidth * 1.45, contentFit: "contain" as const };

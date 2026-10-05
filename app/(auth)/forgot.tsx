@@ -107,7 +107,7 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   body: { flex: 1, paddingTop: 8 },
-  heading: { color: C.text, fontSize: 32, lineHeight: 48, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right", writingDirection: "rtl" },
+  heading: { color: C.text, fontSize: 26, lineHeight: 40, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right", writingDirection: "rtl" },
   sub: { color: C.textSecondary, fontSize: 14, marginTop: 8, marginBottom: 32, fontFamily: "Cairo_500Medium", lineHeight: 24, textAlign: "right", writingDirection: "rtl" },
 
   inputGroup: { marginBottom: 16 },
@@ -138,5 +138,5 @@ const ss = StyleSheet.create({
     minHeight: 56, borderRadius: R.md, paddingVertical: 16,
     alignItems: "center", justifyContent: "center",
   },
-  submitText: { color: C.textOnAccent, fontSize: 16, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  submitText: { flexShrink: 1, textAlign: "center", color: C.textOnAccent, fontSize: 14, lineHeight: 24, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 });

@@ -6,7 +6,9 @@ export type SourceFailure = "dns" | "network" | "timeout" | "ssl" | "http" | "cl
 export const SOURCE_DOMAINS: Record<SourceId, readonly string[]> = {
   witanime: ["witanime.site"],
   anime4up: ["w1.anime4up.rest", "anime4up.rest"],
-  anime3rb: ["anime3rb.com", "www.anime3rb.com"],
+  // www.anime3rb.com is NOT a content mirror: every path 200-redirects to
+  // the homepage, so it must never be fetched or pinned as a healthy host.
+  anime3rb: ["anime3rb.com"],
 };
 
 const PREFERENCE_MS = 30 * 60 * 1000;
@@ -19,6 +21,10 @@ export function identifySource(rawUrl: string): SourceId | null {
     // every witanime.* URL as this source so sourceCandidates rewrites it to
     // the current host instead of trying the dead URL.
     if (/(^|\.)witanime\./i.test(host)) return "witanime";
+    // Old saved anime3rb URLs can carry the www host (now a redirect trap, so
+    // it is deliberately absent from SOURCE_DOMAINS). Recognize it as anime3rb
+    // so candidates rewrite it to the real host instead of fetching www.
+    if (/(^|\.)anime3rb\.com$/i.test(host)) return "anime3rb";
     return (Object.keys(SOURCE_DOMAINS) as SourceId[]).find((source) =>
       SOURCE_DOMAINS[source].includes(host),
     ) ?? null;

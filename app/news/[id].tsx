@@ -215,7 +215,7 @@ const s = StyleSheet.create({
   metaDot: { width: 3, height: 3, borderRadius: 2, backgroundColor: C.textFaint },
   metaSource: { color: C.textMuted, fontSize: 12, fontFamily: AR.medium, flexShrink: 1 },
 
-  headline: { color: C.bone, fontSize: 28, lineHeight: 43, fontFamily: AR.bold, textAlign: "right" },
+  headline: { color: C.bone, fontSize: 24, lineHeight: 36, fontFamily: AR.bold, textAlign: "right" },
 
   divider: { height: 1, backgroundColor: C.borderSoft, marginVertical: 28 },
 

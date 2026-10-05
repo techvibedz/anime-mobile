@@ -12,6 +12,7 @@
 import assert from "node:assert";
 import {
   normLatin,
+  asciiRomans,
   seasonNum,
   canonTitle,
   slugToTitle,
@@ -150,6 +151,24 @@ test("seasonNum understands official trailing Roman season numbers", () => {
   assert.equal(seasonNum("Shiguang Dailiren III"), 3);
   assert.equal(seasonNum("Shiguang Dailiren II"), 2);
   assert.equal(canonTitle("Shiguang Dailiren III"), canonTitle("Shiguang Dailiren Season 3"));
+});
+
+test("seasonNum reads mid-title Roman season numbers (Mushoku Tensei III)", () => {
+  assert.equal(asciiRomans("Mushoku Tensei Ⅲ"), "Mushoku Tensei III");
+  assert.equal(seasonNum("Mushoku Tensei III: Isekai Ittara Honki Dasu"), 3);
+  assert.equal(seasonNum("mushoku-tensei-iii-isekai-ittara-honki-dasu"), 3);
+  assert.equal(seasonNum("Mushoku Tensei II: Isekai Ittara Honki Dasu"), 2);
+  assert.equal(seasonNum("Mushoku Tensei Ⅲ: Isekai Ittara Honki Dasu"), 3); // Unicode Ⅲ
+  // Guards: no false season reads.
+  assert.equal(seasonNum("Spy x Family"), 0);   // lowercase x is not roman X
+  assert.equal(seasonNum("Mob Psycho 100"), 0);
+  assert.equal(seasonNum("Fate/stay night"), 0);
+  assert.equal(seasonNum("Some Show I"), 0);    // bare I is never a season
+  // Single uppercase V/X are title letters/words, not seasons — this parser
+  // drives absolute decisions (MAL matching, AI context).
+  assert.equal(seasonNum("X-Men"), 0);
+  assert.equal(seasonNum("Mobile Suit V Gundam"), 0);
+  assert.equal(seasonNum("X Densha de Ikou"), 0);
 });
 
 /* ── canonical title (de-dupe / self key) ── */

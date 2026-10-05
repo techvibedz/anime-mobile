@@ -3,6 +3,7 @@ import { Modal, View, Text, Pressable, ScrollView, StyleSheet } from "react-nati
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, R, ELEVATION_GLOW } from "../lib/theme";
 import type { UpdateInfo } from "../lib/updater";
 import { applyOtaUpdate, downloadAndInstallApk } from "../lib/updater";
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export function UpdateModal({ info, onClose }: Props) {
+  const insets = useSafeAreaInsets();
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -50,7 +52,7 @@ export function UpdateModal({ info, onClose }: Props) {
 
   return (
     <Modal transparent animationType="fade" visible onRequestClose={info.isForce ? undefined : onClose}>
-      <BlurView intensity={40} tint="dark" style={ss.backdrop}>
+      <BlurView intensity={40} tint="dark" style={[ss.backdrop, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 16 }]}>
         <View style={ss.sheet}>
           {/* Long release notes must not push the action buttons off-screen. */}
           <ScrollView
@@ -131,6 +133,7 @@ const ss = StyleSheet.create({
   },
   scroll: {
     width: "100%",
+    flexShrink: 1,
   },
   scrollContent: {
     alignItems: "center",
@@ -187,6 +190,7 @@ const ss = StyleSheet.create({
   },
   buttons: {
     width: "100%",
+    flexShrink: 0,
     gap: 12,
   },
   btnPrimary: {
@@ -209,10 +213,14 @@ const ss = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     paddingVertical: 14,
+    paddingHorizontal: 12,
   },
   btnPrimaryText: {
     color: C.textOnAccent,
-    fontSize: 16,
+    fontSize: 14,
+    lineHeight: 24,
+    flexShrink: 1,
+    textAlign: "center",
     fontWeight: "700",
     fontFamily: "Cairo_700Bold",
   },

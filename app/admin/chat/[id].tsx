@@ -203,27 +203,27 @@ export default function AdminChatThreadScreen() {
   return (
     <View style={[s.root, { paddingTop: insets.top }]}>
       <Aurora />
-      <ScreenHeader
-        title={name || email || t.chatAdminOpenWithUser}
-        right={
-          thread ? (
-            <Pressable
-              onPress={onCloseToggle}
-              hitSlop={8}
-              style={({ pressed }) => [s.statusBtn, pressed && s.statusBtnPressed, closed && s.statusBtnClosed]}
-            >
-              <Ionicons
-                name={closed ? "lock-open-outline" : "lock-closed-outline"}
-                size={16}
-                color={closed ? C.textMuted : C.accent}
-              />
-              <Text style={[s.statusBtnText, closed && s.statusBtnTextClosed]}>
-                {closed ? t.chatReopenBtn : t.chatCloseBtn}
-              </Text>
-            </Pressable>
-          ) : undefined
-        }
-      />
+      <ScreenHeader title={name || email || t.chatAdminOpenWithUser} />
+      {thread ? (
+        <View style={s.statusAction}>
+          <Pressable
+            onPress={onCloseToggle}
+            accessibilityRole="button"
+            accessibilityLabel={closed ? t.chatReopenBtn : t.chatCloseBtn}
+            hitSlop={8}
+            style={({ pressed }) => [s.statusBtn, pressed && s.statusBtnPressed, closed && s.statusBtnClosed]}
+          >
+            <Ionicons
+              name={closed ? "lock-open-outline" : "lock-closed-outline"}
+              size={16}
+              color={closed ? C.textMuted : C.accent}
+            />
+            <Text style={[s.statusBtnText, closed && s.statusBtnTextClosed]}>
+              {closed ? t.chatReopenBtn : t.chatCloseBtn}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior="padding"
@@ -396,6 +396,7 @@ const s = StyleSheet.create({
   emptyTitle: { color: C.text, fontSize: 16, fontWeight: "700", fontFamily: "Cairo_700Bold" },
   emptySub: { color: C.textMuted, fontSize: 13, marginTop: 6, textAlign: "center", fontFamily: "Cairo_500Medium", lineHeight: 19 },
 
+  statusAction: { alignSelf: "flex-end", marginHorizontal: S.paddingContent, marginBottom: 12 },
   statusBtn: {
     flexDirection: "row-reverse", alignItems: "center", gap: 6,
     minHeight: 48, paddingHorizontal: 11, paddingVertical: 10, borderRadius: R.md,

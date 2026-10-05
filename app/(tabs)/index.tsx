@@ -4,7 +4,7 @@ import {
   Text,
   ScrollView,
   Pressable,
-  Dimensions,
+  useWindowDimensions,
   RefreshControl,
   StyleSheet,
   Modal,
@@ -34,6 +34,7 @@ import { AniListPosterCard } from "../../components/AniListPosterCard";
 import { resolveEntryToSource } from "../../lib/anilistResolve";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebarActions } from "../../components/Sidebar";
+import { PantoufaWordmark } from "../../components/PantoufaWordmark";
 import { Shimmer } from "../../components/Shimmer";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
@@ -49,8 +50,8 @@ import { remoteLog, errText } from "../../lib/remoteLog";
 import { useReducedMotion } from "../../lib/motion";
 import { posterUrl } from "../../lib/img";
 import { Rise } from "../../components/Rise";
+import { AnimeOfTheDay } from "../../components/AnimeOfTheDay";
 
-const { width: SW } = Dimensions.get("window");
 const HERO_H = 440;
 const CARD_W = 140;
 const CARD_H = 200;
@@ -78,6 +79,7 @@ const HOME_SECTION_IDS = ["recently_updated", "latest_movies", "top_animes", "to
    reconciled the whole tree on the JS thread and stuttered an in-progress
    vertical scroll. Memoized: re-renders only when `featured` changes. */
 const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: FeaturedItem[] }) {
+  const { width: SW } = useWindowDimensions();
   const heroRef = useRef<ScrollView>(null);
   const [heroIndex, setHeroIndex] = useState(0);
   const heroTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -102,7 +104,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
         return next;
       });
     }, 5000);
-  }, [featured.length, reduced]);
+  }, [featured.length, reduced, SW]);
 
   useEffect(() => {
     startAuto();
@@ -127,12 +129,13 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
         ref={heroRef}
         horizontal
         pagingEnabled
+        onLayout={() => heroRef.current?.scrollTo({ x: heroIndex * SW, animated: false })}
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={(e) => { onHeroScroll(e); startAuto(); }}
         scrollEventThrottle={16}
       >
         {featured.map((item, i) => (
-          <View key={item.href || i} style={ss.heroSlide}>
+          <View key={item.href || i} style={[ss.heroSlide, { width: SW }]}>
             {/* Mesh gradient background */}
             <View style={ss.meshBg}>
               <LinearGradient
@@ -427,10 +430,7 @@ export default function HomeScreen() {
           style={ABSOLUTE_FILL}
         />
         <View style={ss.topBarInner}>
-          <View style={ss.logoRow}>
-            <View style={ss.logoDot} />
-            <Text style={ss.logoText}>Pantoufa</Text>
-          </View>
+          <PantoufaWordmark />
           {/* Actions consolidated into one frosted segmented cluster — a single
               premium control instead of three scattered circles. Each segment
               keeps its own 44px hit target + handler. */}
@@ -470,6 +470,8 @@ export default function HomeScreen() {
       >
         {/* ── Hero Carousel (state isolated — see HeroCarousel) ─────── */}
         {featured.length > 0 && <HeroCarousel featured={featured} />}
+
+        <AnimeOfTheDay />
 
         {/* ── Resume shelf (Continue Watching) ───────────────
             Promoted onto a frosted panel that OVERLAPS the hero's lower edge —
@@ -599,6 +601,7 @@ function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClos
             style={[ss.sheetPanel, { paddingBottom: insets.bottom + 16, transform: [{ translateY }] }]}
             onStartShouldSetResponder={() => true}
           >
+            <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ gap: 10 }}>
             <View style={ss.sheetGrabber} />
             {episode.image ? (
               <Image source={{ uri: episode.image }} style={ss.sheetImage} contentFit="cover" />
@@ -656,6 +659,7 @@ function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClos
             <Pressable style={ss.sheetCancel} onPress={animateClose}>
               <Text style={ss.sheetCancelText}>{t.cancel}</Text>
             </Pressable>
+            </ScrollView>
           </Animated.View>
         </View>
       </View>
@@ -959,10 +963,7 @@ function HomeEmpty({
     <View style={ss.root}>
       <View style={[ss.topBar, { paddingTop: insets.top + 8 }]}>
         <View style={ss.topBarInner}>
-          <View style={ss.logoRow}>
-            <View style={ss.logoDot} />
-            <Text style={ss.logoText}>Pantoufa</Text>
-          </View>
+          <PantoufaWordmark />
           <Pressable onPress={onMenu} hitSlop={8}>
             <View style={ss.glassBtn}>
               <Ionicons name="menu" size={20} color={C.text} />
@@ -987,7 +988,7 @@ function HomeEmpty({
 function HomeSkeleton() {
   return (
     <View style={ss.root}>
-      <Shimmer style={{ width: SW, height: HERO_H }} borderRadius={0} />
+      <Shimmer style={{ width: "100%", height: HERO_H }} borderRadius={0} />
       <View style={{ paddingHorizontal: PAD, marginTop: 28 }}>
         <Shimmer style={{ width: 160, height: 20, marginBottom: 16 }} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -1021,15 +1022,6 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: PAD, paddingBottom: 12,
   },
-  logoRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  // Editorial masthead: bone wordmark led by an ember spark mark.
-  logoDot: {
-    width: 8, height: 24, borderRadius: 4, backgroundColor: C.ember,
-  },
-  logoText: {
-    ...T.h2, fontSize: 24, letterSpacing: -0.6,
-    color: C.bone,
-  },
   // Standalone glass button — used by HomeEmpty's single menu control. 44px floor.
   glassBtn: {
     width: 44, height: 44, borderRadius: R.circle, overflow: "hidden",
@@ -1056,7 +1048,7 @@ const ss = StyleSheet.create({
   },
 
   // Hero
-  heroSlide: { width: SW, height: HERO_H, backgroundColor: C.surface },
+  heroSlide: { width: "100%", height: HERO_H, backgroundColor: C.surface },
   meshBg: { ...StyleSheet.flatten(ABSOLUTE_FILL) },
   heroContent: {
     position: "absolute", bottom: 0, left: 0, right: 0,
@@ -1078,7 +1070,7 @@ const ss = StyleSheet.create({
   },
   chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
   heroTitle: {
-    ...TAr.display, fontSize: 30, lineHeight: 42,
+    ...TAr.display, fontSize: 24, lineHeight: 36,
     color: C.bone, textAlign: "right",
   },
   heroDesc: {
@@ -1205,8 +1197,9 @@ const ss = StyleSheet.create({
 
   // Episode action bottom sheet
   sheetBackdrop: { backgroundColor: "rgba(0,0,0,0.72)" },
-  sheetAnchor: { flex: 1, justifyContent: "flex-end" },
+  sheetAnchor: { flex: 1, justifyContent: "flex-end", paddingTop: 24 },
   sheetPanel: {
+    maxHeight: "100%",
     backgroundColor: C.playerSheet,
     borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
     paddingHorizontal: 20, paddingTop: 12,

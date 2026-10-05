@@ -26,3 +26,19 @@ export function mergeHistory<T extends MergeEntry>(local: readonly T[], remote: 
   }
   return [...byHref.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, max);
 }
+
+/**
+ * Entries the cloud is missing or has an older copy of — the ones a pull must
+ * push back. Without this, a push that lost the race with an app background/kill
+ * leaves the account (admin history, another device, post-reinstall state)
+ * permanently missing a watched mark: the local copy merges fine, but nothing
+ * ever re-uploads it. Ties are skipped — the cloud copy already won the merge.
+ */
+export function staleAgainstRemote<T extends MergeEntry>(merged: readonly T[], remote: readonly T[]): T[] {
+  const remoteByHref = new Map<string, T>();
+  for (const row of remote) remoteByHref.set(row.episodeHref, row);
+  return merged.filter((entry) => {
+    const row = remoteByHref.get(entry.episodeHref);
+    return !row || entry.updatedAt > row.updatedAt;
+  });
+}

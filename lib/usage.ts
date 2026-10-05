@@ -5,9 +5,12 @@
 //
 // How time is counted: a "session" begins when the app becomes active and ends
 // when it backgrounds. While active we accrue wall-clock seconds and flush them
-// to the `usage_stats` table — on a 60s heartbeat (so a hard-kill loses at most
-// a minute) and again on background. All writes go through the record_usage()
+// to the `usage_stats` table — on a 5min heartbeat (so a hard-kill loses at most
+// five minutes) and again on background. All writes go through the record_usage()
 // RPC, which can only ever touch the caller's own row.
+//
+// ponytail: was 60s, which alone was ~500 API-log lines/day; 5min is plenty for
+// an admin usage screen.
 
 import type { User } from "@supabase/supabase-js";
 import * as Application from "expo-application";
@@ -25,7 +28,7 @@ import {
 // to download a new APK". See [[ota-delivery-runtime-and-apply]].
 const APP_VERSION = Application.nativeApplicationVersion ?? null;
 
-const FLUSH_INTERVAL_MS = 60_000;
+const FLUSH_INTERVAL_MS = 300_000;
 
 let activeUser: User | null = null;
 // Timestamp (ms) from which unflushed foreground seconds have been accruing.

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   candidateForAttempt,
   classifySourceFailure,
+  identifySource,
   isRetryableSourceStatus,
   isTopLevelWebViewError,
   isValidSourceHtml,
@@ -17,8 +18,23 @@ assert.deepEqual(sourceCandidates("https://w1.anime4up.rest/home8/", "anime4up.r
   "https://anime4up.rest/home8/",
   "https://w1.anime4up.rest/home8/",
 ]);
+// www.anime3rb.com is a homepage redirect, not a mirror — it must be dropped
+// both from candidates and from a poisoned stored preference.
 assert.deepEqual(sourceCandidates("https://anime3rb.com/titles/x", "www.anime3rb.com"), [
-  "https://www.anime3rb.com/titles/x",
+  "https://anime3rb.com/titles/x",
+]);
+assert.equal(
+  preferredHostFromValue(
+    JSON.stringify({ host: "www.anime3rb.com", expiresAt: 2_000 }),
+    "anime3rb",
+    1_000,
+  ),
+  null,
+);
+// Old saved www URLs must still be recognized as anime3rb so they rewrite to
+// the real host instead of fetching the homepage-redirect trap.
+assert.equal(identifySource("https://www.anime3rb.com/titles/x"), "anime3rb");
+assert.deepEqual(sourceCandidates("https://www.anime3rb.com/titles/x", null), [
   "https://anime3rb.com/titles/x",
 ]);
 assert.deepEqual(sourceCandidates("https://example.com/x", null), ["https://example.com/x"]);

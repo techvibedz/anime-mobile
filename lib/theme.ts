@@ -120,9 +120,9 @@ export const AR = {
  * Mirrors T's size/lineHeight/letterSpacing steps but swaps the family to Cairo,
  * because Outfit can't render Arabic. Letter-spacing is 0 (Arabic doesn't track). */
 export const TAr = {
-  display: { fontSize: 36, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 52, letterSpacing: 0 },
-  h1: { fontSize: 30, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 44, letterSpacing: 0 },
-  h2: { fontSize: 22, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 34, letterSpacing: 0 },
+  display: { fontSize: 30, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 44, letterSpacing: 0 },
+  h1: { fontSize: 24, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 36, letterSpacing: 0 },
+  h2: { fontSize: 20, fontFamily: AR.bold, fontWeight: "700" as const, lineHeight: 30, letterSpacing: 0 },
   h3: { fontSize: 16, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 26, letterSpacing: 0 },
   body: { fontSize: 14, fontFamily: AR.medium, fontWeight: "500" as const, lineHeight: 24, letterSpacing: 0 },
   bodySmall: { fontSize: 13, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 21, letterSpacing: 0 },
@@ -130,13 +130,11 @@ export const TAr = {
   label: { fontSize: 15, fontFamily: AR.semibold, fontWeight: "600" as const, lineHeight: 20, letterSpacing: 0 },
 } as const;
 
-// Type scale — clean spatial hierarchy. Kept from Sumi (bundled families, proven
-// measures); Holo carries its identity through color/glass/depth/rounding, not a
-// type overhaul. Each step carries its own family so call sites can `...T.h2`.
+// Compact phone headings; body sizes remain readable. Each step includes its family.
 export const T = {
-  display: { fontSize: 40, fontFamily: F.display, fontWeight: "900" as const, lineHeight: 42, letterSpacing: -1.0 },
-  h1: { fontSize: 30, fontFamily: F.display, fontWeight: "900" as const, lineHeight: 33, letterSpacing: -0.7 },
-  h2: { fontSize: 21, fontFamily: F.heading, fontWeight: "700" as const, lineHeight: 25, letterSpacing: -0.3 },
+  display: { fontSize: 32, fontFamily: F.display, fontWeight: "900" as const, lineHeight: 38, letterSpacing: -1.0 },
+  h1: { fontSize: 26, fontFamily: F.display, fontWeight: "900" as const, lineHeight: 32, letterSpacing: -0.7 },
+  h2: { fontSize: 20, fontFamily: F.heading, fontWeight: "700" as const, lineHeight: 26, letterSpacing: -0.3 },
   h3: { fontSize: 16, fontFamily: F.headingSemi, fontWeight: "600" as const, lineHeight: 21 },
   body: { fontSize: 14, fontFamily: F.body, fontWeight: "400" as const, lineHeight: 23 },
   bodySmall: { fontSize: 13, fontFamily: F.bodyMedium, fontWeight: "500" as const, lineHeight: 18 },

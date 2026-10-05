@@ -8,6 +8,7 @@ import {
   RefreshControl,
   StyleSheet,
   Modal,
+  ScrollView,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router } from "expo-router";
@@ -217,6 +218,7 @@ export default function SeeAllScreen() {
         <Modal transparent animationType="fade" visible onRequestClose={() => setEpisodePopup(null)}>
           <Pressable style={s.modalBackdrop} onPress={() => setEpisodePopup(null)}>
             <Pressable style={s.modalSheet} onPress={() => {}}>
+              <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ gap: 10 }}>
               {episodePopup.image ? (
                 <Image source={{ uri: episodePopup.image }} style={s.modalImage} contentFit="cover" />
               ) : null}
@@ -255,6 +257,7 @@ export default function SeeAllScreen() {
               <Pressable style={s.modalCancel} onPress={() => setEpisodePopup(null)}>
                 <Text style={s.modalCancelText}>{t.cancel}</Text>
               </Pressable>
+              </ScrollView>
             </Pressable>
           </Pressable>
         </Modal>
@@ -274,7 +277,7 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center", padding: 24,
   },
   modalSheet: {
-    width: "100%", maxWidth: 360,
+    width: "100%", maxWidth: 360, maxHeight: "100%",
     backgroundColor: C.bg, borderRadius: R.xl, padding: 20,
     borderWidth: 1, borderColor: C.border,
     alignItems: "stretch", gap: 10,
@@ -283,19 +286,19 @@ const s = StyleSheet.create({
     width: "100%", aspectRatio: 16 / 9, borderRadius: R.lg,
     backgroundColor: C.surface, marginBottom: 4,
   },
-  modalTitle: { color: C.white, fontSize: 16, fontWeight: "700", textAlign: "center" },
-  modalSub: { color: C.textMuted, fontSize: 12, textAlign: "center", marginBottom: 6 },
+  modalTitle: { fontFamily: "Cairo_700Bold", lineHeight: 26, color: C.white, fontSize: 16, fontWeight: "700", textAlign: "center" },
+  modalSub: { fontFamily: "Cairo_500Medium", lineHeight: 21, color: C.textMuted, fontSize: 12, textAlign: "center", marginBottom: 6 },
   modalBtnPrimary: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     backgroundColor: C.accent, paddingVertical: 12, borderRadius: R.pill,
   },
-  modalBtnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700" },
+  modalBtnPrimaryText: { flexShrink: 1, textAlign: "center", fontFamily: "Cairo_600SemiBold", lineHeight: 24, color: C.textOnAccent, fontSize: 14, fontWeight: "700" },
   modalBtnSecondary: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
     paddingVertical: 12, borderRadius: R.pill,
   },
-  modalBtnSecondaryText: { color: C.white, fontSize: 14, fontWeight: "700" },
+  modalBtnSecondaryText: { flexShrink: 1, textAlign: "center", fontFamily: "Cairo_600SemiBold", lineHeight: 24, color: C.white, fontSize: 14, fontWeight: "700" },
   modalCancel: { paddingVertical: 10, alignItems: "center" },
-  modalCancelText: { color: C.textMuted, fontSize: 13, fontWeight: "600" },
+  modalCancelText: { flexShrink: 1, textAlign: "center", fontFamily: "Cairo_600SemiBold", lineHeight: 24, color: C.textMuted, fontSize: 13, fontWeight: "600" },
 });

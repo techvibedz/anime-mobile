@@ -1,3 +1,4 @@
+/** @jsxImportSource nativewind */
 // Poster grid cell shared by the Upcoming and Seasons screens. Now built on
 // the unified <PosterCard> so it shares one anatomy with every other poster
 // in the app. Memoized so the grid doesn't re-render its visible cells when

@@ -23,6 +23,7 @@ import {
   pickBestMedia,
   scoreMedia,
   seasonNum,
+  asciiRomans,
   collectFranchise,
   type AniListMedia,
   type RelatedAnimeEntry,
@@ -47,7 +48,8 @@ export interface MalData {
 const EMPTY: MalData = { score: null, fields: [] };
 
 // v2 — the cached shape changed from AnimeInfoField[] to MalData.
-const CACHE_PREFIX = "@anime_mal_v2:";
+// v3 — season-roman matching fix; old keys may hold a wrong-season _complete:true.
+const CACHE_PREFIX = "@anime_mal_v3:";
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /* ── Arabic value maps ──────────────────────────── */
@@ -173,7 +175,10 @@ export function parseMalHtml(html: string): MalData {
 /* ── Best-match selection ───────────────────────── */
 
 function norm(s: string): string {
-  return (s || "")
+  // Fold Unicode romans BEFORE the character strip: without this "Mushoku
+  // Tensei Ⅲ: …" loses Ⅲ and ":" entirely and normalises to Season 1's
+  // "mushoku tensei isekai ittara honki dasu" — an exact-match 1000 for S1.
+  return asciiRomans(s || "")
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, "")
     .replace(/\s+/g, " ")
@@ -628,7 +633,7 @@ export async function getAltTitles(query: string): Promise<string[]> {
  * de-dupe, self-exclusion) lives in ./relations so it's unit-testable without
  * the RN runtime. This file only does the network call + caching. */
 
-const REL_CACHE_PREFIX = "@anime_relations_v7:";
+const REL_CACHE_PREFIX = "@anime_relations_v8:";
 
 // POST a GraphQL query to AniList, retrying the transient failures that occur
 // in the wild (429 rate-limit, 5xx). Returns parsed JSON or null.

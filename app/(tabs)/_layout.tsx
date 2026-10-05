@@ -3,10 +3,12 @@ import { View, Text, StyleSheet, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, R, AR } from "../../lib/theme";
+import { M, MT } from "../../lib/manga/design";
 
 const TABS = [
   { name: "index", icon: "home" as const, label: "الرئيسية" },
   { name: "search", icon: "search" as const, label: "اكتشف" },
+  { name: "manga", icon: "book" as const, label: "مانجا" },
   { name: "mylist", icon: "heart" as const, label: "قائمتي" },
 ];
 
@@ -27,7 +29,7 @@ export default function TabLayout() {
       tabBar={(props) => <FloatingNav {...props} />}
     >
       {TABS.map((tab) => (
-        <Tabs.Screen key={tab.name} name={tab.name} options={{ title: tab.label }} />
+        <Tabs.Screen key={tab.name} name={tab.name} options={{ title: tab.label, ...(tab.name === "manga" ? { sceneStyle: { backgroundColor: M.paper } } : {}) }} />
       ))}
     </Tabs>
   );
@@ -35,9 +37,10 @@ export default function TabLayout() {
 
 function FloatingNav({ state, navigation }: any) {
   const insets = useSafeAreaInsets();
+  const manga = state.routes[state.index]?.name === "manga";
    // Keep the labeled navigation above both gesture and three-button system bars.
   return (
-    <View style={[ss.navWrap, { paddingBottom: Math.max(insets.bottom, 10) }]} pointerEvents="box-none">
+    <View style={[ss.navWrap, manga && { backgroundColor: M.paper, borderTopColor: M.line }, { paddingBottom: Math.max(insets.bottom, 10) }]} pointerEvents="box-none">
       <View style={ss.navPill}>
         <View style={ss.navInner}>
           {TABS.map((tab, i) => {
@@ -52,14 +55,14 @@ function FloatingNav({ state, navigation }: any) {
                   const event = navigation.emit({ type: "tabPress", target: state.routes[i].key, canPreventDefault: true });
                   if (!active && !event.defaultPrevented) navigation.navigate(state.routes[i].name);
                 }}
-                style={[ss.navItem, active && ss.navItemActive]}
+                style={[ss.navItem, active && ss.navItemActive, manga && { borderRadius: 4 }, manga && active && { backgroundColor: M.ink }]}
               >
                 <Ionicons
                   name={active ? tab.icon : (`${tab.icon}-outline` as any)}
                   size={22}
-                  color={active ? C.ember : C.textMuted}
+                  color={manga ? (active ? M.white : M.muted) : active ? C.ember : C.textMuted}
                 />
-                <Text style={[ss.navLabel, active && { color: C.accent }]}>{tab.label}</Text>
+                <Text style={[ss.navLabel, active && { color: C.accent }, manga && { ...MT.caption, fontSize: 11, color: active ? M.white : M.muted }]}>{tab.label}</Text>
               </Pressable>
             );
           })}

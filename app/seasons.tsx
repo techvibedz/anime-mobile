@@ -169,7 +169,7 @@ const s = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     marginBottom: 14, marginTop: 2,
   },
-  listHeadTitle: { color: C.text, fontSize: 18, fontFamily: "Cairo_700Bold" },
+  listHeadTitle: { flex: 1, minWidth: 0, marginRight: 12, color: C.text, fontSize: 18, fontFamily: "Cairo_700Bold" },
   listHeadCount: {
     color: C.accent, fontSize: 12, fontFamily: "Cairo_600SemiBold",
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,

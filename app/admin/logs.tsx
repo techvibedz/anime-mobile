@@ -117,10 +117,11 @@ export default function LogsScreen() {
     if (admin) void load();
   }, [admin, load]);
 
-  // Auto-refresh every 15s while the screen is open and admin.
+  // Auto-refresh every 60s while the screen is open and admin. (Was 15s — the
+  // poll was one of the top API-log writers for zero benefit.)
   useEffect(() => {
     if (!admin) return;
-    const iv = setInterval(() => void load(), 15000);
+    const iv = setInterval(() => void load(), 60000);
     return () => clearInterval(iv);
   }, [admin, load]);
 

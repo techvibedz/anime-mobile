@@ -92,6 +92,17 @@ const seasonHit = pickMalCandidate([
 assert.equal(seasonHit?.mal_id, 2);
 assert.equal(pickMalCandidate([{ mal_id: 3, title: "Naruto" }], "Frieren"), null);
 
+// Regression: "Mushoku Tensei III" used to score S1 an exact 1000 and win,
+// showing S1's 11 episodes / 2021 dates. The III (or Unicode Ⅲ) must select S3.
+const mushokuCandidates = [
+  { mal_id: 1, title: "Mushoku Tensei: Isekai Ittara Honki Dasu", episodes: 11, aired: { string: "Jan 11, 2021 to Mar 22, 2021" }, members: 2000000 },
+  { mal_id: 2, title: "Mushoku Tensei II: Isekai Ittara Honki Dasu", episodes: 12, members: 900000 },
+  { mal_id: 3, title: "Mushoku Tensei III: Isekai Ittara Honki Dasu", episodes: 14, members: 400000 },
+];
+assert.equal(pickMalCandidate(mushokuCandidates, "Mushoku Tensei III: Isekai Ittara Honki Dasu")?.mal_id, 3);
+assert.equal(pickMalCandidate(mushokuCandidates, "Mushoku Tensei Ⅲ: Isekai Ittara Honki Dasu")?.mal_id, 3);
+assert.equal(pickMalCandidate(mushokuCandidates, "Mushoku Tensei II: Isekai Ittara Honki Dasu")?.mal_id, 2);
+
 async function testFastPrefix() {
   const prefixUrls: string[] = [];
   const fastPrefix = await fetchMalPrefix("One Piece", async (url) => {

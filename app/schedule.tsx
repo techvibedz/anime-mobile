@@ -236,7 +236,7 @@ const s = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     marginBottom: 14,
   },
-  listHeadTitle: { color: C.text, fontSize: 18, fontFamily: "Cairo_700Bold" },
+  listHeadTitle: { flex: 1, minWidth: 0, marginRight: 12, color: C.text, fontSize: 18, fontFamily: "Cairo_700Bold" },
   listHeadCount: {
     color: C.accent, fontSize: 12, fontFamily: "Cairo_600SemiBold",
     backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
@@ -258,7 +258,7 @@ const s = StyleSheet.create({
     color: C.text, fontSize: 16, lineHeight: 26, fontFamily: "Cairo_600SemiBold",
     textAlign: "right", marginTop: 3,
   },
-  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 5 },
+  metaRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 5 },
   metaText: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium" },
   scorePill: { flexDirection: "row", alignItems: "center", gap: 3 },
   scoreText: { color: C.gold, fontSize: 11, fontWeight: "700", fontFamily: "Outfit_700Bold" },

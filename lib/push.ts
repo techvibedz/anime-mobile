@@ -10,9 +10,13 @@
 // degrade to no-ops instead of crashing.
 
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
-import { getNotificationsEnabled, getNotificationScope, type NotificationScope } from "./settings";
+import { getNotificationsEnabled, getNotificationScope, getDailyAnimeNotif, type NotificationScope } from "./settings";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
+import { fetchSeasonAnime, currentSeason } from "./seasons";
+import { localDayKey, orderDailyPool, pickOfTheDay } from "./dailyPick";
+import { t } from "./i18n";
 
 let Notifications: typeof import("expo-notifications") | null = null;
 try {
@@ -24,6 +28,7 @@ try {
 }
 
 const CHANNEL_ID = "new-episodes";
+const DAILY_IDS_KEY = "@daily_anime_notif_ids";
 let configured = false;
 
 /** Configure foreground behaviour + the Android notification channel. Safe to call repeatedly. */
@@ -114,11 +119,84 @@ export async function presentNewEpisodeNotification(params: {
           animeHref: params.animeHref,
           image: params.image,
         },
-        ...(Platform.OS === "android" ? { channelId: CHANNEL_ID } : {}),
       },
-      trigger: null, // deliver immediately
+      // Android reads the channel from the TRIGGER, not the content.
+      trigger: Platform.OS === "android" ? { channelId: CHANNEL_ID } : null,
     });
   } catch {}
+}
+
+/** Cancel every scheduled "أنمي اليوم" notification and clear the stored ids. */
+export async function cancelDailyAnimeReminders(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(DAILY_IDS_KEY);
+    const ids: string[] = raw ? JSON.parse(raw) : [];
+    if (Notifications) {
+      for (const id of ids) {
+        try {
+          await Notifications.cancelScheduledNotificationAsync(id);
+        } catch {}
+      }
+    }
+    await AsyncStorage.removeItem(DAILY_IDS_KEY);
+  } catch {
+    // never throws
+  }
+}
+
+/**
+ * (Re)schedule the next 7 days of "أنمي اليوم" local notifications from the
+ * current season's catalogue, one per day at 20:00 local time. Called on every
+ * app start and when the setting is toggled; always cancels the previous batch
+ * first so ids can't pile up. Never throws.
+ */
+export async function syncDailyAnimeReminders(): Promise<void> {
+  try {
+    await cancelDailyAnimeReminders();
+    if (!notificationsModuleAvailable()) return;
+    if (!(await getDailyAnimeNotif())) return;
+    if (!(await getNotificationsEnabled())) return;
+    if (!(await hasNotificationPermission())) return;
+    await setupNotifications();
+
+    const { season, year } = currentSeason();
+    // Same shared pool as the home card (watchable + popularity order + cap),
+    // so a notification can never name a different anime than the card.
+    const list = orderDailyPool(await fetchSeasonAnime(season, year));
+    if (!list.length) return; // offline / empty catalogue → nothing to schedule
+
+    const ids: string[] = [];
+    const now = Date.now();
+    for (let i = 0; i < 7; i++) {
+      const day = new Date();
+      day.setDate(day.getDate() + i);
+      const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 20, 0, 0, 0);
+      if (at.getTime() <= now) continue; // skip today once 20:00 has passed
+      const pick = pickOfTheDay(list, localDayKey(day));
+      if (!pick) continue;
+      ids.push(
+        await Notifications!.scheduleNotificationAsync({
+          content: {
+            title: t.dailyNotifTitle,
+            body: t.dailyNotifBody(pick.title),
+            sound: true,
+            data: { anilistId: pick.id },
+          },
+          trigger: {
+            type: Notifications!.SchedulableTriggerInputTypes.DATE,
+            date: at.getTime(),
+            // Android reads the channel from the trigger, not the content.
+            ...(Platform.OS === "android" ? { channelId: CHANNEL_ID } : {}),
+          },
+        }),
+      );
+      // Persist after EVERY schedule: if the loop dies mid-way (storage full,
+      // app killed), the next sync can still cancel what already exists.
+      await AsyncStorage.setItem(DAILY_IDS_KEY, JSON.stringify(ids));
+    }
+  } catch {
+    // never throws
+  }
 }
 
 /**
@@ -240,7 +318,7 @@ export async function unregisterPushTokenAsync(userId: string): Promise<void> {
 
 /** Subscribe to notification taps → returns the tapped notification's data payload. */
 export function addNotificationTapListener(
-  handler: (data: { episodeHref?: string; animeHref?: string; image?: string }) => void,
+  handler: (data: { episodeHref?: string; animeHref?: string; image?: string; anilistId?: number }) => void,
 ): { remove: () => void } {
   if (!Notifications) return { remove: () => {} };
   try {
@@ -251,6 +329,27 @@ export function addNotificationTapListener(
     return sub;
   } catch {
     return { remove: () => {} };
+  }
+}
+
+/**
+ * Data payload of the notification that launched the app from a cold start, or
+ * null. `addNotificationResponseReceivedListener` never fires for that tap, so
+ * startup routing must read it explicitly.
+ */
+export async function getLastNotificationTapData(): Promise<{
+  episodeHref?: string;
+  animeHref?: string;
+  image?: string;
+  anilistId?: number;
+} | null> {
+  if (!Notifications) return null;
+  try {
+    const response = await Notifications.getLastNotificationResponseAsync();
+    const data = response?.notification?.request?.content?.data;
+    return (data as { episodeHref?: string; animeHref?: string; image?: string; anilistId?: number }) ?? null;
+  } catch {
+    return null;
   }
 }
 

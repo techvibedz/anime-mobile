@@ -1,15 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
-import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  Animated,
-  Easing,
-  Dimensions,
-  Share,
-  ScrollView,
-} from "react-native";
+import { View, Text, Pressable, StyleSheet, Animated, Easing, Modal, useWindowDimensions, Share, ScrollView } from "react-native";
 import { Image } from "expo-image";
 import { router, usePathname } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -19,538 +9,242 @@ import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/presence";
 import { getHistory, isCompleted } from "../lib/history";
 import { getFavorites } from "../lib/favorites";
-import { C, R, ELEVATION_CARD, ELEVATION_GLOW_VIOLET, ABSOLUTE_FILL } from "../lib/theme";
+import { C, ABSOLUTE_FILL } from "../lib/theme";
 import { t } from "../lib/i18n";
 import Constants from "expo-constants";
+import * as Application from "expo-application";
 import { useReducedMotion } from "../lib/motion";
 
-// Show the version of the bundle actually running, same source the Settings
-// screen uses. NOT the bundled version.json: the release flow bumps version.json
-// only AFTER the APK is built, so every build ships a version.json one release
-// behind its app.json — which made the sidebar show a stale version (e.g. 1.5.2
-// while Settings showed 1.5.3) until an OTA refreshed the bundle.
-const appVersion = { version: Constants.expoConfig?.version ?? "0.0.0" };
+// The installed binary's version takes precedence over a newer JS bundle.
+const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? "0.0.0";
+const APP_LOGO = require("../assets/icon.png");
 
-const { width: SW } = Dimensions.get("window");
-const PANEL_W = Math.min(360, SW * 0.88);
-
-// Rows are always plain "row" — never "row-reverse". RN 0.81's Yoga engine
-// collapses mixed fixed+flex rows into a broken vertical stack under
-// row-reverse. The app doesn't force RTL, so "row" + right-aligned Arabic text
-// is the stable choice (RN still mirrors plain rows on RTL-locale devices).
-const CHEVRON = "chevron-back" as const;
-
-/* ── Context ─────────────────────────────────── */
-
-interface SidebarCtx {
-  open: boolean;
-  openSidebar: () => void;
-  closeSidebar: () => void;
-}
-interface SidebarActions {
-  openSidebar: () => void;
-  closeSidebar: () => void;
-}
-// Split contexts: the action object is stable, the open flag is not. Screens
-// that only need openSidebar (every screen with a header) used to re-render
-// their whole tree every time the sidebar opened/closed because the combined
-// context value changed.
+interface SidebarActions { openSidebar: () => void; closeSidebar: () => void }
+interface SidebarCtx extends SidebarActions { open: boolean }
+// Keep actions stable so opening the drawer doesn't re-render every screen.
 const ActionsCtx = createContext<SidebarActions | undefined>(undefined);
 const OpenCtx = createContext(false);
 
 export function useSidebarActions(): SidebarActions {
-  const c = useContext(ActionsCtx);
-  if (!c) throw new Error("useSidebar must be used within SidebarProvider");
-  return c;
+  const actions = useContext(ActionsCtx);
+  if (!actions) throw new Error("useSidebar must be used within SidebarProvider");
+  return actions;
 }
-
 export function useSidebar(): SidebarCtx {
-  const actions = useSidebarActions();
-  const open = useContext(OpenCtx);
-  return { open, ...actions };
+  return { open: useContext(OpenCtx), ...useSidebarActions() };
 }
-
 export function SidebarProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const openSidebar = useCallback(() => setOpen(true), []);
   const closeSidebar = useCallback(() => setOpen(false), []);
   const actions = useMemo(() => ({ openSidebar, closeSidebar }), [openSidebar, closeSidebar]);
-  return (
-    <ActionsCtx.Provider value={actions}>
-      <OpenCtx.Provider value={open}>
-        {children}
-        <Sidebar />
-      </OpenCtx.Provider>
-    </ActionsCtx.Provider>
-  );
-}
-
-/* ── Types ───────────────────────────────────── */
-
-interface QuickStats {
-  episodesWatched: number;
-  animeCount: number;
+  return <ActionsCtx.Provider value={actions}><OpenCtx.Provider value={open}>{children}<Sidebar /></OpenCtx.Provider></ActionsCtx.Provider>;
 }
 
 interface NavRow {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  onPress: () => void;
-  /** pathname fragment used to highlight the active route */
+  path?: string;
   match?: string;
-  accent?: string;
 }
-
-/* ── Sidebar UI ──────────────────────────────── */
 
 function Sidebar() {
   const { open, closeSidebar } = useSidebar();
   const { user, signOut, isConfigured } = useAuth();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const panelWidth = Math.min(380, width - 32);
   const pathname = usePathname();
   const reduced = useReducedMotion();
-
+  const admin = isAdmin(user?.email);
   const [mounted, setMounted] = useState(false);
-  const [stats, setStats] = useState<QuickStats>({ episodesWatched: 0, animeCount: 0 });
-  // Single driver (0 = closed, 1 = open). Panel slide, backdrop fade and the
-  // content settle are all interpolated from it — one native value, no jank.
+  const [stats, setStats] = useState({ episodesWatched: 0, animeCount: 0 });
   const anim = useRef(new Animated.Value(0)).current;
-
-  // Auto-close on route change.
   const lastPath = useRef(pathname);
+
   useEffect(() => {
     if (pathname !== lastPath.current) {
       lastPath.current = pathname;
       if (open) closeSidebar();
     }
-  }, [pathname]);
+  }, [pathname, open, closeSidebar]);
 
   useEffect(() => {
+    let alive = true;
+    anim.stopAnimation();
     if (open) {
       setMounted(true);
-      Promise.all([getHistory(), getFavorites()])
-        .then(([history, favs]) => {
-          setStats({
-            episodesWatched: history.filter(isCompleted).length,
-            animeCount: favs.length,
-          });
-        })
-        .catch(() => {});
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: reduced ? 0 : 280,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start();
-    } else if (mounted) {
-      Animated.timing(anim, {
-        toValue: 0,
-        duration: reduced ? 0 : 200,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished) setMounted(false);
-      });
+      Promise.all([getHistory(), getFavorites()]).then(([history, favorites]) => {
+        if (alive) setStats({ episodesWatched: history.filter(isCompleted).length, animeCount: favorites.length });
+      }).catch(() => {});
     }
-   }, [open, reduced]);
+    const transition = Animated.timing(anim, {
+      toValue: open ? 1 : 0,
+      duration: reduced ? 0 : open ? 360 : 240,
+      easing: open ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    });
+    transition.start(({ finished }) => {
+      if (alive && finished && !open) setMounted(false);
+    });
+    return () => { alive = false; transition.stop(); };
+  }, [open, reduced, anim]);
 
   if (!mounted) return null;
 
-  // Panel travels in from off-screen-right — the menu trigger lives top-right
-  // and the app reads RTL, so the drawer emerges from the reading edge.
-  const translateX = anim.interpolate({ inputRange: [0, 1], outputRange: [PANEL_W, 0] });
-  const backdropOpacity = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
-  const contentOpacity = anim.interpolate({ inputRange: [0, 0.45, 1], outputRange: [0, 0.15, 1] });
-  // Content drifts in a touch behind the panel for a layered, modern feel.
-  const contentDrift = anim.interpolate({ inputRange: [0, 1], outputRange: [22, 0] });
-
-  const displayName =
-    user?.user_metadata?.full_name ||
-    user?.user_metadata?.name ||
-    (user?.email ? user.email.split("@")[0] : t.guest);
-  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
-  const initial = (displayName || "?").trim().charAt(0).toUpperCase();
-
   const go = (path: string) => {
     closeSidebar();
-    setTimeout(() => router.push(path as any), 80);
+    router.push(path as any);
   };
-
-  const onShare = () => {
+  const share = () => {
     closeSidebar();
-    setTimeout(() => Share.share({ message: t.shareAppMessage }).catch(() => {}), 80);
+    // Let the native drawer finish dismissing before presenting the share sheet.
+    setTimeout(() => Share.share({ message: t.shareAppMessage }).catch(() => {}), reduced ? 0 : 260);
   };
-
-  const NAV: NavRow[] = [
-    { icon: "home-outline", label: t.home, onPress: () => go("/(tabs)"), match: "/(tabs)" },
-    { icon: "person-outline", label: t.profile, onPress: () => go("/profile"), match: "/profile" },
-    { icon: "heart-outline", label: t.myListTitle, onPress: () => go("/(tabs)/mylist"), match: "/mylist" },
-    { icon: "people-outline", label: t.wpTitle, onPress: () => go("/watch-party"), match: "/watch-party" },
-    { icon: "download-outline", label: t.downloadsTitle, onPress: () => go("/downloads"), match: "/downloads" },
-    { icon: "newspaper-outline", label: t.newsTitle, onPress: () => go("/news"), match: "/news" },
-    { icon: "calendar-outline", label: t.scheduleTitle, onPress: () => go("/schedule"), match: "/schedule" },
-    { icon: "sparkles-outline", label: t.upcomingTitle, onPress: () => go("/upcoming"), match: "/upcoming" },
-    { icon: "albums-outline", label: t.seasonsTitle, onPress: () => go("/seasons"), match: "/seasons" },
-    { icon: "notifications-outline", label: t.notifications, onPress: () => go("/notifications"), match: "/notifications" },
-    { icon: "settings-outline", label: t.settingsTitle, onPress: () => go("/settings"), match: "/settings" },
-    { icon: "bug-outline", label: t.reportIssue, onPress: () => go("/report"), match: "/report" },
-    { icon: "share-social-outline", label: t.shareApp, onPress: onShare },
+  const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || t.guest;
+  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture;
+  const groups: { title: string; items: NavRow[] }[] = [
+    { title: t.discover, items: [
+      { icon: "home-outline", label: t.home, path: "/(tabs)", match: "/" },
+      { icon: "search-outline", label: t.discover, path: "/(tabs)/search", match: "/search" },
+      { icon: "book-outline", label: t.mangaTab, path: "/(tabs)/manga", match: "/manga" },
+      { icon: "calendar-outline", label: t.scheduleTitle, path: "/schedule", match: "/schedule" },
+      { icon: "sparkles-outline", label: t.upcomingTitle, path: "/upcoming", match: "/upcoming" },
+      { icon: "albums-outline", label: t.seasonsTitle, path: "/seasons", match: "/seasons" },
+      { icon: "newspaper-outline", label: t.newsTitle, path: "/news", match: "/news" },
+    ] },
+    { title: t.sidebarLibrary, items: [
+      { icon: "heart-outline", label: t.myListTitle, path: "/(tabs)/mylist", match: "/mylist" },
+      { icon: "bookmarks-outline", label: t.mangaLibrary, path: "/manga-library", match: "/manga-library" },
+      { icon: "time-outline", label: t.watchHistory, path: "/history", match: "/history" },
+      { icon: "download-outline", label: t.downloadsTitle, path: "/downloads", match: "/downloads" },
+      { icon: "people-outline", label: t.wpTitle, path: "/watch-party", match: "/watch-party" },
+    ] },
+    { title: t.sidebarAccount, items: [
+      { icon: "person-outline", label: t.profile, path: "/profile", match: "/profile" },
+      { icon: "notifications-outline", label: t.notifications, path: "/notifications", match: "/notifications" },
+      { icon: "settings-outline", label: t.settingsTitle, path: "/settings", match: "/settings" },
+      ...(!admin ? [{ icon: "chatbubble-ellipses-outline" as const, label: t.chatMenuUser, path: "/chat", match: "/chat" }] : []),
+      { icon: "bug-outline", label: t.reportIssue, path: "/report", match: "/report" },
+      { icon: "share-social-outline", label: t.shareApp },
+    ] },
+    ...(admin ? [{ title: t.sidebarAdmin, items: [
+      { icon: "pulse-outline" as const, label: t.liveUsersTitle, path: "/live", match: "/live" },
+      { icon: "stats-chart-outline" as const, label: t.usersTitle, path: "/users", match: "/users" },
+      { icon: "chatbubbles-outline" as const, label: t.chatMenuAdmin, path: "/admin/chats", match: "/admin/chats" },
+      { icon: "terminal-outline" as const, label: t.logsTitle, path: "/admin/logs", match: "/admin/logs" },
+    ] }] : []),
   ];
 
-  // Regular users see "رسائل المشرف" — the thread the admin opens with them.
-  // Admins see the inbox instead via the admin block below.
-  if (!isAdmin(user?.email)) {
-    NAV.splice(NAV.length - 1, 0, {
-      icon: "chatbubble-ellipses-outline",
-      label: t.chatMenuUser,
-      onPress: () => go("/chat"),
-      match: "/chat",
-    });
-  }
-
-  // Admin-only: live view of who's using the app right now. Visible only to the
-  // owner account (see ADMIN_EMAILS in lib/presence.ts).
-  if (isAdmin(user?.email)) {
-    NAV.splice(NAV.length - 1, 0, {
-      icon: "pulse-outline",
-      label: t.liveUsersTitle,
-      onPress: () => go("/live"),
-      match: "/live",
-      accent: C.success,
-    });
-    NAV.splice(NAV.length - 1, 0, {
-      icon: "stats-chart-outline",
-      label: t.usersTitle,
-      onPress: () => go("/users"),
-      match: "/users",
-      accent: C.accent,
-    });
-    NAV.splice(NAV.length - 1, 0, {
-      icon: "chatbubbles-outline",
-      label: t.chatMenuAdmin,
-      onPress: () => go("/admin/chats"),
-      match: "/admin/chats",
-      accent: C.mint,
-    });
-    NAV.splice(NAV.length - 1, 0, {
-      icon: "terminal-outline",
-      label: t.logsTitle,
-      onPress: () => go("/admin/logs"),
-      match: "/admin/logs",
-      accent: "#FBBF24",
-    });
-  }
-
   return (
-    <View style={st.overlay} pointerEvents="box-none">
-      {/* Backdrop */}
-      <Animated.View
-        style={[ABSOLUTE_FILL, { opacity: backdropOpacity }]}
-        pointerEvents={open ? "auto" : "none"}
-      >
-        <Pressable style={st.backdrop} onPress={closeSidebar} />
-      </Animated.View>
-
-      {/* Panel (slides in from the right / reading edge) */}
-      <Animated.View
-        style={[st.panel, { width: PANEL_W, paddingTop: insets.top + 16, transform: [{ translateX }] }]}
-      >
-        {/* Subtle neutral tonal lift — no colored glow (Sumi: hairlines, not halos). */}
-        <View style={st.glow} pointerEvents="none">
-          <View style={[ABSOLUTE_FILL, { backgroundColor: C.inkRaised, opacity: 0.4 }]} />
-        </View>
-        {/* Accent hairline on the panel's leading edge — single ember color. */}
-        <LinearGradient
-          colors={[C.ember, "transparent"]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0, y: 1 }}
-          style={st.edgeLine}
-          pointerEvents="none"
-        />
-
-        <Animated.View style={{ flex: 1, opacity: contentOpacity, transform: [{ translateX: contentDrift }] }}>
-          {/* Brand lockup + close */}
-          <View style={st.header}>
-            <Pressable onPress={closeSidebar} hitSlop={8} style={({ pressed }) => [st.closeBtn, pressed && st.closeBtnPressed]}>
-              <Ionicons name="close" size={20} color={C.text} />
-            </Pressable>
-            <View style={st.brandLockup}>
-              <View style={st.brandTextWrap}>
-                <Text style={st.brandName}>{t.settingsAppName}</Text>
-                <Text style={st.brandTag}>{t.settingsTagline}</Text>
-              </View>
-              <View style={st.logoWrap}>
-                <View style={st.logoMark}>
-                  <Text style={st.logoGlyph}>P</Text>
-                </View>
-              </View>
-            </View>
-          </View>
-
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: insets.bottom + 28 }}
-          >
-            {/* Hero profile card — identity + quick stats in one cohesive block */}
-            <Pressable
-              style={({ pressed }) => [st.hero, pressed && st.heroPressed]}
-              onPress={() => go("/profile")}
-            >
-              <View style={st.heroRow}>
-                <View style={st.heroChevron}>
-                  <Ionicons name={CHEVRON} size={18} color={C.textMuted} />
-                </View>
-                <View style={st.heroText}>
-                  <Text style={st.name} numberOfLines={1}>{displayName}</Text>
-                  <Text style={st.email} numberOfLines={1}>{user?.email || t.guest}</Text>
-                  <View style={st.heroBadge}>
-                    <Text style={st.heroBadgeText}>{t.profileTitle}</Text>
-                  </View>
-                </View>
-                <View style={st.avatarOuter}>
-                  <View style={st.avatarRing}>
-                    <View style={st.avatarInner}>
-                      {avatarUrl ? (
-                        <Image source={{ uri: avatarUrl }} style={st.avatar} contentFit="cover" transition={150} />
-                      ) : (
-                        <View style={[st.avatar, st.avatarFallback]}>
-                          <Text style={st.avatarInitial}>{initial}</Text>
-                        </View>
-                      )}
-                    </View>
-                  </View>
-                </View>
-              </View>
-
-              {/* Inline stat footer — bare stats (no nested cards) */}
-              <View style={st.heroDivider} />
-              <View style={st.heroStats}>
-                <StatTile icon="albums-outline" value={stats.animeCount} label={t.statsAnimeInList} tint={C.violet} />
-                <View style={st.heroStatDivider} />
-                <StatTile icon="play-circle-outline" value={stats.episodesWatched} label={t.statsEpisodesWatched} tint={C.accent} />
-              </View>
-            </Pressable>
-
-            {/* Nav */}
-            <Text style={st.sectionCap}>{t.menu}</Text>
-            <View style={st.navList}>
-              {NAV.map((item) => {
-                const active = !!item.match && pathname?.startsWith(item.match);
-                const tint = item.accent ?? C.accent;
-                return (
-                  <Pressable
-                    key={item.label}
-                    onPress={item.onPress}
-                    style={({ pressed }) => [
-                      st.navItem,
-                      active && { backgroundColor: tint + "1A", borderColor: tint + "33" },
-                      pressed && st.navItemPressed,
-                    ]}
-                  >
-                    {/* Icon is absolutely pinned to the right (reading edge) and the
-                        label is a plain full-width right-aligned text. There is NO
-                        flexDirection:"row" here, so an Arabic-locale device can't
-                        reverse the row and collapse it into a broken vertical stack
-                        (RN ignores the `direction` style; left/right stay physical). */}
-                    <View style={[st.navIcon, active && { backgroundColor: tint + "1F", borderColor: tint + "33" }]}>
-                      <Ionicons name={item.icon} size={21} color={active ? tint : C.textSecondary} />
-                    </View>
-                    <Text style={[st.navLabel, active && st.navLabelActive, active && { color: tint }]} numberOfLines={2}>{item.label}</Text>
-                    {/* Disclosure chevron only on the focused row, pinned far-left. */}
-                    {active ? <Ionicons style={st.navChevron} name={CHEVRON} size={15} color={tint} /> : null}
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {/* Sign out */}
-            {isConfigured && user ? (
-              <>
-                <View style={st.divider} />
-                <Pressable
-                  onPress={() => { closeSidebar(); setTimeout(() => signOut(), 80); }}
-                  style={({ pressed }) => [st.navItem, st.signOutItem, pressed && st.navItemPressed]}
-                >
-                  <View style={[st.navIcon, st.navIconDanger]}>
-                    <Ionicons name="log-out-outline" size={21} color={C.accent} />
-                  </View>
-                  <Text style={[st.navLabel, st.signOutLabel]}>{t.signOut}</Text>
-                </Pressable>
-              </>
-            ) : null}
-
-            <View style={st.footer}>
-              <Text style={st.footerName}>{t.settingsAppName}</Text>
-              <Text style={st.footerVersion}>v{appVersion.version}</Text>
-            </View>
-          </ScrollView>
+    <Modal transparent visible={mounted} animationType="none" onRequestClose={closeSidebar} statusBarTranslucent navigationBarTranslucent>
+      <View style={st.overlay} accessibilityViewIsModal>
+        <Animated.View style={[ABSOLUTE_FILL, { opacity: anim }]} pointerEvents={open ? "auto" : "none"}>
+          <Pressable style={st.backdrop} onPress={closeSidebar} accessibilityRole="button" accessibilityLabel={t.close} />
         </Animated.View>
-      </Animated.View>
-    </View>
-  );
-}
-
-/* ── Stat tile ───────────────────────────────── */
-
-function StatTile({
-  icon, value, label, tint,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  value: number;
-  label: string;
-  tint: string;
-}) {
-  return (
-    <View style={st.heroStat}>
-      <View style={st.heroStatHead}>
-        <View style={[st.heroStatIcon, { backgroundColor: tint + "22" }]}>
-          <Ionicons name={icon} size={14} color={tint} />
-        </View>
-        <Text style={st.heroStatNum}>{value}</Text>
+        <Animated.View style={[st.panel, {
+          width: panelWidth, paddingTop: insets.top + 12, paddingBottom: insets.bottom + 8,
+          transform: [{ translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [panelWidth + 8, 0] }) }],
+        }]} pointerEvents={open ? "auto" : "none"}>
+          <LinearGradient colors={["rgba(139,147,255,0.12)", "transparent"]} style={st.brandGlow} pointerEvents="none" />
+          <View style={st.header}>
+            <Pressable onPress={closeSidebar} accessibilityRole="button" accessibilityLabel={t.close} style={({ pressed }) => [st.closeBtn, pressed && st.pressed]}>
+              <Ionicons name="close" size={21} color={C.textSecondary} />
+            </Pressable>
+            <View style={st.brandText}>
+              <Text style={st.brandName}>Pantoufa</Text>
+              <Text style={st.brandTag}>{t.settingsTagline}</Text>
+            </View>
+            <Image source={APP_LOGO} style={st.logo} contentFit="contain" accessibilityLabel="Pantoufa" />
+          </View>
+          <ScrollView style={st.scroll} showsVerticalScrollIndicator={false} contentContainerStyle={st.scrollContent}>
+            <Pressable onPress={() => go("/profile")} accessibilityRole="button" accessibilityLabel={t.profileTitle} style={({ pressed }) => [st.profile, pressed && st.pressed]}>
+              <Ionicons name="chevron-back" size={16} color={C.textMuted} />
+              <View style={st.profileText}>
+                <Text style={st.name} numberOfLines={1}>{displayName}</Text>
+                <Text style={st.email} numberOfLines={1}>{user?.email || t.profileTitle}</Text>
+              </View>
+              {avatarUrl ? <Image source={{ uri: avatarUrl }} style={st.avatar} contentFit="cover" /> :
+                <View style={[st.avatar, st.avatarFallback]}><Text style={st.initial}>{displayName.trim().charAt(0).toUpperCase()}</Text></View>}
+            </Pressable>
+            <View style={st.stats}>
+              <View style={st.stat}><Text style={st.statValue}>{stats.episodesWatched}</Text><Text style={st.statLabel}>{t.statsEpisodesWatched}</Text></View>
+              <View style={st.statDivider} />
+              <View style={st.stat}><Text style={st.statValue}>{stats.animeCount}</Text><Text style={st.statLabel}>{t.statsAnimeInList}</Text></View>
+            </View>
+            {groups.map((group, index) => (
+              <Animated.View key={group.title} style={reduced ? undefined : {
+                opacity: anim.interpolate({ inputRange: [0, 0.15 + index * 0.09, 1], outputRange: [0, 0, 1] }),
+                transform: [{ translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [24 + index * 8, 0] }) }],
+              }}>
+                <View style={st.sectionHeader}><View style={st.sectionLine} /><Text style={st.sectionTitle}>{group.title}</Text></View>
+                {group.items.map((item) => {
+                  const active = !!item.match && (pathname === item.match || (item.match !== "/" && pathname.startsWith(item.match + "/")));
+                  return <Pressable key={item.label} onPress={() => item.path ? go(item.path) : share()} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }}
+                    style={({ pressed }) => [st.navItem, active && st.navActive, pressed && st.pressed]}>
+                    <Ionicons name={active ? "chevron-back" : "remove-outline"} size={active ? 15 : 10} color={active ? C.accent : C.textFaint} />
+                    <Text style={[st.navLabel, active && st.activeLabel]}>{item.label}</Text>
+                    <View style={[st.navIcon, active && st.activeIcon]}><Ionicons name={item.icon} size={20} color={active ? C.accent : C.textSecondary} /></View>
+                  </Pressable>;
+                })}
+              </Animated.View>
+            ))}
+          </ScrollView>
+          <View style={st.footer}>
+            {isConfigured && user ? <Pressable onPress={() => { closeSidebar(); void signOut(); }} accessibilityRole="button" accessibilityLabel={t.signOut} style={({ pressed }) => [st.signOut, pressed && st.pressed]}>
+              <Text style={st.signOutLabel}>{t.signOut}</Text><Ionicons name="log-out-outline" size={19} color={C.error} />
+            </Pressable> : null}
+            <View style={st.versionRow}><Text style={st.version}>v{appVersion}</Text><Text style={st.footerName}>{t.settingsAppName}</Text><View style={st.footerDot} /></View>
+          </View>
+        </Animated.View>
       </View>
-      <Text style={st.heroStatLabel} numberOfLines={1}>{label}</Text>
-    </View>
+    </Modal>
   );
 }
 
-/* Every row keeps a single visual order (chevron → label → icon, reading L→R)
- * so the right-aligned Arabic labels stay anchored to the icon rail. */
 const st = StyleSheet.create({
-  overlay: { ...ABSOLUTE_FILL, zIndex: 1000 },
-  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.66)" },
-
-  panel: {
-    position: "absolute", top: 0, bottom: 0, right: 0,
-     backgroundColor: C.surfaceContainer,
-    borderTopLeftRadius: R.xxl, borderBottomLeftRadius: R.xxl,
-    borderLeftWidth: 1, borderColor: C.line,
-    paddingHorizontal: 16,
-    overflow: "hidden",
-    ...ELEVATION_CARD,
-    shadowOffset: { width: -12, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 32,
-  },
-  glow: { ...ABSOLUTE_FILL },
-   edgeLine: { position: "absolute", top: 36, bottom: 36, left: 0, width: 1 },
-
-  header: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    marginBottom: 20,
-  },
-  brandLockup: { flexDirection: "row", alignItems: "center" },
-  brandTextWrap: { alignItems: "flex-end", justifyContent: "center", marginRight: 11 },
-  // includeFontPadding:false strips the extra top/bottom slab Android adds for
-  // Arabic (Cairo) glyphs — without it the title rides high and no longer sits
-  // inline with the logo mark. lineHeight keeps the two lines tight & centered.
-  brandName: {
-    color: C.text, fontSize: 22, fontWeight: "700", fontFamily: "Cairo_700Bold",
-    lineHeight: 32, includeFontPadding: false, textAlignVertical: "center",
-  },
-  brandTag: {
-    color: C.textMuted, fontSize: 11, marginTop: 1, fontFamily: "Cairo_500Medium",
-    lineHeight: 15, includeFontPadding: false, textAlignVertical: "center",
-  },
-  logoWrap: {
-    borderRadius: 15, padding: 2,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-  },
-  logoMark: {
-    width: 44, height: 44, borderRadius: 13,
-    backgroundColor: C.ember,
-    alignItems: "center", justifyContent: "center",
-  },
-   logoGlyph: { color: C.textOnAccent, fontSize: 23, fontWeight: "900", fontFamily: "Outfit_900Black" },
-  closeBtn: {
-     width: 48, height: 48, borderRadius: R.md,
-    backgroundColor: C.glass, borderWidth: 1, borderColor: C.glassBorder,
-    alignItems: "center", justifyContent: "center",
-  },
-  closeBtnPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.94 }] },
-
-  // Hero profile card
-  hero: {
-     borderRadius: R.lg, padding: 18,
-     backgroundColor: C.surface,
-    marginBottom: 16, overflow: "hidden",
-  },
-  heroPressed: { transform: [{ scale: 0.99 }], borderColor: C.borderLight },
-  heroRow: { flexDirection: "row", alignItems: "center" },
-  heroChevron: { alignSelf: "center" },
-  heroText: { flex: 1, marginHorizontal: 12, alignItems: "flex-end" },
-  avatarOuter: {
-    borderRadius: R.circle, padding: 2,
-    backgroundColor: C.bgDeep,
-    ...ELEVATION_GLOW_VIOLET,
-  },
-  avatarRing: {
-    width: 62, height: 62, borderRadius: R.circle,
-    backgroundColor: C.ember,
-    alignItems: "center", justifyContent: "center", padding: 2.5,
-  },
-  avatarInner: {
-    width: "100%", height: "100%", borderRadius: R.circle,
-    backgroundColor: C.bgDeep, padding: 2,
-  },
-  avatar: { width: "100%", height: "100%", borderRadius: R.circle },
-  avatarFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
-  avatarInitial: { color: C.text, fontSize: 24, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  name: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },
-  email: { color: C.textSecondary, fontSize: 12, marginTop: 3, fontFamily: "Cairo_500Medium", textAlign: "right" },
-  heroBadge: {
-    marginTop: 9, paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
-    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderAccent,
-  },
-  heroBadgeText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_700Bold" },
-
-  // Inline stat footer inside the hero card (bare — no nested cards).
-  heroDivider: { height: 1, backgroundColor: C.border, marginTop: 15, marginBottom: 13 },
-  heroStats: { flexDirection: "row", alignItems: "center" },
-  heroStatDivider: { width: 1, height: 34, backgroundColor: C.border },
-  heroStat: { flex: 1, alignItems: "center" },
-  heroStatHead: { flexDirection: "row", alignItems: "center", gap: 8 },
-  heroStatIcon: { width: 28, height: 28, borderRadius: R.circle, alignItems: "center", justifyContent: "center" },
-  heroStatNum: { color: C.bone, fontSize: 24, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
-  heroStatLabel: { color: C.textSecondary, fontSize: 11, marginTop: 7, fontFamily: "Cairo_500Medium", textAlign: "center" },
-
-  // Quiet uppercase-style caption that introduces the nav list.
-  sectionCap: {
-    color: C.textMuted, fontSize: 13, fontFamily: "Cairo_700Bold",
-    letterSpacing: 0.4, textAlign: "right",
-    marginTop: 4, marginBottom: 10, marginRight: 4,
-  },
-   navList: { gap: 4 },
-  // No flexDirection here — the row is built from a centered full-width label
-  // plus an absolutely-pinned icon, so it can't be reversed/collapsed on an
-  // RTL-locale device. minHeight reserves room for the 44px icon.
-  navItem: {
-     justifyContent: "center", minHeight: 64, paddingVertical: 12,
-    paddingHorizontal: 12, borderRadius: R.lg,
-    borderWidth: 1, borderColor: "transparent",
-  },
-  navItemPressed: { backgroundColor: C.glass },
-  // Accent bar pinned to the right edge of the active row (Arabic reading side).
-  activeBar: { position: "absolute", right: 0, top: 9, bottom: 9, width: 3, borderRadius: 2, backgroundColor: C.accent },
-  navIcon: {
-    position: "absolute", right: 12, top: "50%", marginTop: -22,
-    width: 44, height: 44, borderRadius: R.md,
-     backgroundColor: "transparent",
-    alignItems: "center", justifyContent: "center",
-  },
-  navIconDanger: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
-  navChevron: { position: "absolute", left: 12, top: "50%", marginTop: -8 },
-  // Full-width right-aligned text; paddingRight clears the icon, paddingLeft the chevron.
-  navLabel: {
-     color: C.textSecondary, fontSize: 18, lineHeight: 28, fontWeight: "600", fontFamily: "Cairo_600SemiBold",
-     textAlign: "right", paddingRight: 64, paddingLeft: 24,
-  },
-  navLabelActive: { color: C.accent, fontFamily: "Cairo_700Bold" },
-
-  divider: { height: 1, backgroundColor: C.border, marginVertical: 14, marginHorizontal: 12 },
-  signOutItem: {},
-  signOutLabel: { color: C.accent },
-
-  footer: { alignItems: "center", marginTop: 28 },
-  footerName: { color: C.textSecondary, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold" },
-  footerVersion: { color: C.textMuted, fontSize: 11, marginTop: 3, fontFamily: "Cairo_500Medium" },
+  overlay: { flex: 1 },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)" },
+  panel: { position: "absolute", top: 0, bottom: 0, right: 0, backgroundColor: C.surfaceContainer,
+    borderTopLeftRadius: 28, borderBottomLeftRadius: 28, borderLeftWidth: 1, borderColor: C.borderLight, overflow: "hidden" },
+  brandGlow: { position: "absolute", top: 0, right: 0, left: 0, height: 230 },
+  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 18, paddingBottom: 18 },
+  closeBtn: { width: 48, height: 48, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: C.glass },
+  brandText: { flex: 1, minWidth: 0, alignItems: "flex-end" },
+  brandName: { fontFamily: "Outfit_700Bold", fontSize: 23, lineHeight: 30, color: C.text, letterSpacing: -0.5 },
+  brandTag: { fontFamily: "Cairo_500Medium", fontSize: 11, lineHeight: 19, color: C.textSecondary, textAlign: "right" },
+  logo: { width: 58, height: 58, flexShrink: 0, borderRadius: 17, borderWidth: 1, borderColor: C.borderLight },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16, paddingBottom: 16 },
+  profile: { flexDirection: "row", alignItems: "center", gap: 12, padding: 12, minHeight: 72,
+    borderRadius: 18, backgroundColor: C.surfaceElevated, borderWidth: 1, borderColor: C.borderSoft },
+  profileText: { flex: 1, minWidth: 0, alignItems: "flex-end" },
+  name: { color: C.text, fontFamily: "Cairo_700Bold", fontSize: 14, lineHeight: 24, textAlign: "right" },
+  email: { color: C.textMuted, fontFamily: "Cairo_500Medium", fontSize: 11, lineHeight: 19, textAlign: "right" },
+  avatar: { width: 44, height: 44, borderRadius: 14, flexShrink: 0 },
+  avatarFallback: { backgroundColor: C.accentSoft, alignItems: "center", justifyContent: "center" },
+  initial: { color: C.accent, fontFamily: "Cairo_700Bold", fontSize: 20, lineHeight: 30 },
+  stats: { flexDirection: "row", alignItems: "center", marginTop: 14, paddingVertical: 8 },
+  stat: { flex: 1, alignItems: "center", paddingHorizontal: 6 },
+  statValue: { color: C.text, fontFamily: "Outfit_600SemiBold", fontSize: 19, lineHeight: 25 },
+  statLabel: { color: C.textMuted, fontFamily: "Cairo_500Medium", fontSize: 11, lineHeight: 19, textAlign: "center" },
+  statDivider: { width: 1, height: 24, backgroundColor: C.border },
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 20, marginBottom: 9, paddingHorizontal: 10 },
+  sectionLine: { height: 1, flex: 1, backgroundColor: C.borderSoft },
+  sectionTitle: { color: C.textMuted, fontFamily: "Cairo_600SemiBold", fontSize: 11, lineHeight: 19 },
+  navItem: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 50, paddingVertical: 6, paddingHorizontal: 12,
+    marginBottom: 3, borderRadius: 14, borderWidth: 1, borderColor: "transparent" },
+  navActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
+  navLabel: { flex: 1, minWidth: 0, textAlign: "right", color: C.textSecondary, fontFamily: "Cairo_600SemiBold", fontSize: 14, lineHeight: 24 },
+  activeLabel: { color: C.text, fontFamily: "Cairo_700Bold" },
+  navIcon: { width: 32, height: 32, borderRadius: 10, flexShrink: 0, alignItems: "center", justifyContent: "center" },
+  activeIcon: { backgroundColor: "rgba(139,147,255,0.16)" },
+  pressed: { opacity: 0.7 },
+  footer: { borderTopWidth: 1, borderColor: C.borderSoft, paddingHorizontal: 22, paddingTop: 8 },
+  signOut: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 12, minHeight: 48, borderRadius: 12 },
+  signOutLabel: { color: C.error, fontFamily: "Cairo_600SemiBold", fontSize: 13, lineHeight: 23 },
+  versionRow: { flexDirection: "row", alignItems: "center", gap: 7, paddingVertical: 9 },
+  version: { flex: 1, fontFamily: "Outfit_400Regular", color: C.textMuted, fontSize: 11, lineHeight: 18 },
+  footerName: { fontFamily: "Cairo_500Medium", color: C.textMuted, fontSize: 11, lineHeight: 18 },
+  footerDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: C.mint },
 });

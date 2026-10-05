@@ -82,11 +82,11 @@ const ss = StyleSheet.create({
   wordmarkRow: { flexDirection: "row", alignItems: "center", marginTop: 4 },
   spark: { width: 8, height: 8, borderRadius: 2, backgroundColor: C.ember },
   appName: {
-    color: C.bone, fontSize: 46, lineHeight: 68, fontWeight: "700",
+    color: C.bone, fontSize: 32, lineHeight: 48, fontWeight: "700",
     fontFamily: "Cairo_700Bold",
   },
   tagline: {
-    color: C.textSecondary, fontSize: 17, lineHeight: 30, marginTop: 8,
+    color: C.textSecondary, fontSize: 15, lineHeight: 26, marginTop: 8,
     fontFamily: "Cairo_500Medium",
     writingDirection: "rtl", textAlign: "right",
   },
@@ -112,7 +112,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.ember,
   },
   btnPrimaryText: {
-    color: C.bone, fontSize: 16, fontWeight: "700",
+    color: C.bone, fontSize: 14, lineHeight: 24, fontWeight: "700",
     fontFamily: "Cairo_700Bold", letterSpacing: 0.2,
   },
   btnSecondary: {

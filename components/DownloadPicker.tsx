@@ -5,11 +5,12 @@
 // picker only costs the cheap server-list scrape.
 
 import { useEffect, useState } from "react";
-import { View, Text, Pressable, Modal, StyleSheet, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, Modal, ScrollView, StyleSheet, ActivityIndicator } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { listDownloadServers, type DownloadServer } from "../lib/api";
 import { startDownload, type DownloadMeta } from "../lib/downloads";
-import { C, R } from "../lib/theme";
+import { C, R, ABSOLUTE_FILL } from "../lib/theme";
 import { t } from "../lib/i18n";
 
 function sourceLabel(provider: string): string {
@@ -27,6 +28,7 @@ export function DownloadPicker({
   meta: DownloadMeta | null;
   onClose: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   // null = still loading the server list; [] = none found.
   const [servers, setServers] = useState<DownloadServer[] | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -71,8 +73,10 @@ export function DownloadPicker({
 
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-      <Pressable style={st.backdrop} onPress={onClose}>
-        <Pressable style={st.sheet} onPress={() => {}}>
+      <View style={[st.backdrop, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 16 }]}>
+        <Pressable style={ABSOLUTE_FILL} onPress={onClose} accessibilityRole="button" accessibilityLabel={t.close} />
+        <View style={st.sheet}>
+          <ScrollView style={st.scroll} contentContainerStyle={st.options}>
           <Text style={st.title}>{t.chooseDownloadServer}</Text>
           <Text style={st.sub}>{t.chooseDownloadServerSub}</Text>
 
@@ -97,7 +101,7 @@ export function DownloadPicker({
                   <View style={[st.qBadge, fhd && st.qBadgeFhd]}>
                     <Text style={[st.qText, fhd && st.qTextFhd]}>{s.quality || "—"}</Text>
                   </View>
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={st.optTitle}>{s.name}</Text>
                     <Text style={st.optSub}>{sourceLabel(s.provider)}</Text>
                   </View>
@@ -106,12 +110,13 @@ export function DownloadPicker({
               );
             })
           )}
+          </ScrollView>
 
           <Pressable style={st.cancel} onPress={onClose}>
             <Text style={st.cancelText}>{t.cancel}</Text>
           </Pressable>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -127,13 +132,15 @@ const st = StyleSheet.create({
   sheet: {
     width: "100%",
     maxWidth: 380,
+    maxHeight: "100%",
     backgroundColor: C.surfaceContainer,
     borderRadius: R.xl,
-    padding: 24,
+    padding: 20,
     borderWidth: 1,
     borderColor: C.border,
-    gap: 10,
   },
+  scroll: { flexShrink: 1 },
+  options: { gap: 10 },
   title: {
     color: C.text,
     fontSize: 22,

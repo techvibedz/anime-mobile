@@ -487,7 +487,7 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 12,
   },
-  headerTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  headerTitleRow: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 8, marginLeft: 12 },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   menuBtn: {
     width: 48, height: 48, borderRadius: R.md, overflow: "hidden", backgroundColor: C.surface,
@@ -495,7 +495,7 @@ const ss = StyleSheet.create({
     borderWidth: 1, borderColor: C.glassBorder,
   },
   heading: {
-    ...TAr.h1, lineHeight: 44, color: C.bone,
+    ...TAr.h1, flexShrink: 1, textAlign: "right", color: C.bone,
   },
   intro: { ...TAr.body, color: C.textMuted, textAlign: "right", paddingHorizontal: PAD, marginBottom: 20 },
   countPill: {

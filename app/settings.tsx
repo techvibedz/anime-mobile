@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Constants from "expo-constants";
+import * as Application from "expo-application";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   getNotificationsEnabled,
@@ -24,6 +25,10 @@ import {
   setAutoSkipIntro,
   getNotificationScope,
   setNotificationScope,
+  getPrefetchNext,
+  setPrefetchNext,
+  getDailyAnimeNotif,
+  setDailyAnimeNotif,
   clearContentCache,
   type NotificationScope,
 } from "../lib/settings";
@@ -34,10 +39,11 @@ import {
   updateNotificationScopeRemote,
   updateNotificationsEnabledRemote,
   sendTestNotificationAsync,
+  syncDailyAnimeReminders,
 } from "../lib/push";
 import * as Updates from "expo-updates";
 import { supabase } from "../lib/supabase";
-import { checkForApkUpdate, checkForOtaUpdate, openApkDownload, applyOtaUpdate } from "../lib/updater";
+import { checkForApkUpdate, checkForOtaUpdate, downloadAndInstallApk, applyOtaUpdate } from "../lib/updater";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/presence";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
@@ -47,9 +53,7 @@ import { RewardedAdPreview } from "../components/RewardedAdPreview";
 
 const HISTORY_KEY = "watch_history";
 
-// Always plain "row" — never "row-reverse" (RN 0.81 Yoga bug collapses mixed
-// fixed+flex rows into a vertical stack). Arabic order is achieved by laying
-// the control out first and the icon last, with right-aligned text between.
+// Fixed controls and icons leave the middle column free to wrap Arabic text.
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -59,6 +63,8 @@ export default function SettingsScreen() {
   const [autoplay, setAutoplay] = useState(true);
   const [autoSkip, setAutoSkip] = useState(false);
   const [scope, setScope] = useState<NotificationScope>("all");
+  const [prefetch, setPrefetch] = useState(true);
+  const [dailyAnime, setDailyAnime] = useState(false);
   const [permGranted, setPermGranted] = useState(false);
   const [checking, setChecking] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -73,6 +79,8 @@ export default function SettingsScreen() {
       getAutoplayNext().then(setAutoplay);
       getAutoSkipIntro().then(setAutoSkip);
       getNotificationScope().then(setScope);
+      getPrefetchNext().then(setPrefetch);
+      getDailyAnimeNotif().then(setDailyAnime);
       hasNotificationPermission().then(setPermGranted);
     }, []),
   );
@@ -98,6 +106,9 @@ export default function SettingsScreen() {
     await setNotificationsEnabled(value);
     // Sync to the server so closed-app push stops/resumes immediately.
     void updateNotificationsEnabledRemote(value);
+    // Daily reminders depend on the master switch — reschedule/cancel now so
+    // pending notifications don't outlive the setting.
+    void syncDailyAnimeReminders().catch(() => {});
   }, []);
 
   const onSendTest = useCallback(async () => {
@@ -135,6 +146,27 @@ export default function SettingsScreen() {
     await setAutoSkipIntro(value);
   }, []);
 
+  const togglePrefetch = useCallback(async (value: boolean) => {
+    setPrefetch(value);
+    await setPrefetchNext(value);
+  }, []);
+
+  const toggleDailyAnime = useCallback(async (value: boolean) => {
+    if (value && notificationsModuleAvailable()) {
+      const granted = await requestNotificationPermission();
+      setPermGranted(granted);
+      if (!granted) {
+        Alert.alert(t.settingsDailyAnime, t.enableNotifsPrompt);
+        // Preference still flips on; scheduling degrades to a no-op until the
+        // OS permission is granted in system settings.
+      }
+    }
+    setDailyAnime(value);
+    await setDailyAnimeNotif(value);
+    // ON schedules the next 7 days; OFF cancels via the preference guard.
+    void syncDailyAnimeReminders().catch(() => {});
+  }, []);
+
   const onClearCache = useCallback(async () => {
     const n = await clearContentCache();
     Alert.alert(t.settingsClearCache, t.cacheCleared(n));
@@ -165,7 +197,7 @@ export default function SettingsScreen() {
           apk.releaseNotes || `${t.settingsVersion} ${apk.version}`,
           [
             { text: t.cancel, style: "cancel" },
-            { text: t.notifWatchNow, onPress: () => openApkDownload(apk.apkUrl!) },
+            { text: t.notifWatchNow, onPress: () => void downloadAndInstallApk(apk.apkUrl!) },
           ],
         );
         return;
@@ -202,7 +234,11 @@ export default function SettingsScreen() {
     }
   }, [adminChecking, isUpdatePending]);
 
-  const version = Constants.expoConfig?.version ?? "1.4.0";
+  // Native APK version, the one the updater compares against. NOT
+  // Constants.expoConfig?.version: that is the JS/OTA bundle version, which can
+  // disagree with the installed APK after an OTA publish and show users a
+  // version they never installed.
+  const version = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? "1.4.0";
 
   // Static OTA bundle identity (available on the Updates module directly).
   const otaRuntime = (Updates.runtimeVersion as string) ?? "?";
@@ -278,6 +314,28 @@ export default function SettingsScreen() {
             value={autoSkip}
             onChange={toggleAutoSkip}
           />
+          <Divider />
+          <ToggleRow
+            icon="download-outline"
+            tint={C.gold}
+            title={t.settingsPrefetchNext}
+            desc={t.settingsPrefetchNextDesc}
+            value={prefetch}
+            onChange={togglePrefetch}
+          />
+          {notifs && (
+            <>
+              <Divider />
+              <ToggleRow
+                icon="sparkles-outline"
+                tint={C.violet}
+                title={t.settingsDailyAnime}
+                desc={t.settingsDailyAnimeDesc}
+                value={dailyAnime}
+                onChange={toggleDailyAnime}
+              />
+            </>
+          )}
         </View>
 
         {/* Data */}
@@ -415,7 +473,7 @@ function ToggleRow({
       </View>
       <View style={s.rowText}>
         <Text style={s.rowTitle}>{title}</Text>
-        <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
+        <Text style={s.rowDesc}>{desc}</Text>
       </View>
       <RowIcon icon={icon} tint={tint} />
     </View>
@@ -478,7 +536,7 @@ function ActionRow({
       </View>
       <View style={s.rowText}>
         <Text style={[s.rowTitle, danger && { color: C.accent }]}>{title}</Text>
-        <Text style={s.rowDesc} numberOfLines={2}>{desc}</Text>
+        <Text style={s.rowDesc}>{desc}</Text>
       </View>
       <RowIcon icon={icon} tint={tint} danger={danger} />
     </Pressable>
@@ -497,32 +555,25 @@ const s = StyleSheet.create({
     borderRadius: R.lg, backgroundColor: C.surfaceContainer,
     overflow: "hidden",
   },
-  // No flexDirection — icon and control are absolutely pinned to the right/left
-  // edges and the text is a full-width right-aligned block. This avoids RN 0.81's
-  // Yoga collapse where a [control | flex text | icon] row reverses on an Arabic-
-  // locale device and stacks into a broken layout (RN ignores the `direction` style).
   row: {
-    justifyContent: "center", minHeight: 84,
-    paddingVertical: 18, paddingHorizontal: 16,
+    flexDirection: "row", alignItems: "center", gap: 12, minHeight: 80,
+    paddingVertical: 12, paddingHorizontal: 14,
   },
   rowIcon: {
-    position: "absolute", right: 14, top: "50%", marginTop: -20,
-    width: 40, height: 40, borderRadius: R.md,
+    flexShrink: 0, width: 36, height: 36, borderRadius: R.md,
     alignItems: "center", justifyContent: "center",
   },
   // Left control (Switch / chevron / spinner), vertically centered.
-  rowControl: { position: "absolute", left: 14, top: 0, bottom: 0, justifyContent: "center" },
-  // Full-width text; paddingRight clears the icon, paddingLeft clears the control.
-  rowText: { paddingRight: 62, paddingLeft: 70 },
+  rowControl: { width: 52, flexShrink: 0, alignItems: "center", justifyContent: "center" },
+  rowText: { flex: 1, minWidth: 0 },
   rowTitle: { color: C.text, fontSize: 15, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   rowDesc: { color: C.textMuted, fontSize: 12, marginTop: 6, lineHeight: 21, fontFamily: "Cairo_500Medium", textAlign: "right" },
   // Indent the divider so it stops short of the icon rail on the right.
   divider: { height: 1, backgroundColor: C.border, marginLeft: 14, marginRight: 68 },
 
   scopeRow: { paddingVertical: 15, paddingHorizontal: 14 },
-  // Same absolute treatment: icon pinned right, body is full-width text.
-  scopeHead: { justifyContent: "center", minHeight: 44 },
-  scopeBody: { paddingRight: 56 },
+  scopeHead: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 44 },
+  scopeBody: { flex: 1, minWidth: 0 },
   segment: {
     flexDirection: "row", marginTop: 14,
     padding: 4, borderRadius: R.md,
@@ -530,10 +581,10 @@ const s = StyleSheet.create({
   },
   segmentBtn: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
-    minHeight: 48, paddingVertical: 10, borderRadius: R.sm,
+    minHeight: 48, paddingVertical: 10, paddingHorizontal: 8, borderRadius: R.sm,
   },
   segmentBtnActive: { backgroundColor: C.accent },
-  segmentText: { color: C.textSecondary, fontSize: 13, fontWeight: "700", fontFamily: "Cairo_600SemiBold", marginLeft: 6 },
+  segmentText: { flexShrink: 1, textAlign: "center", color: C.textSecondary, fontSize: 13, lineHeight: 23, fontWeight: "700", fontFamily: "Cairo_600SemiBold", marginLeft: 6 },
   segmentTextActive: { color: C.textOnAccent },
 
   brandFooter: { alignItems: "center", marginTop: 44, gap: 4 },

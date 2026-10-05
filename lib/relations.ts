@@ -111,12 +111,30 @@ export function normLatin(s: string | null | undefined): string {
     .trim();
 }
 
+// WitAnime prints season numerals with UNICODE roman characters ("Mushoku
+// Tensei Ⅲ"), not ASCII "III", and AniList titles carry ASCII mid-title
+// ("… III: …"). Fold Unicode romans to ASCII before any season/normalisation
+// work so both spellings read identically. Mirrors lib/scraper/direct.ts.
+const UNICODE_ROMAN: Record<string, string> = {
+  "Ⅰ": "I", "Ⅱ": "II", "Ⅲ": "III", "Ⅳ": "IV", "Ⅴ": "V", "Ⅵ": "VI",
+  "Ⅶ": "VII", "Ⅷ": "VIII", "Ⅸ": "IX", "Ⅹ": "X", "Ⅺ": "XI", "Ⅻ": "XII",
+};
+export function asciiRomans(s: string | null | undefined): string {
+  return String(s || "").replace(/[\u2160-\u217f]/g, (ch) => UNICODE_ROMAN[ch] ?? ch);
+}
+// Roman-numeral season values. "I" is deliberately absent: season 1 is the
+// default and a bare "I" is too collision-prone (English pronoun) to match.
+const ROMAN_SEASON: Record<string, number> = {
+  II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10,
+};
+
 // Detect an EXPLICIT season/part number from a title. Bare trailing numbers are
 // deliberately NOT treated as seasons ("Jujutsu Kaisen 0", "86" must not be read
 // as season 0 / 86) — only real markers count. Handles latin words, "2nd", "S2",
 // arabic-indic digits and arabic ordinal words. Returns 0 when unspecified.
 export function seasonNum(s: string | null | undefined): number {
-  let t = String(s || "").toLowerCase();
+  const folded = asciiRomans(s);
+  let t = folded.toLowerCase();
   // arabic-indic digits → latin
   t = t.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
   const m =
@@ -130,10 +148,17 @@ export function seasonNum(s: string | null | undefined): number {
     الاول: 1, "الأول": 1, الثاني: 2, الثالث: 3, الرابع: 4, الخامس: 5, السادس: 6,
   };
   for (const k in words) if (t.indexOf(k) !== -1) return words[k];
-  // A handful of donghua/anime franchises use a bare trailing Roman numeral
-  // as the official season marker (for example "Shiguang Dailiren III").
-  const roman = t.match(/\b(i|ii|iii|iv|v|vi)\s*$/);
-  if (roman) return ({ i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6 } as Record<string, number>)[roman[1]] || 0;
+  // Roman seasons may appear ANYWHERE, not just trailing: official markers
+  // ("Mushoku Tensei III: Isekai Ittara Honki Dasu", "Shiguang Dailiren III")
+  // and source slugs ("mushoku-tensei-iii-…"). Longest alternatives first so
+  // "VIII" never degrades to "II" + leftover.
+  const multi = t.match(/\b(viii|vii|vi|iv|ix|iii|ii)\b/);
+  if (multi) return ROMAN_SEASON[multi[1].toUpperCase()];
+  // Single V/X are deliberately NOT seasons here: they collide with real words
+  // and title letters ("X-Men" → 10, "Mobile Suit V Gundam" → 5), and this
+  // parser drives absolute decisions (MAL matching, AI context), not just
+  // comparative source matching. The scraper-side tm_seasonNum still accepts
+  // uppercase singles where both sides parse alike.
   return 0;
 }
 
@@ -226,7 +251,10 @@ export function relSearchVariants(title: string, slugTitle?: string | null): str
     const season = seasonNum(raw);
     const base = stripSeasonNoise(latin);
     add(latin);                                   // 1) as-is (keeps latin season)
-    if (season > 0 && base) add(`${base} Season ${season}`); // 2) recover Arabic season
+    // 2) recover an Arabic-only season marker — but only when the latin base
+    // does not already carry the marker itself (mid-title roman stays in the
+    // base, so appending "Season N" would synthesize junk queries).
+    if (season > 0 && base && seasonNum(base) === 0) add(`${base} Season ${season}`);
     add(base);                                    // 3) base / franchise
   };
 
@@ -371,7 +399,10 @@ export function relatedNumberedSeasonVariants(title: string): string[] {
   const season = seasonNum(title);
   if (season <= 0) return [];
   const base = stripSeasonNoise(normLatin(title));
-  return base ? [`${base} ${season}`, `${base} Season ${season}`] : [];
+  // Base already carries the marker (mid-title roman) → appending it again
+  // would only synthesize junk like "… iii isekai … Season 3".
+  if (!base || seasonNum(base) > 0) return [];
+  return [`${base} ${season}`, `${base} Season ${season}`];
 }
 
 /* ── AniList entry → source search queries ── */

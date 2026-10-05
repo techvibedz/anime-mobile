@@ -2,11 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-// Fonts are embedded NATIVELY via the expo-font config plugin (app.json) —
-// Android resolves `fontFamily: "Cairo_600SemiBold"` straight from
-// assets/fonts/Cairo_600SemiBold.ttf. No JS font loading, no first-paint gate,
-// and the 12 ttf files are no longer duplicated into the JS bundle.
-// (Cairo is the Arabic UI font; Outfit/DMSans cover numerals and Latin text.)
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { useFonts } from "expo-font";
 import { View, ActivityIndicator, I18nManager, AppState } from "react-native";
 import * as Updates from "expo-updates";
 import * as SplashScreen from "expo-splash-screen";
@@ -38,7 +35,7 @@ if (I18nManager.isRTL) {
 }
 import { AuthProvider, useAuth } from "../lib/auth";
 import { pullFavoritesFromCloud } from "../lib/favorites";
-import { pullHistoryFromCloud } from "../lib/history";
+import { pullHistoryFromCloud, flushHistoryCloudPushes } from "../lib/history";
 import { pruneExpiredCaches } from "../lib/storageMaintenance";
 import { pullCompletionFromCloud } from "../lib/completion";
 import { checkForApkUpdate, checkForOtaUpdate } from "../lib/updater";
@@ -48,7 +45,7 @@ import { ScraperHost } from "../lib/scraper";
 import { initAds } from "../lib/ads";
 import { SidebarProvider } from "../components/Sidebar";
 import { CompletionProvider } from "../lib/completion";
-import { setupNotifications, requestNotificationPermission, addNotificationTapListener, addChatNotificationTapListener } from "../lib/push";
+import { setupNotifications, requestNotificationPermission, addNotificationTapListener, addChatNotificationTapListener, syncDailyAnimeReminders, getLastNotificationTapData } from "../lib/push";
 import { reportRecentEpisodes } from "../lib/notifications";
 import { startPresence, stopPresence, isAdmin } from "../lib/presence";
 import { startUsageSession, endUsageSession } from "../lib/usage";
@@ -125,12 +122,17 @@ function AuthGate() {
       } else {
         stopPresence().catch(() => {});
         endUsageSession().catch(() => {});
+        // The history push timer doesn't survive an app-kill — send the final
+        // progress/completion now so the cloud (admin history, other devices)
+        // can't lose a watched mark.
+        flushHistoryCloudPushes();
       }
     });
     return () => {
       sub.remove();
       stopPresence().catch(() => {});
       endUsageSession().catch(() => {});
+      flushHistoryCloudPushes();
     };
   }, [user?.id]);
 
@@ -164,10 +166,23 @@ function AuthGate() {
         if (await getNotificationsEnabled()) {
           await requestNotificationPermission();
         }
+        // Refresh the 7-day "أنمي اليوم" batch (fire-and-forget — must not delay
+        // startup; also picks up permission granted above on the first run).
+        void syncDailyAnimeReminders().catch(() => {});
       })().catch(() => {});
     }, 2500);
 
-    const sub = addNotificationTapListener((data) => {
+    const routeNotificationData = (data: {
+      episodeHref?: string;
+      animeHref?: string;
+      image?: string;
+      anilistId?: number;
+    } | null | undefined) => {
+      // "أنمي اليوم" tap → open the title page for the picked AniList id.
+      if (data?.anilistId) {
+        router.push(`/title/${data.anilistId}`);
+        return;
+      }
       if (!data?.episodeHref) return;
       const params: Record<string, string> = {};
       if (data.image) params.img = encodeURIComponent(data.image);
@@ -176,7 +191,15 @@ function AuthGate() {
         : toAnimeUrl(data.episodeHref) ?? data.animeHref;
       if (animeUrl) params.anime = animeUrl;
       router.push({ pathname: `/watch/${encodeURIComponent(data.episodeHref)}`, params });
-    });
+    };
+
+    const sub = addNotificationTapListener(routeNotificationData);
+
+    // Cold start: the tap that launched a killed app never reaches the
+    // listener above, so route the pending response explicitly.
+    void getLastNotificationTapData()
+      .then((data) => { if (data) routeNotificationData(data); })
+      .catch(() => {});
 
     // Admin-chat push tap routing. The closed-app push fires from a DB trigger
     // (supabase/admin-chat.sql) and carries { chatId, chatKind: 'admin' } in
@@ -325,7 +348,19 @@ function AuthGate() {
         <Stack.Screen name="popular/[kind]" />
         <Stack.Screen name="downloads" />
         <Stack.Screen name="title/[id]" />
+        <Stack.Screen name="manga/[id]" />
+        <Stack.Screen name="manga-library" />
+        <Stack.Screen
+          name="manga-reader/[chapter]"
+          options={{
+            // Immersive reading, same treatment as the video player: hide the
+            // Android system bars so pages own the full screen.
+            navigationBarHidden: true,
+            statusBarHidden: true,
+          }}
+        />
         <Stack.Screen name="profile" />
+        <Stack.Screen name="history" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="report" />
         <Stack.Screen name="live" />
@@ -355,6 +390,23 @@ function AuthGate() {
 }
 
 export default function RootLayout() {
+  // Expo Go and web don't embed app.json's font plugin assets. Register the
+  // same aliases in every runtime; useFonts reuses fonts already loaded natively.
+  const [fontsLoaded, fontError] = useFonts({
+    Outfit_400Regular: require("../assets/fonts/Outfit_400Regular.ttf"),
+    Outfit_600SemiBold: require("../assets/fonts/Outfit_600SemiBold.ttf"),
+    Outfit_700Bold: require("../assets/fonts/Outfit_700Bold.ttf"),
+    Outfit_800ExtraBold: require("../assets/fonts/Outfit_800ExtraBold.ttf"),
+    Outfit_900Black: require("../assets/fonts/Outfit_900Black.ttf"),
+    Cairo_500Medium: require("../assets/fonts/Cairo_500Medium.ttf"),
+    Cairo_600SemiBold: require("../assets/fonts/Cairo_600SemiBold.ttf"),
+    Cairo_700Bold: require("../assets/fonts/Cairo_700Bold.ttf"),
+    DMSans_400Regular: require("../assets/fonts/DMSans_400Regular.ttf"),
+    DMSans_500Medium: require("../assets/fonts/DMSans_500Medium.ttf"),
+    DMSans_600SemiBold: require("../assets/fonts/DMSans_600SemiBold.ttf"),
+    DMSans_700Bold: require("../assets/fonts/DMSans_700Bold.ttf"),
+  });
+
   // Kick off the ad SDK shortly after first paint (no-op until ad IDs are
   // configured). A plain timer — see the notification effect above for why
   // runAfterInteractions is unreliable while skeleton animations run.
@@ -371,23 +423,27 @@ export default function RootLayout() {
     return () => clearTimeout(timer);
   }, []);
 
-  // Fonts are native now, so the very first JS frame is already fully styled —
-  // hand the splash off immediately (the root view paints in the same commit).
   useEffect(() => {
+    if (!fontsLoaded && !fontError) return;
+    if (fontError) console.warn("App fonts could not load:", fontError);
     SplashScreen.hideAsync().catch(() => {});
-  }, []);
+  }, [fontsLoaded, fontError]);
+
+  if (!fontsLoaded && !fontError) return null;
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="light" />
-      <AuthProvider>
-        <CompletionProvider>
-          <SidebarProvider>
-            <AuthGate />
-          </SidebarProvider>
-        </CompletionProvider>
-      </AuthProvider>
-      <ScraperHost />
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        <AuthProvider>
+          <CompletionProvider>
+            <SidebarProvider>
+              <AuthGate />
+            </SidebarProvider>
+          </CompletionProvider>
+        </AuthProvider>
+        <ScraperHost />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

@@ -4,13 +4,12 @@ import {
   Text,
   ScrollView,
   Pressable,
-  Dimensions,
+  useWindowDimensions,
   StyleSheet,
   Modal,
   I18nManager,
   ActivityIndicator,
   RefreshControl,
-  Share,
   Animated,
   Easing,
   Keyboard,
@@ -37,6 +36,7 @@ import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
 import { GlassFill } from "../../components/GlassFill";
 import { DownloadPicker } from "../../components/DownloadPicker";
+import { ShareCard } from "../../components/ShareCard";
 import { PosterCard, INLINE_POSTER_BADGE, GRID_TITLE_BAND } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";
 import { useCardLayout } from "../../lib/cardLayout";
@@ -54,10 +54,8 @@ import { shouldShowSynopsis, synopsisForDisplay } from "../../lib/animeDetail";
 const Clipboard = require("react-native/Libraries/Components/Clipboard/Clipboard")
   .default as { setString(s: string): void };
 
-const { width: SW } = Dimensions.get("window");
 const BANNER_H = 360;
 const PAD = S.paddingContent;
-const EP_CARD_WIDTH = (SW - PAD * 2 - 10) / 2;
 
 type TabKey = "episodes" | "related" | "maylike" | "info";
 
@@ -68,6 +66,7 @@ type RelatedTabItem =
   | { source: "anilist"; entry: RelatedAnimeEntry };
 
 export default function AnimeDetailScreen() {
+  const { width: SW } = useWindowDimensions();
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const { openSidebar } = useSidebarActions();
@@ -104,6 +103,7 @@ export default function AnimeDetailScreen() {
   const [mayLikeLoading, setMayLikeLoading] = useState(true);
   const [titleCopied, setTitleCopied] = useState(false);
   const [posterOpen, setPosterOpen] = useState(false);
+  const [shareCardOpen, setShareCardOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const detailScrollRef = useRef<ScrollView>(null);
   const tabContentYRef = useRef(0);
@@ -352,13 +352,6 @@ export default function AnimeDetailScreen() {
     setTimeout(() => setTitleCopied(false), 1500);
   }, [data?.title]);
 
-  // Share the anime by title. The href is a rotating scraper URL (not a stable
-  // public link), so we share the title text — the recipient finds it in-app.
-  const shareAnime = useCallback(() => {
-    if (!data?.title) return;
-    Share.share({ message: t.shareAnime(data.title) }).catch(() => {});
-  }, [data?.title]);
-
   // Pull-to-refresh: re-scrape the page, its anime4up enrichment, and retry the
   // MAL rating (handy when a transient Jikan/CF blip left it without a score).
   const reload = useCallback(async () => {
@@ -586,7 +579,7 @@ export default function AnimeDetailScreen() {
         <Pressable style={ss.actionIcon} onPress={toggleBookmark}>
           <Ionicons name={bookmarked ? "heart" : "heart-outline"} size={20} color={bookmarked ? C.accent : C.text} />
         </Pressable>
-        <Pressable style={ss.actionIcon} onPress={shareAnime}>
+        <Pressable style={ss.actionIcon} onPress={() => setShareCardOpen(true)}>
           <Ionicons name="share-outline" size={19} color={C.text} />
         </Pressable>
       </View>
@@ -635,6 +628,20 @@ export default function AnimeDetailScreen() {
           </View>
         </Modal>
       )}
+
+      {/* Share card — screenshot-able card; Share uses RN core, no native dep. */}
+      <ShareCard
+        visible={shareCardOpen}
+        onClose={() => setShareCardOpen(false)}
+        anime={{
+          title: data.title,
+          poster: data.poster,
+          banner: data.banner,
+          score: malScore != null ? String(malScore) : data.rating,
+          genres: data.genres,
+          episodes: data.totalEpisodes,
+        }}
+      />
     </View>
   );
 }
@@ -674,6 +681,7 @@ function ListPickerSheet({ title, onPick, onClose }: { title: string; onPick: (l
             style={[ss.sheetPanel, { paddingBottom: insets.bottom + 16, transform: [{ translateY }] }]}
             onStartShouldSetResponder={() => true}
           >
+            <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ gap: 10 }}>
             <View style={ss.sheetGrabber} />
             <Text style={ss.pickerTitle}>{t.addToList}</Text>
             <Text style={ss.pickerSub}>{t.saveWhere(title)}</Text>
@@ -703,6 +711,7 @@ function ListPickerSheet({ title, onPick, onClose }: { title: string; onPick: (l
             <Pressable style={ss.pickerCancel} onPress={animateClose}>
               <Text style={ss.pickerCancelText}>{t.cancel}</Text>
             </Pressable>
+            </ScrollView>
           </Animated.View>
         </View>
       </View>
@@ -1123,6 +1132,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
   dl?: { status: DownloadStatus; progress: number };
   onDownload: (ep: GridEpisode) => void;
 }) {
+  const { width } = useWindowDimensions();
   const dlDone = dl?.status === "completed";
   const dlBusy = dl?.status === "downloading" || dl?.status === "resolving";
   const dlPct = Math.round((dl?.progress ?? 0) * 100);
@@ -1166,6 +1176,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
       onLayout={(event) => onLayout(ep.number, event.nativeEvent.layout.y)}
       style={({ pressed }) => [
         ss.epCard,
+        { width: (width - PAD * 2 - 10) / 2 },
         highlighted && ss.epCardHighlighted,
         pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
       ]}
@@ -1410,7 +1421,7 @@ function InfoTab({ data, isMainSource }: { data: AnimeDetail; isMainSource: bool
 function DetailSkeleton() {
   return (
     <View style={ss.root}>
-      <Shimmer style={{ width: SW, height: BANNER_H }} borderRadius={0} />
+      <Shimmer style={{ width: "100%", height: BANNER_H }} borderRadius={0} />
       <View style={{ paddingHorizontal: PAD, marginTop: -88, flexDirection: "row-reverse", alignItems: "flex-end" }}>
         <Shimmer style={{ width: 112, height: 168 }} borderRadius={R.lg} />
         <View style={{ flex: 1, marginRight: 14, alignItems: "flex-end" }}>
@@ -1435,7 +1446,7 @@ const ss = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 
   // Banner
-  banner: { width: SW, height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
+  banner: { width: "100%", height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
   meshBg: { ...ABSOLUTE_FILL },
 
   // Hero — poster overlaps the banner base, title/meta beside it (RTL).
@@ -1475,10 +1486,10 @@ const ss = StyleSheet.create({
     fontFamily: "Cairo_700Bold", textShadowColor: "rgba(0,0,0,0.9)", textShadowRadius: 8,
   },
   // marginRight (physical) spaces the text from the poster in the row-reverse
-  // layout without using `gap` (RN 0.81 gap + row-reverse Yoga bug).
+  // layout using margins between the fixed poster and flexible text.
   heroText: { flex: 1, marginRight: 14, alignItems: "flex-end", paddingBottom: 4 },
   title: {
-    ...TAr.h1, fontSize: 26, lineHeight: 38,
+    ...TAr.h1,
     color: C.bone, textAlign: "right", writingDirection: "rtl",
   },
   copiedPill: {
@@ -1614,7 +1625,7 @@ const ss = StyleSheet.create({
 
   // Episodes — grid (2 columns)
   epGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  epCard: { width: EP_CARD_WIDTH, borderRadius: R.lg },
+  epCard: { borderRadius: R.lg },
   epCardHighlighted: {
     backgroundColor: C.accentSoft, shadowColor: C.accent,
     shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 10, elevation: 6,
@@ -1769,8 +1780,9 @@ const ss = StyleSheet.create({
 
   // Slide-up bottom sheet (add-to-list) — matches the home episode sheet.
   sheetBackdrop: { backgroundColor: "rgba(0,0,0,0.72)" },
-  sheetAnchor: { flex: 1, justifyContent: "flex-end" },
+  sheetAnchor: { flex: 1, justifyContent: "flex-end", paddingTop: 24 },
   sheetPanel: {
+    maxHeight: "100%",
     backgroundColor: C.playerSheet,
     borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
     paddingHorizontal: 20, paddingTop: 12,

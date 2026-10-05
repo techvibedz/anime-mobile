@@ -58,5 +58,8 @@ supabase/.temp/
 .codex/
 .icon-backup-void/
 
+# Generated marketing assets (not bundled into OTA/APK)
+marketing/
+
 .stitch/
 .impeccable/

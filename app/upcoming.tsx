@@ -207,7 +207,7 @@ const s = StyleSheet.create({
     overflow: "hidden",
   },
   filterChipActive: { borderColor: "transparent" },
-  filterText: { color: C.textSecondary, fontSize: 12.5, fontFamily: "Cairo_600SemiBold" },
+  filterText: { flexShrink: 1, textAlign: "center", lineHeight: 22, color: C.textSecondary, fontSize: 12.5, fontFamily: "Cairo_600SemiBold" },
   filterTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
   empty: { alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 10 },
   emptyIcon: {

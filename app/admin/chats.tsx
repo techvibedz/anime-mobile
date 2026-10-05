@@ -198,7 +198,7 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   introBody: { flex: 1, marginRight: 12, alignItems: "flex-end" },
-  introCount: { color: C.text, fontSize: 34, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
+  introCount: { color: C.text, fontSize: 28, lineHeight: 34, fontWeight: "800", fontFamily: "Outfit_800ExtraBold" },
   introSub: { color: C.textSecondary, fontSize: 12.5, marginTop: 4, textAlign: "right", fontFamily: "Cairo_500Medium", lineHeight: 18 },
 
   listStart: { height: 16 },

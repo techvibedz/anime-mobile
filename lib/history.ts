@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 import { groupContinueWatching } from "./continueWatching";
-import { mergeHistory } from "./historyMerge";
+import { mergeHistory, staleAgainstRemote } from "./historyMerge";
 import { pruneCacheStorage } from "./storageMaintenance";
 
 const KEY = "watch_history";
@@ -106,13 +106,15 @@ async function pushToCloud(entry: WatchEntry) {
   }
 }
 
-async function deleteFromCloud(episodeHref: string) {
+async function deleteFromCloud(episodeHrefs: string | string[]) {
   if (!isSupabaseConfigured) return;
   const user = await getSessionUser();
   if (!user) return;
+  const hrefs = Array.isArray(episodeHrefs) ? episodeHrefs : [episodeHrefs];
+  if (hrefs.length === 0) return;
   await supabase.from("watch_history").delete()
     .eq("user_id", user.id)
-    .eq("episode_href", episodeHref);
+    .in("episode_href", hrefs);
 }
 
 /**
@@ -149,7 +151,15 @@ export async function pullHistoryFromCloud() {
     dismissed: !!row.dismissed,
   }));
   const local = await getHistory();
-  await saveHistory(mergeHistory(local, remote, MAX_ITEMS));
+  const merged = mergeHistory(local, remote, MAX_ITEMS);
+  await saveHistory(merged);
+  // Heal the cloud: a delayed or failed push must not leave the account (admin
+  // history, other devices) missing episodes this device knows about. Re-upload
+  // whatever the cloud is missing or has an older copy of; once uploaded, later
+  // pulls skip it because the timestamps match.
+  for (const entry of staleAgainstRemote(merged, remote)) {
+    void pushToCloud(entry).catch(() => {});
+  }
 }
 
 export async function getHistory(): Promise<WatchEntry[]> {
@@ -172,9 +182,10 @@ export async function getHistory(): Promise<WatchEntry[]> {
 
 // Cloud pushes are coalesced: the watch screen saves every 5s, and each push
 // used to be a network upsert + session read. Pushing the latest state per
-// episode at most every 30s (trailing flush) keeps the cloud current without
-// waking the radio on every tick.
-const CLOUD_PUSH_MIN_GAP_MS = 30_000;
+// episode at most every 120s (trailing flush) keeps the cloud current without
+// waking the radio on every tick. ponytail: log-ingestion quota — 30s made
+// watch_history the #1 API-log source; tighten to 60s if 2min progress lag hurts.
+const CLOUD_PUSH_MIN_GAP_MS = 120_000;
 let lastCloudPushAt = 0;
 let cloudPushTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingCloud = new Map<string, WatchEntry>();
@@ -186,6 +197,12 @@ function flushCloudPushes() {
   const batch = [...pendingCloud.values()];
   pendingCloud.clear();
   for (const entry of batch) void pushToCloud(entry).catch(() => {});
+}
+
+/** Send any pending history pushes right now (called when the app backgrounds —
+ *  the coalescing timer would otherwise lose the final save to an app-kill). */
+export function flushHistoryCloudPushes(): void {
+  flushCloudPushes();
 }
 
 function scheduleCloudPush(entry: WatchEntry) {
@@ -230,6 +247,11 @@ export async function saveProgress(entry: Omit<WatchEntry, "updatedAt">) {
   list.sort((a, b) => b.updatedAt - a.updatedAt);
   await saveHistory(list);
   scheduleCloudPush(merged);
+  // Crossing into "watched" is a durable mark, not progress dribble: push it
+  // now instead of waiting out the coalescing window, so a backgrounded/killed
+  // app can't strand the mark in the cloud. Transition only — not every 5s tick
+  // past 80%, which would put the write volume right back.
+  if (merged.completed === true && prev?.completed !== true) flushCloudPushes();
 }
 
 /**
@@ -246,11 +268,115 @@ export async function getProgress(episodeHref: string): Promise<WatchEntry | nul
   return list.find((e) => e.episodeHref === episodeHref) ?? null;
 }
 
+/** One card per anime for the watch-history screen and the profile section. */
+export interface AnimeHistoryGroup {
+  /** Stable identity (normalized title, falling back to the anime href key). */
+  key: string;
+  animeTitle: string;
+  animeHref: string;
+  image: string;
+  /** Most recently watched episode of this anime. */
+  last: WatchEntry;
+  updatedAt: number;
+  /** Distinct episodes stored for the anime (across sources). */
+  episodes: number;
+  /** Distinct episodes marked completed. */
+  watched: number;
+  /** Episode number of `last`, when derivable. */
+  lastEpNum: number | null;
+}
+
+/**
+ * Group raw watch-history entries into one row per anime, newest activity
+ * first. Keys by normalized title (the same anime recurs under different
+ * animeHref values — episode URL vs anime URL, rotated TLDs) and falls back to
+ * the normalized anime href for title-less entries.
+ */
+export function groupHistoryByAnime(list: readonly WatchEntry[]): AnimeHistoryGroup[] {
+  // Old rows can have a missing animeTitle; a sibling entry for the same href
+  // shape still knows the name, so recover it before falling back to the href.
+  const titleByHrefKey = new Map<string, string>();
+  for (const entry of list) {
+    const tk = animeTitleKey(entry.animeTitle);
+    const hk = normAnimeKey(entry.animeHref);
+    if (tk && hk && !titleByHrefKey.has(hk)) titleByHrefKey.set(hk, tk);
+  }
+  const groups = new Map<string, { entries: WatchEntry[]; last: WatchEntry }>();
+  for (const entry of list) {
+    const hk = normAnimeKey(entry.animeHref);
+    const key = animeTitleKey(entry.animeTitle) || titleByHrefKey.get(hk) || hk || entry.animeHref || entry.animeTitle;
+    if (!key) continue;
+    const g = groups.get(key);
+    if (g) {
+      g.entries.push(entry);
+      if ((entry.updatedAt || 0) > (g.last.updatedAt || 0)) g.last = entry;
+    } else {
+      groups.set(key, { entries: [entry], last: entry });
+    }
+  }
+  const out: AnimeHistoryGroup[] = [];
+  for (const [key, g] of groups) {
+    // Episodes dedupe by number when known (the same episode recurs under
+    // different source URLs), else by normalized href.
+    const epKeys = new Set<string>();
+    const watchedKeys = new Set<string>();
+    let image = "";
+    let animeHref = "";
+    for (const e of g.entries) {
+      const n = deriveEpNum(e);
+      const h = normHref(e.episodeHref);
+      const ek = n != null ? `n${n}` : h;
+      if (ek) epKeys.add(ek);
+      if (ek && isCompleted(e)) watchedKeys.add(ek);
+      if (!image && e.image) image = e.image;
+      if (!animeHref && e.animeHref?.includes("/anime/")) animeHref = e.animeHref;
+    }
+    if (!animeHref) animeHref = g.entries.find((e) => e.animeHref)?.animeHref || "";
+    out.push({
+      key,
+      animeTitle: g.last.animeTitle || g.entries.find((e) => e.animeTitle)?.animeTitle || "",
+      animeHref,
+      image,
+      last: g.last,
+      updatedAt: g.last.updatedAt || 0,
+      episodes: epKeys.size,
+      watched: watchedKeys.size,
+      lastEpNum: deriveEpNum(g.last),
+    });
+  }
+  return out.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function getHistoryByAnime(): Promise<AnimeHistoryGroup[]> {
+  return groupHistoryByAnime(await getHistory());
+}
+
 export async function removeFromHistory(episodeHref: string) {
   const list = await getHistory();
   pendingCloud.delete(episodeHref);
   await saveHistory(list.filter((e) => e.episodeHref !== episodeHref));
   deleteFromCloud(episodeHref).catch(() => {});
+}
+
+/**
+ * Remove EVERY history entry of one anime (all episodes, all sources) — the
+ * per-anime delete. Locally first, cancel any queued cloud pushes for the
+ * removed hrefs, then delete the cloud rows in a single request.
+ */
+export async function removeAnimeFromHistory(animeHref: string, animeTitle: string) {
+  const list = await getHistory();
+  const key = animeHref || animeTitle;
+  const hrefKey = normAnimeKey(animeHref);
+  const titleKey = animeTitleKey(animeTitle);
+  const removed = list.filter((e) =>
+    (e.animeHref || e.animeTitle) === key ||
+    (!!hrefKey && !!e.animeHref && normAnimeKey(e.animeHref) === hrefKey) ||
+    (!!titleKey && animeTitleKey(e.animeTitle) === titleKey));
+  if (removed.length === 0) return;
+  const removedHrefs = new Set(removed.map((e) => e.episodeHref));
+  for (const href of removedHrefs) pendingCloud.delete(href);
+  await saveHistory(list.filter((e) => !removedHrefs.has(e.episodeHref)));
+  deleteFromCloud([...removedHrefs]).catch(() => {});
 }
 
 /**

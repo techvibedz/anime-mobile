@@ -6,6 +6,7 @@
 
 import { Platform } from "react-native";
 import * as Device from "expo-device";
+import * as Application from "expo-application";
 import { supabase, isSupabaseConfigured } from "./supabase";
 import appVersion from "../version.json";
 
@@ -84,7 +85,10 @@ export async function submitReport(input: ReportInput): Promise<ReportResult> {
       category: input.category ?? null,
       message,
       screenshot_url,
-      app_version: appVersion.version,
+      // Installed APK version — what support needs. version.json would report
+      // the newest release to every user (it is only ever as fresh as the JS
+      // bundle that carries it), masking stale installs.
+      app_version: Application.nativeApplicationVersion ?? appVersion.version,
       platform: Platform.OS,
       device,
       os_version: String(Platform.Version),

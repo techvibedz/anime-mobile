@@ -97,5 +97,6 @@ function load(file) {
   assert.equal(storage.has('@anime_catalog_v2:page-1'), false, 'cache pruned to free space');
   assert.equal(storage.has('@anime_mal_v2:123'), false, 'cache pruned to free space');
 
+  h.flushHistoryCloudPushes(); // clear the coalescing timer saveProgress left behind
   console.log('continue-watching flow checks passed');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

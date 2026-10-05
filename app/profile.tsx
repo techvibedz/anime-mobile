@@ -18,13 +18,23 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ImagePicker from "expo-image-picker";
 import { useAuth } from "../lib/auth";
-import { getHistory, isCompleted, type WatchEntry } from "../lib/history";
+import {
+  getHistory,
+  isCompleted,
+  groupHistoryByAnime,
+  removeAnimeFromHistory,
+  type AnimeHistoryGroup,
+} from "../lib/history";
 import { countCompletedAnime } from "../lib/completion";
-import { getFavorites, toAnimeUrl } from "../lib/favorites";
+import { getFavorites } from "../lib/favorites";
 import { updateProfile } from "../lib/profile";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, SectionLabel, GlassIconButton } from "../components/ScreenChrome";
+import { HistoryCard } from "../components/HistoryCard";
+
+/** How many anime cards the profile previews before "see all". */
+const PREVIEW = 4;
 
 interface Stats {
   episodesWatched: number;
@@ -35,12 +45,12 @@ interface Stats {
   planned: number;
   distinctAnime: number;
   completedAnime: number;
-  recent: WatchEntry[];
+  history: AnimeHistoryGroup[];
 }
 
 const EMPTY: Stats = {
   episodesWatched: 0, watchHours: 0, watchMins: 0, animeInList: 0,
-  watching: 0, planned: 0, distinctAnime: 0, completedAnime: 0, recent: [],
+  watching: 0, planned: 0, distinctAnime: 0, completedAnime: 0, history: [],
 };
 
 function arMonthYear(iso?: string): string | null {
@@ -66,28 +76,36 @@ export default function ProfileScreen() {
   const [picked, setPicked] = useState<{ uri: string; base64: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      Promise.all([getHistory(), getFavorites(), countCompletedAnime()])
-        .then(([history, favs, completedAnime]) => {
-          const completed = history.filter(isCompleted);
-          const totalMs = history.reduce((sum, e) => sum + (e.positionMs || 0), 0);
-          const totalMin = Math.floor(totalMs / 60000);
-          const distinct = new Set(history.map((e) => e.animeHref || e.animeTitle)).size;
-          setStats({
-            episodesWatched: completed.length,
-            watchHours: Math.floor(totalMin / 60),
-            watchMins: totalMin % 60,
-            animeInList: favs.length,
-            watching: favs.filter((f) => f.list === "watching").length,
-            planned: favs.filter((f) => f.list === "planned").length,
-            distinctAnime: distinct,
-            completedAnime,
-            recent: history.slice(0, 6),
-          });
-        })
-        .catch(() => {});
-    }, []),
+  const loadStats = useCallback(() => {
+    Promise.all([getHistory(), getFavorites(), countCompletedAnime()])
+      .then(([history, favs, completedAnime]) => {
+        const completed = history.filter(isCompleted);
+        const totalMs = history.reduce((sum, e) => sum + (e.positionMs || 0), 0);
+        const totalMin = Math.floor(totalMs / 60000);
+        const distinct = new Set(history.map((e) => e.animeHref || e.animeTitle)).size;
+        setStats({
+          episodesWatched: completed.length,
+          watchHours: Math.floor(totalMin / 60),
+          watchMins: totalMin % 60,
+          animeInList: favs.length,
+          watching: favs.filter((f) => f.list === "watching").length,
+          planned: favs.filter((f) => f.list === "planned").length,
+          distinctAnime: distinct,
+          completedAnime,
+          history: groupHistoryByAnime(history),
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  useFocusEffect(useCallback(() => loadStats(), [loadStats]));
+
+  const handleDeleteAnime = useCallback(
+    (group: AnimeHistoryGroup) => {
+      setStats((prev) => ({ ...prev, history: prev.history.filter((g) => g.key !== group.key) }));
+      void removeAnimeFromHistory(group.animeHref, group.animeTitle).finally(loadStats);
+    },
+    [loadStats],
   );
 
   const displayName =
@@ -320,11 +338,27 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Recent activity */}
+        {/* Watch history — one card per anime, latest episode reached */}
         <View style={s.section}>
-          <SectionLabel>{t.recentActivity}</SectionLabel>
+          <View style={s.sectionRow}>
+            {stats.history.length > 0 ? (
+              <Pressable
+                onPress={() => router.push("/history")}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={t.seeAllShort}
+                style={({ pressed }) => [s.seeAll, pressed && { opacity: 0.7 }]}
+              >
+                <Text style={s.seeAllText}>{t.seeAllShort}</Text>
+                <Ionicons name="chevron-back" size={12} color={C.accent} />
+              </Pressable>
+            ) : (
+              <View />
+            )}
+            <SectionLabel>{t.watchHistory}</SectionLabel>
+          </View>
         </View>
-        {stats.recent.length === 0 ? (
+        {stats.history.length === 0 ? (
           <View style={s.emptyActivity}>
             <View style={s.emptyIcon}>
               <Ionicons name="film-outline" size={26} color={C.textMuted} />
@@ -332,34 +366,9 @@ export default function ProfileScreen() {
             <Text style={s.emptyText}>{t.noActivity}</Text>
           </View>
         ) : (
-          <View style={s.recentList}>
-            {stats.recent.map((e) => (
-              <Pressable
-                key={e.episodeHref}
-                style={({ pressed }) => [s.recentItem, pressed && s.recentItemPressed]}
-                onPress={() => {
-                  const params: Record<string, string> = {};
-                  if (e.image) params.img = encodeURIComponent(e.image);
-                  if (e.url4up) params.url4up = encodeURIComponent(e.url4up);
-                  const rawAnime = e.animeHref || e.episodeHref;
-                  const animeUrl = rawAnime?.includes("/anime/") ? rawAnime : toAnimeUrl(rawAnime) ?? "";
-                  if (animeUrl) params.anime = animeUrl;
-                  router.push({ pathname: `/watch/${encodeURIComponent(e.episodeHref)}`, params });
-                }}
-              >
-                {isCompleted(e) ? <Ionicons name="checkmark-circle" size={18} color={C.success} style={s.recentCheck} /> : null}
-                <View style={s.recentBody}>
-                  <Text style={s.recentTitle} numberOfLines={1}>{e.episodeTitle || e.animeTitle}</Text>
-                  <Text style={s.recentSub} numberOfLines={1}>{e.animeTitle}</Text>
-                </View>
-                {e.image ? (
-                  <Image source={{ uri: e.image }} style={s.recentThumb} contentFit="cover" transition={120} />
-                ) : (
-                  <View style={[s.recentThumb, s.recentThumbFallback]}>
-                    <Ionicons name="film-outline" size={18} color={C.textMuted} />
-                  </View>
-                )}
-              </Pressable>
+          <View style={s.historyList}>
+            {stats.history.slice(0, PREVIEW).map((g) => (
+              <HistoryCard key={g.key} group={g} onDelete={handleDeleteAnime} />
             ))}
           </View>
         )}
@@ -393,7 +402,7 @@ const s = StyleSheet.create({
   },
   // Name now wraps (was numberOfLines={1} → long Arabic names truncated).
   name: {
-    color: C.text, fontSize: 28, lineHeight: 42, fontWeight: "700", fontFamily: "Cairo_700Bold",
+    color: C.text, fontSize: 24, lineHeight: 36, fontWeight: "700", fontFamily: "Cairo_700Bold",
     marginTop: 16, textAlign: "center", paddingHorizontal: S.paddingContent,
   },
   email: { color: C.textSecondary, fontSize: 13, marginTop: 5, fontFamily: "Cairo_500Medium" },
@@ -425,11 +434,11 @@ const s = StyleSheet.create({
   editActions: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 22 },
   saveBtn: {
     flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    height: 56, borderRadius: R.md, backgroundColor: C.accent,
+    minHeight: 56, paddingVertical: 12, paddingHorizontal: 12, borderRadius: R.md, backgroundColor: C.accent,
   },
-  saveText: { color: C.textOnAccent, fontSize: 15, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  saveText: { flexShrink: 1, textAlign: "center", color: C.textOnAccent, fontSize: 14, lineHeight: 24, fontWeight: "700", fontFamily: "Cairo_700Bold" },
   cancelBtn: {
-    paddingHorizontal: 22, height: 52, alignItems: "center", justifyContent: "center",
+    paddingHorizontal: 22, minHeight: 52, paddingVertical: 10, alignItems: "center", justifyContent: "center",
     borderRadius: R.md, backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
   cancelText: { color: C.textSecondary, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
@@ -460,19 +469,11 @@ const s = StyleSheet.create({
   hDivider: { height: 1, backgroundColor: C.border, marginHorizontal: 16 },
 
   section: { paddingHorizontal: S.paddingContent, marginTop: 28 },
+  sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  seeAll: { flexDirection: "row", alignItems: "center", gap: 3, marginBottom: 12 },
+  seeAllText: { color: C.accent, fontSize: 12, fontFamily: "Cairo_600SemiBold" },
 
-  recentList: { paddingHorizontal: S.paddingContent },
-  recentItem: {
-    flexDirection: "row", alignItems: "center", paddingVertical: 16,
-    borderBottomWidth: 1, borderBottomColor: C.borderSoft,
-  },
-  recentItemPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.99 }] },
-  recentCheck: { marginRight: 12 },
-  recentBody: { flex: 1, marginRight: 12 },
-  recentThumb: { width: 88, height: 56, borderRadius: R.sm },
-  recentThumbFallback: { backgroundColor: C.surface, alignItems: "center", justifyContent: "center" },
-  recentTitle: { color: C.text, fontSize: 13, fontWeight: "600", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
-  recentSub: { color: C.textMuted, fontSize: 11, marginTop: 2, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  historyList: { paddingHorizontal: S.paddingContent },
 
   emptyActivity: { alignItems: "center", paddingVertical: 36 },
   emptyIcon: {

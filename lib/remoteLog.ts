@@ -28,6 +28,7 @@ let _env: {
   platform: string;
   osVersion: string;
   device: string | null;
+  appVersion: string;
 } | null = null;
 
 function env() {
@@ -36,6 +37,7 @@ function env() {
     // Literal-string requires: Metro bundles these statically, tsx catches.
     const { Platform } = require("react-native");
     const Device = require("expo-device");
+    const App = require("expo-application");
     const { supabase, isSupabaseConfigured } = require("./supabase");
     _env = {
       supabase,
@@ -44,6 +46,10 @@ function env() {
       osVersion: String(Platform.Version),
       device:
         [Device.manufacturer, Device.modelName].filter(Boolean).join(" ").trim() || null,
+      // Installed APK version, not the bundled version.json (which always
+      // reports the newest release and hides stale installs). Lazy require:
+      // expo-application pulls in react-native, which explodes under node.
+      appVersion: App.nativeApplicationVersion ?? appVersion.version,
     };
   } catch {
     // No RN runtime (node tests / scripts) — stays null, remoteLog no-ops.
@@ -103,7 +109,7 @@ export function remoteLog(
       tag,
       message,
       context: context ?? null,
-      app_version: appVersion.version,
+      app_version: e.appVersion,
       platform: e.platform,
       device: e.device,
       os_version: e.osVersion,

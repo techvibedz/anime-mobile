@@ -212,7 +212,7 @@ const ss = StyleSheet.create({
   headerTitleWrap: { flex: 1, marginLeft: 12, alignItems: "flex-end" },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   heading: {
-    ...TAr.h1, lineHeight: 44, color: C.bone,
+    ...TAr.h1, color: C.bone,
   },
   userEmail: { color: C.textMuted, fontSize: 12, lineHeight: 22, marginTop: 4, fontFamily: "Cairo_500Medium", textAlign: "right" },
   // 44px touch target (PRODUCT.md ≥44px floor).
@@ -222,7 +222,7 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
 
-  // Filters — no `gap`: it breaks layout under RTL row (Yoga bug), use margins
+  // Filters use margins between horizontally scrolling pills.
   filterScroll: { flexGrow: 0 },
   filterRow: {
     flexDirection: "row", alignItems: "center",
@@ -235,7 +235,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
   filterPillActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
-  filterText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0, includeFontPadding: false, textAlignVertical: "center" },
+  filterText: { color: C.textSecondary, fontSize: 12, lineHeight: 21, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0, includeFontPadding: false, textAlignVertical: "center" },
   filterTextActive: { color: C.ember },
   filterCount: {
     backgroundColor: C.glass, borderRadius: R.circle,

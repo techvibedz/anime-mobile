@@ -555,14 +555,34 @@ export const EXTRACT_TITLE_MATCH = (want: string) => `(function(){${HELPERS}
 // Convert spelled-out / arabic-digit season words to a number so we can
 // compare seasons across the two sites (which name them differently).
 function seasonNum(s) {
-  var t = String(s || '').toLowerCase();
+  // Unicode roman numerals (witanime prints "Ⅲ") folded to ASCII up front so
+  // the Roman checks below see "III".
+  var uniRomans = { '\\u2160': 'I', '\\u2161': 'II', '\\u2162': 'III', '\\u2163': 'IV',
+                    '\\u2164': 'V', '\\u2165': 'VI', '\\u2166': 'VII', '\\u2167': 'VIII',
+                    '\\u2168': 'IX', '\\u2169': 'X', '\\u216A': 'XI', '\\u216B': 'XII' };
+  var folded = String(s || '').replace(/[\\u2160-\\u217f]/g, function (ch) {
+    return uniRomans[ch] || ch;
+  });
+  var t = folded.toLowerCase();
   // arabic-indic digits → latin
   t = t.replace(/[\\u0660-\\u0669]/g, function (d) { return String(d.charCodeAt(0) - 0x0660); });
   var m = t.match(/(?:season|s|part|cour|الجزء|الموسم)\\s*([0-9]+)/);
   if (m) return parseInt(m[1], 10);
+  // Ordinal-before-keyword form: "7th Season", "2nd Part", "3rd Cour".
+  m = t.match(/\\b([0-9]+)(?:st|nd|rd|th)\\s+(?:season|part|cour)\\b/);
+  if (m) return parseInt(m[1], 10);
   var words = { 'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5,
                 'الاول': 1, 'الأول': 1, 'الثاني': 2, 'الثالث': 3, 'الرابع': 4, 'الخامس': 5 };
   for (var k in words) { if (t.indexOf(k) !== -1) return words[k]; }
+  // Roman-numeral seasons ("Mushoku Tensei III", anime4up slug
+  // "mushoku-tensei-ii-…"). Multi-letter romans (ii..ix) are unambiguous, so
+  // match any case; single V/X collide with real words, so accept them only
+  // UPPERCASE. "I" is season 1 (the default) and too collision-prone to match.
+  var romans = { 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10 };
+  var rm = folded.match(/\\b(VIII|VII|VI|IV|IX|III|II)\\b/i);
+  if (rm) return romans[rm[1].toUpperCase()];
+  var rs = folded.match(/\\b(X|V)\\b/);
+  if (rs) return romans[rs[1]];
   return 0; // 0 = unspecified (treated as season 1-ish, never penalised hard)
 }
 // Latin-only normalisation: lowercase, drop Arabic, strip season/format

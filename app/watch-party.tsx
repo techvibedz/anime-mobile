@@ -295,14 +295,14 @@ const s = StyleSheet.create({
     backgroundColor: C.surface,
   },
   codeLabel: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_600SemiBold" },
-  codeText: { color: C.accent, fontSize: 40, letterSpacing: 5, fontFamily: "Outfit_700Bold", marginTop: 12 },
+  codeText: { color: C.accent, fontSize: 32, letterSpacing: 3, fontFamily: "Outfit_700Bold", marginTop: 12 },
   codeHint: { color: C.textMuted, fontSize: 12, marginTop: 10, textAlign: "center", fontFamily: "Cairo_500Medium" },
 
   shareBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: 16, height: 44, paddingHorizontal: 22, borderRadius: R.md, backgroundColor: C.accent,
+    marginTop: 16, minHeight: 48, paddingVertical: 10, paddingHorizontal: 22, borderRadius: R.md, backgroundColor: C.accent,
   },
-  shareBtnText: { color: C.black, fontSize: 14, fontFamily: "Cairo_700Bold" },
+  shareBtnText: { flexShrink: 1, textAlign: "center", lineHeight: 24, color: C.black, fontSize: 14, fontFamily: "Cairo_700Bold" },
 
   waitRow: { flexDirection: "row-reverse", alignItems: "center", marginTop: 22, marginBottom: 4 },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.success, marginLeft: 8 },
@@ -331,9 +331,9 @@ const s = StyleSheet.create({
 
   primaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    height: S.inputHeight, borderRadius: R.md, backgroundColor: C.accent, marginTop: 24,
+    minHeight: S.inputHeight, paddingVertical: 12, paddingHorizontal: 14, borderRadius: R.md, backgroundColor: C.accent, marginTop: 24,
   },
-  primaryBtnText: { color: C.black, fontSize: 15, fontFamily: "Cairo_700Bold" },
+  primaryBtnText: { flexShrink: 1, textAlign: "center", lineHeight: 24, color: C.black, fontSize: 15, fontFamily: "Cairo_700Bold" },
   startHint: { color: C.textMuted, fontSize: 12, textAlign: "center", marginTop: 10, fontFamily: "Cairo_500Medium" },
 
   followBanner: {
@@ -341,7 +341,7 @@ const s = StyleSheet.create({
     marginTop: 24, padding: 14, borderRadius: R.lg,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
   },
-  followText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+  followText: { flex: 1, textAlign: "right", color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
   retryText: { color: C.accent, fontSize: 13, fontFamily: "Cairo_700Bold" },
 
   leaveBtn: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 18, padding: 10 },

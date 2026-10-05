@@ -1,18 +1,13 @@
 // Shared tonal backdrop and 48dp navigation controls for secondary screens.
 //
-// Layout rules (RN 0.81 / Expo 54):
-//  • Rows are plain "row" — never "row-reverse" (Yoga collapses mixed fixed+flex
-//    rows into a vertical pile under row-reverse on RTL-locale devices).
-//  • No `gap` on flex rows — spacing is done with margins, which is stable under
-//    both LTR and RTL. See the project's gap+row-reverse note.
-//  • Arabic order is achieved by child ordering + right-aligned text.
+// Arabic labels are right-aligned, with flexible text between fixed controls.
 
 import { type ReactNode } from "react";
 import { View, Text, Pressable, StyleSheet, I18nManager } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { C, R, S, TAr } from "../lib/theme";
+import { C, R, S, TAr, ABSOLUTE_FILL } from "../lib/theme";
 import { useSidebarActions } from "./Sidebar";
 import { t } from "../lib/i18n";
 import { StateView } from "./StateView";
@@ -20,7 +15,7 @@ import { StateView } from "./StateView";
 /* Quiet tonal backdrop; never intercepts touches. */
 export function Aurora() {
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+    <View style={ABSOLUTE_FILL} pointerEvents="none">
       <LinearGradient
         colors={[C.surfaceContainer, C.bg]}
         style={{ position: "absolute", top: 0, left: 0, right: 0, height: 240 }}
@@ -133,7 +128,7 @@ const hs = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: S.paddingContent,
     paddingTop: 12,
-    paddingBottom: 24,
+    paddingBottom: 16,
   },
   iconBtn: {
     width: ICON_BTN,
@@ -148,8 +143,8 @@ const hs = StyleSheet.create({
   iconBtnPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.94 }] },
 
   // A right-aligned title stays anchored to the Arabic reading edge.
-  title: { ...TAr.h2, fontSize: 28, lineHeight: 42, flex: 1, marginHorizontal: 12, textAlign: "right", color: C.bone },
-  rightSlot: { minWidth: ICON_BTN, height: ICON_BTN, flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
+  title: { ...TAr.h2, flex: 1, minWidth: 0, marginHorizontal: 12, textAlign: "right", color: C.bone },
+  rightSlot: { minWidth: ICON_BTN, minHeight: ICON_BTN, flexShrink: 0, flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
   menuSpacer: { marginLeft: 8 },
 
   sectionLabel: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", marginBottom: 12 },

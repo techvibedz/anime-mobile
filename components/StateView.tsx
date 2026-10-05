@@ -94,14 +94,14 @@ const s = StyleSheet.create({
   },
   primaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: C.ember, borderRadius: R.md,
+    maxWidth: "100%", backgroundColor: C.ember, borderRadius: R.md,
     minHeight: 52, paddingHorizontal: 28, paddingVertical: 14, marginTop: 12,
   },
-  primaryText: { ...TAr.bodySmall, color: C.textOnAccent, fontWeight: "700" },
+  primaryText: { ...TAr.bodySmall, flexShrink: 1, textAlign: "center", color: C.textOnAccent, fontWeight: "700" },
   secondaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    minHeight: 48, borderRadius: R.md, paddingHorizontal: 24, paddingVertical: 12,
+    maxWidth: "100%", minHeight: 48, borderRadius: R.md, paddingHorizontal: 24, paddingVertical: 12,
   },
-  secondaryText: { ...TAr.bodySmall, color: C.text },
+  secondaryText: { ...TAr.bodySmall, flexShrink: 1, textAlign: "center", color: C.text },
 });

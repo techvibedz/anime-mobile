@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import {
-  View, Text, ScrollView, Pressable, Dimensions, StyleSheet, Linking, ActivityIndicator,
+  View, Text, ScrollView, Pressable, StyleSheet, Linking, ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router } from "expo-router";
@@ -24,7 +24,6 @@ import { PosterCard, INLINE_POSTER_BADGE } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";
 import { useCardLayout } from "../../lib/cardLayout";
 
-const { width: SW } = Dimensions.get("window");
 const BANNER_H = 300;
 const PAD = S.paddingContent;
 
@@ -114,9 +113,9 @@ export default function TitleDetailScreen() {
         {/* Banner */}
         <View style={ss.banner}>
           {banner ? (
-            <Image source={{ uri: banner }} style={{ width: SW, height: BANNER_H }} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+            <Image source={{ uri: banner }} style={{ width: "100%", height: BANNER_H }} contentFit="cover" cachePolicy="memory-disk" transition={200} />
           ) : (
-            <View style={[{ width: SW, height: BANNER_H }, { backgroundColor: C.surface }]} />
+            <View style={[{ width: "100%", height: BANNER_H }, { backgroundColor: C.surface }]} />
           )}
           <LinearGradient
             colors={["rgba(0,0,0,0.25)", "transparent", "rgba(10,10,11,0.6)", C.bg]}
@@ -269,10 +268,10 @@ export default function TitleDetailScreen() {
 
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  banner: { width: SW, height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
+  banner: { width: "100%", height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
   body: { paddingHorizontal: PAD, marginTop: -40 },
 
-  title: { color: C.text, fontSize: 30, lineHeight: 42, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  title: { color: C.text, fontSize: 24, lineHeight: 36, fontFamily: "Cairo_700Bold", textAlign: "right" },
   soonPill: {
     flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-end", marginTop: 14,
     paddingHorizontal: 12, paddingVertical: 5, borderRadius: R.pill,

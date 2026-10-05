@@ -5,6 +5,7 @@ import {
   Pressable,
   ActivityIndicator,
   ScrollView,
+  TextInput,
   StyleSheet,
   StatusBar,
   PanResponder,
@@ -12,7 +13,7 @@ import {
   Animated,
   Easing,
 } from "react-native";
-import { VideoView, useVideoPlayer } from "expo-video";
+import { VideoView, useVideoPlayer, isPictureInPictureSupported } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
@@ -20,8 +21,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchCompleteVideoServers, resolveVideo, prefetchAnime3rbServers } from "../../lib/api";
-import type { VideoServer } from "../../lib/api";
+import type { VideoServer, Episode } from "../../lib/api";
 import type { MediaSubtitle } from "../../lib/scraper/direct";
+import {
+  NEXT_EPISODE_COUNTDOWN_SECONDS,
+  cycleSubtitleTrack,
+  nextSleepPreset,
+  sleepMinutesLeft,
+} from "../../lib/playerExtras";
+import { askCompanion } from "../../lib/companion";
+import { prefetchNextEpisode, stopPrefetch } from "../../lib/prefetch";
+import { seasonNum, slugToTitle } from "../../lib/relations";
 import { saveProgress, getProgress } from "../../lib/history";
 import { recordEpisodeWatched } from "../../lib/completion";
 import { getDownloadByEpisode, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
@@ -115,16 +125,19 @@ const SUBTITLE_OUTLINE: [number, number][] = [
 // the video, synced to the player clock.
 function SubtitleOverlay({
   tracks,
+  selected,
   player,
   playing,
 }: {
   tracks?: MediaSubtitle[];
+  /** Index into `tracks`; -1/undefined = subtitles off. */
+  selected?: number;
   player: ReturnType<typeof useVideoPlayer> | null;
   playing: boolean;
 }) {
   const [cues, setCues] = useState<SubtitleCue[] | null>(null);
   const [text, setText] = useState<string | null>(null);
-  const trackUrl = tracks?.[0]?.url || "";
+  const trackUrl = selected != null && selected >= 0 ? tracks?.[selected]?.url || "" : "";
 
   useEffect(() => {
     if (!trackUrl) { setCues(null); setText(null); return; }
@@ -386,6 +399,57 @@ export default function WatchScreen() {
   const autoSkipIntroRef = useRef(false);
   const skippedIntervalsRef = useRef<Set<string>>(new Set());
 
+  // ── PLAYER EXTRAS (PiP · sleep timer · episode list · subtitles) ──
+  // PiP + background playback need the expo-video config plugin baked into the
+  // APK; isPictureInPictureSupported() is false on older binaries (OTA), so the
+  // button hides itself there instead of failing.
+  const videoViewRef = useRef<VideoView>(null);
+  // On an OTA-updated app running on an older APK, the JS reports PiP as
+  // supported (Android checks SDK/device feature) but the activity lacks the
+  // manifest flag, so entering rejects — hide the button on first failure.
+  const [pipSupported, setPipSupported] = useState(() => {
+    try { return isPictureInPictureSupported(); } catch { return false; }
+  });
+  // Sleep timer: chosen preset in minutes (null = off), wall-clock deadline,
+  // and a 30s-refreshed "minutes left" label for the chip.
+  const [sleepPreset, setSleepPreset] = useState<number | null>(null);
+  const [sleepEndsAt, setSleepEndsAt] = useState<number | null>(null);
+  const [sleepMinutes, setSleepMinutes] = useState(0);
+  // Subtitle track index (-1 = off). Reset whenever the active server changes.
+  const [subtitleIdx, setSubtitleIdx] = useState(0);
+  // Episode list panel state. The list is fetched lazily on first open and
+  // cached per anime href for the rest of the watch session.
+  const [episodesOpen, setEpisodesOpen] = useState(false);
+  const [epList, setEpList] = useState<Episode[]>([]);
+  const [epListLoading, setEpListLoading] = useState(false);
+  const epListForRef = useRef<string | null>(null);
+  const epFetchRef = useRef(0);
+  // Next-episode countdown (seconds) shown before the auto-advance fires.
+  const [nextCountdown, setNextCountdown] = useState<number | null>(null);
+  const nextEpRef = useRef<string | null>(null);
+  // Silent prefetch: {title, epNum} derived by the a3rb effect, consumed by
+  // the delayed byte-prefetch effect further down.
+  const prefetchCtxRef = useRef<{ title: string; epNum: number } | null>(null);
+  // رفيق الأنمي — spoiler-safe AI companion sheet.
+  const [companionOpen, setCompanionOpen] = useState(false);
+  const [companionMsgs, setCompanionMsgs] = useState<{ role: "user" | "ai"; text: string }[]>([]);
+  const [companionBusy, setCompanionBusy] = useState(false);
+  const [companionInput, setCompanionInput] = useState("");
+  const companionBusyRef = useRef(false); // synchronous double-tap guard
+  const companionGenRef = useRef(0); // bumps per episode; drops stale replies
+  // Episode number for the companion's spoiler bound: route param first, then
+  // the same href fallbacks the prefetch effect uses.
+  const companionEpNum = useMemo(() => {
+    if (paramEpNum != null) return paramEpNum;
+    if (!episode) return null;
+    const href = decodeURIComponent(episode);
+    const um = href.match(/الحلقة[\s\-_]*(\d+)/);
+    if (um) return parseInt(um[1], 10);
+    const am = href.match(/\/episode\/[^/]+\/(\d+)/);
+    if (am) return parseInt(am[1], 10);
+    return null;
+  }, [paramEpNum, episode]);
+
   // HUD Toast feedback
   const [toastText, setToastText] = useState<string | null>(null);
   const toastOpacity = useRef(new Animated.Value(0)).current;
@@ -416,21 +480,48 @@ export default function WatchScreen() {
     skippedIntervalsRef.current.clear();
     setActiveSkip(null);
     setSkipTimes(null);
+    setNextCountdown(null);
+    prefetchCtxRef.current = null;
+    stopPrefetch();
+    companionGenRef.current += 1; // drop any in-flight companion reply
+    companionBusyRef.current = false; // never leave the send-guard stuck
+    setCompanionMsgs([]);
+    setCompanionOpen(false);
+    setCompanionInput("");
+    setCompanionBusy(false);
     // Re-arm the server-selection gate for the new episode, unless this is an
     // auto-play hop (next/prev/autoplay) or an offline file — those play directly.
     setPicked(!!autoParam || !!localParam);
   }, [episode]);
 
   // Fire auto-advance when playback nears the end (≥97%) and a next episode
-  // exists. Shared by the native + WebView progress timers.
+  // exists. Shared by the native + WebView progress timers. Instead of hopping
+  // instantly, a 10s countdown card appears (watch now / cancel).
   const maybeAutoAdvance = useCallback((pos: number, dur: number) => {
     if (partyClientRef.current) return; // host drives episode changes
+    if (isPausedRef.current) return; // never auto-advance a paused screen
     if (!autoplayRef.current || autoAdvancedRef.current) return;
-    if (dur > 0 && pos / dur >= 0.97) {
+    if (dur > 0 && pos / dur >= 0.97 && nextEpRef.current) {
       autoAdvancedRef.current = true;
-      goNextRef.current?.();
+      setNextCountdown(NEXT_EPISODE_COUNTDOWN_SECONDS);
     }
   }, []);
+
+  // Tick the next-episode countdown; zero navigates via the shared goNext ref.
+  // Cancel/watch-now clear the state; autoAdvancedRef stays burned so the
+  // progress timers can never re-arm it for this episode.
+  useEffect(() => {
+    if (nextCountdown == null) return;
+    if (nextCountdown <= 0) {
+      setNextCountdown(null);
+      // A sleep timer (or manual pause) that landed during the countdown must
+      // win — never start the next episode on a paused/asleep screen.
+      if (!isPausedRef.current) goNextRef.current?.();
+      return;
+    }
+    const timer = setTimeout(() => setNextCountdown((n) => (n == null ? null : n - 1)), 1000);
+    return () => clearTimeout(timer);
+  }, [nextCountdown]);
 
   // Mark the anime "caught up"/"finished" the moment this episode crosses the
   // 80% watched threshold — same bar history uses for "completed". The poster
@@ -458,6 +549,9 @@ export default function WatchScreen() {
 
   // Keep serversRef in sync so timers/async handlers can read the live count.
   useEffect(() => { serversRef.current = servers; }, [servers]);
+  // Next href through a ref so long-lived progress timers see the live value
+  // without re-subscribing (stale closures must not skip the countdown).
+  useEffect(() => { nextEpRef.current = nextEpisodeHref; }, [nextEpisodeHref]);
 
   const active = servers[activeIdx];
   // Episode label used for history/continue-watching ("الحلقة N" once the
@@ -480,6 +574,26 @@ export default function WatchScreen() {
     if (e === a || e.includes(a)) return ep;
     return `${anime} — ${ep}`;
   }, [episodeLabel, animeTitle]);
+
+  // Season-aware identity for the companion. Source titles are often just the
+  // base series ("Naruto") while the user watches a later season/series, which
+  // made the AI answer about the old season. Surface the slug's season marker
+  // and romaji title so the context pins the exact work.
+  const companionCtx = useMemo(() => {
+    const dec = (v: string) => { try { return decodeURIComponent(v); } catch { return v; } };
+    const parentHref = animeHref || (animeParam ? dec(animeParam) : "");
+    const base = (animeTitleParam ? dec(animeTitleParam) : "") || animeTitle || episodeLabel || "";
+    const seasonFromTitle = seasonNum(base);
+    const seasonFromHref = seasonNum(parentHref) || (episode ? seasonNum(dec(episode)) : 0);
+    // Only append a season when the title doesn't already carry one and the
+    // URL slug proves it (e.g. "...-2nd-season"); never invent one.
+    const title = seasonFromTitle === 0 && seasonFromHref > 0
+      ? `${base} (الموسم ${seasonFromHref})`
+      : base;
+    const alt = slugToTitle(parentHref);
+    const altTitle = alt && alt.toLowerCase() !== base.toLowerCase() ? alt : "";
+    return { title, season: seasonFromTitle || seasonFromHref || 0, altTitle };
+  }, [animeTitleParam, animeTitle, episodeLabel, animeHref, animeParam, episode]);
   // Gate playback on the selection: until the user picks a server, the player
   // gets NO source so background pre-resolution can't start audio/video behind
   // the picker. Flips on the moment `picked` is set by pickServer.
@@ -508,6 +622,9 @@ export default function WatchScreen() {
         uri: videoUrl,
         headers: videoPlaybackHeaders(videoUrl, iframeUrl, provider),
         contentType: videoContentType(videoUrl, provider),
+        // Disk cache for replays + replaying what the silent prefetch already
+        // buffered (lib/prefetch.ts). Already supported by the shipped binary.
+        useCaching: true,
       };
     } catch {
       return videoUrl;
@@ -540,6 +657,13 @@ export default function WatchScreen() {
       // of starting on a thread-bare one and rebuffering immediately.
       waitsToMinimizeStalling: true,
     };
+    // Keep audio (and PiP) alive when the app goes to the background. Both need
+    // the expo-video config plugin from the APK build; on an older binary (OTA)
+    // the native side rejects them — never let that kill player setup.
+    try {
+      p.staysActiveInBackground = true;
+      p.showNowPlayingNotification = true;
+    } catch {}
     if (videoUrl && resumeMs > 0) {
       p.currentTime = resumeMs / 1000;
     }
@@ -568,6 +692,8 @@ export default function WatchScreen() {
         // this no-ops instead of restarting audio on the backgrounded screen.
         focusedRef.current = false;
         try { player.pause(); } catch {}
+        // Never let the hidden prefetch keep downloading off-screen.
+        stopPrefetch();
       };
     }, [player]),
   );
@@ -826,6 +952,9 @@ export default function WatchScreen() {
     if (startedSaveRef.current === key) return;
     startedSaveRef.current = key;
     const timer = setTimeout(() => {
+      // A blurred screen (left on the stack, frozen) must never record — the
+      // user may have deleted this anime from history in the meantime.
+      if (!focusedRef.current) return;
       if (playbackPositionMsRef.current > 0) return; // a real save already landed
       saveProgress({
         episodeHref: decodeURIComponent(episode),
@@ -848,6 +977,7 @@ export default function WatchScreen() {
     if (progressTimer.current) clearInterval(progressTimer.current);
     progressTimer.current = setInterval(() => {
       try {
+        if (!focusedRef.current) return; // frozen under another screen — no resurrecting deleted history
         const pos = player.currentTime * 1000;
         const dur = player.duration * 1000;
         if (pos > 0 && dur > 0) {
@@ -926,6 +1056,7 @@ export default function WatchScreen() {
     if (!isWebView || !episode) return;
     if (progressTimer.current) clearInterval(progressTimer.current);
     progressTimer.current = setInterval(() => {
+      if (!focusedRef.current) return; // frozen under another screen — no resurrecting deleted history
       const { pos, dur } = lastWebViewPos.current;
       if (pos > 0 && dur > 0) {
         playbackPositionMsRef.current = Math.round(pos);
@@ -1199,10 +1330,34 @@ export default function WatchScreen() {
     const guard = `${lookupTitle}#${epNum}`;
     if (a3rbPrefetchedRef.current === guard) return; // already prefetched for this ep
     a3rbPrefetchedRef.current = guard;
+    // Hand the derived context to the silent byte-prefetch effect below.
+    prefetchCtxRef.current = { title: lookupTitle, epNum };
     // Next is the strong signal (autoplay/binge); previous is cheap insurance.
     prefetchAnime3rbServers(lookupTitle, epNum + 1);
     if (epNum > 1) prefetchAnime3rbServers(lookupTitle, epNum - 1);
   }, [a3rbServerCount, episode, animeTitle, animeTitleParam, animeParam, paramEpNum]);
+
+  // ── SILENT NEXT-EPISODE PREFETCH (صفر انتظار) ──
+  // 20s into healthy playback, quietly resolve next episode's vid3rb URL and
+  // pre-buffer two minutes into the disk cache with a muted, viewless player.
+  // Tapping next then starts near-instantly. Data-usage control is the
+  // settings toggle (there is no Wi-Fi/cellular signal in this binary).
+  useEffect(() => {
+    if (!isPlaying || !nextEpisodeHref) return;
+    const timer = setTimeout(() => {
+      const ctx = prefetchCtxRef.current;
+      if (!ctx) return;
+      void prefetchNextEpisode({
+        animeTitle: ctx.title,
+        epNum: ctx.epNum + 1,
+        shouldRun: () => focusedRef.current && !isPausedRef.current,
+      });
+    }, 20_000);
+    return () => {
+      clearTimeout(timer);
+      stopPrefetch();
+    };
+  }, [isPlaying, nextEpisodeHref]);
 
   // ── MANUAL REFRESH ──
   // Re-scrape the complete list while preserving state for unchanged servers.
@@ -1243,21 +1398,24 @@ export default function WatchScreen() {
 
     setServers((p) => p.map((s, i) => i === idx ? { ...s, status: "resolving" } : s));
     const resolution = ++activeResolutionRef.current;
-    void resolveVideo(url, srv.provider, { priority: true, fresh: true }).then((result) => {
+    void (async () => {
+      // Warm result first (90s cache): when the silent prefetch just resolved
+      // this same server URL, this returns it verbatim — so the disk-cache
+      // segments it buffered are actually hit instead of being bypassed by a
+      // fresh (possibly re-signed) URL.
+      let result = await resolveVideo(url, srv.provider, { priority: true }).catch(() => null);
       if (activeResolutionRef.current !== resolution) return;
+      if (!result?.success || !result.data?.videoUrl) {
+        result = await resolveVideo(url, srv.provider, { priority: true, fresh: true }).catch(() => null);
+        if (activeResolutionRef.current !== resolution) return;
+      }
       setServers((p) => p.map((s, i) =>
         i !== idx || s.server.iframeUrl !== srv.iframeUrl
           ? s
-          : result.success && result.data?.videoUrl
+          : result?.success && result.data?.videoUrl
             ? { ...s, status: "playing", videoUrl: result.data.videoUrl, subtitles: result.data.subtitles }
             : { ...s, status: failStatus(srv.provider), videoUrl: null }));
-    }).catch(() => {
-      if (activeResolutionRef.current !== resolution) return;
-      setServers((p) => p.map((s, i) =>
-        i === idx && s.server.iframeUrl === srv.iframeUrl
-          ? { ...s, status: failStatus(srv.provider), videoUrl: null }
-          : s));
-    });
+    })();
   }, [activeIdx, servers.length > 0 ? servers[activeIdx]?.status : null, picked, episode]);
 
   // A server warmed during discovery (status "playing" with a pre-resolved URL)
@@ -1440,6 +1598,124 @@ export default function WatchScreen() {
       },
     });
   }, [prevEpisodeHref, animeParam, imgParam, animeTitleParam, paramEpNum]);
+
+  // ── EPISODE LIST PANEL ──
+  // The full episode list is fetched lazily the first time the panel opens and
+  // cached per anime href for the rest of the session.
+  const openEpisodes = useCallback(async () => {
+    if (partyClientRef.current) return; // host drives episode changes
+    setEpisodesOpen(true);
+    setCompanionOpen(false);
+    if (!episode) return;
+    const currentHref = decodeURIComponent(episode);
+    let resolvedAnime: string | null = animeParam || null;
+    if (!resolvedAnime) {
+      try {
+        const { toAnimeUrl } = require("../../lib/favorites") as typeof import("../../lib/favorites");
+        resolvedAnime = toAnimeUrl(currentHref);
+      } catch {}
+    }
+    if (!resolvedAnime) return;
+    if (epListForRef.current === resolvedAnime && epList.length > 0) return;
+    const token = ++epFetchRef.current;
+    setEpListLoading(true);
+    try {
+      const { fetchEpisodes } = await import("../../lib/api");
+      const res = await fetchEpisodes(resolvedAnime);
+      if (epFetchRef.current !== token) return; // a newer open superseded this
+      if (res?.success) {
+        const byNum = [...(res.data.episodes || [])].sort(
+          (a, b) => (a.number ?? 0) - (b.number ?? 0),
+        );
+        epListForRef.current = resolvedAnime;
+        setEpList(byNum);
+      }
+    } catch {} finally {
+      if (epFetchRef.current === token) setEpListLoading(false);
+    }
+  }, [episode, animeParam, epList.length]);
+
+  const jumpToEpisode = useCallback((ep: Episode) => {
+    if (partyClientRef.current || !ep.href) return; // host drives episode changes
+    setEpisodesOpen(false);
+    router.replace({
+      pathname: `/watch/${encodeURIComponent(ep.href)}`,
+      params: {
+        url4up: "",
+        anime: animeParam || "",
+        img: imgParam || "",
+        animeTitle: animeTitleParam || "",
+        epNum: ep.number != null ? String(ep.number) : "",
+      },
+    });
+  }, [animeParam, imgParam, animeTitleParam]);
+
+  // ── رفيق الأنمي (spoiler-safe AI companion) ──
+  const openCompanion = useCallback(() => {
+    setPickerOpen(false);
+    setEpisodesOpen(false);
+    setCompanionOpen(true);
+  }, []);
+
+  const companionReasonText = useCallback((reason: string) => {
+    switch (reason) {
+      case "signin": return t.companionSignIn;
+      case "rate_limited": return t.companionRateLimited;
+      case "unavailable": return t.companionUnavailable;
+      default: return t.companionError;
+    }
+  }, []);
+
+  const sendCompanion = useCallback(async (mode: "chat" | "recap") => {
+    if (companionBusyRef.current) return;
+    const question = companionInput.trim();
+    if (mode === "chat" && !question) return;
+    if (!companionEpNum) return;
+    const title = companionCtx.title || t.companion;
+    const gen = companionGenRef.current;
+    // Snapshot BEFORE appending this turn: the last exchanges go to the model
+    // so it continues the conversation instead of starting over.
+    const history = companionMsgs
+      .slice(-8)
+      .map((m) => ({ role: m.role, text: m.text.slice(0, 400) }));
+    companionBusyRef.current = true;
+    setCompanionMsgs((m) => [...m, { role: "user", text: mode === "recap" ? t.companionRecap : question }]);
+    setCompanionInput("");
+    setCompanionBusy(true);
+    const res = await askCompanion({
+      mode,
+      animeTitle: title,
+      epNum: companionEpNum,
+      question: mode === "chat" ? question : undefined,
+      episodeTitle: episodeLabel || undefined,
+      seasonNumber: companionCtx.season || undefined,
+      altTitle: companionCtx.altTitle || undefined,
+      history: mode === "chat" ? history : undefined,
+    });
+    companionBusyRef.current = false;
+    if (companionGenRef.current !== gen) return; // episode changed mid-flight
+    setCompanionBusy(false);
+    if (res.ok) {
+      setCompanionMsgs((m) => [...m, { role: "ai", text: res.answer }]);
+    } else {
+      showToast(companionReasonText(res.reason));
+    }
+  }, [companionInput, companionMsgs, companionEpNum, companionCtx, showToast, companionReasonText]);
+
+  // Current index inside the fetched list (href match first, episode number as
+  // fallback for cross-source href shapes).
+  const currentEpIdx = useMemo(() => {
+    if (!episode) return -1;
+    const norm = (u: string) => {
+      if (!u) return "";
+      try { return decodeURIComponent(u).replace(/\/+$/, ""); }
+      catch { return u.replace(/\/+$/, ""); }
+    };
+    const target = norm(decodeURIComponent(episode));
+    let idx = epList.findIndex((e) => norm(e.href || "") === target);
+    if (idx === -1 && paramEpNum != null) idx = epList.findIndex((e) => e.number === paramEpNum);
+    return idx;
+  }, [epList, episode, paramEpNum]);
 
   // Jump to the parent anime's detail page from inside the player. Prefer the
   // explicit anime param, then the scraped href, then derive the anime URL from
@@ -1666,6 +1942,80 @@ export default function WatchScreen() {
     try { player.playbackRate = SPEEDS[speedIdx]; } catch {}
   }, [speedIdx, player, videoUrl]);
 
+  // ── SLEEP TIMER ──
+  // The chip cycles off → 15 → 30 → 45 → 60 → off. When the timer fires it
+  // pauses whichever surface is playing (native player or embed WebView).
+  const cycleSleepTimer = useCallback(() => {
+    const next = nextSleepPreset(sleepPreset);
+    if (next == null) {
+      setSleepPreset(null);
+      setSleepEndsAt(null);
+      showToast(t.sleepTimerOff);
+    } else {
+      setSleepPreset(next);
+      setSleepEndsAt(Date.now() + next * 60_000);
+      setSleepMinutes(next);
+      showToast(t.sleepTimerOn(next));
+    }
+  }, [sleepPreset, showToast]);
+
+  useEffect(() => {
+    if (sleepEndsAt == null) return;
+    const fire = () => {
+      try { player.pause(); } catch {}
+      if (isWebView) {
+        webViewRef.current?.injectJavaScript(`
+          try{var v=document.querySelector('video');if(v)v.pause();}catch(e){}
+          try{if(typeof jwplayer==='function'){jwplayer().pause();}}catch(e){}
+          try{if(typeof videojs==='function'){videojs(document.querySelector('.video-js')).pause();}}catch(e){}
+          true;
+        `);
+      }
+      setIsPlayerPaused(true);
+      setSleepPreset(null);
+      setSleepEndsAt(null);
+      showToast(t.sleepTimerEnded);
+    };
+    const delay = sleepEndsAt - Date.now();
+    if (delay <= 0) { fire(); return; }
+    const timeout = setTimeout(fire, delay);
+    const labelTimer = setInterval(
+      () => setSleepMinutes(sleepMinutesLeft(sleepEndsAt, Date.now())),
+      30_000,
+    );
+    return () => { clearTimeout(timeout); clearInterval(labelTimer); };
+  }, [sleepEndsAt, player, isWebView, showToast]);
+
+  // ── SUBTITLES ──
+  // Only anime4upcdn ships sidecar VTT tracks today. The button cycles through
+  // all tracks, then off; a single-track server simply toggles on/off.
+  const subtitleCount = active?.subtitles?.length ?? 0;
+  const activeSubKey = active?.server.iframeUrl || "";
+  // New server → first track again, but never re-enable subtitles the user
+  // explicitly turned off.
+  useEffect(() => { setSubtitleIdx((prev) => (prev < 0 ? -1 : 0)); }, [activeSubKey]);
+  const cycleSubtitles = useCallback(() => {
+    const tracks = active?.subtitles || [];
+    if (tracks.length === 0) return;
+    const next = cycleSubtitleTrack(subtitleIdx, tracks.length);
+    setSubtitleIdx(next);
+    if (next < 0) {
+      showToast(t.subtitleOff);
+    } else {
+      const track = tracks[next];
+      showToast(t.subtitleOn(track?.label || track?.lang || t.subtitleTrack(next + 1)));
+    }
+  }, [active, subtitleIdx, showToast]);
+
+  // Pausing must also freeze the hidden prefetch download.
+  useEffect(() => {
+    if (isPlayerPaused) stopPrefetch();
+  }, [isPlayerPaused]);
+
+  const enterPip = useCallback(() => {
+    videoViewRef.current?.startPictureInPicture().catch(() => setPipSupported(false));
+  }, []);
+
   const togglePlayPause = useCallback(() => {
     if (partyClientRef.current) { partyPulseRef.current(isPlayerPaused); return; }
     // Party host: can't start the episode until the whole room is ready.
@@ -1814,14 +2164,14 @@ export default function WatchScreen() {
   // For WebView/loading/error states: a transparent overlay handles tap-to-show-controls.
   // IMPORTANT: must be declared BEFORE any conditional early-return so hook order stays stable.
   const tapToToggle = useCallback(() => {
-    if (pickerOpen) return;
+    if (pickerOpen || episodesOpen || companionOpen) return;
     if (controlsVisible) {
       setControlsVisible(false);
       if (hideTimer.current) clearTimeout(hideTimer.current);
     } else {
       showControls();
     }
-  }, [pickerOpen, controlsVisible, showControls]);
+  }, [pickerOpen, episodesOpen, companionOpen, controlsVisible, showControls]);
 
   // Keep the once-created PanResponders pointed at the latest callbacks.
   tapToToggleRef.current = tapToToggle;
@@ -2027,13 +2377,19 @@ export default function WatchScreen() {
       {isPlaying ? (
         <Pressable onPress={showControls} style={ss.playerWrap}>
           <VideoView
+            ref={videoViewRef}
             player={player}
             style={ss.player}
             nativeControls={false}
             contentFit={videoFit}
             allowsPictureInPicture
           />
-          <SubtitleOverlay tracks={active?.subtitles} player={player} playing={isPlaying} />
+          <SubtitleOverlay
+            tracks={active?.subtitles}
+            selected={subtitleIdx}
+            player={player}
+            playing={isPlaying}
+          />
         </Pressable>
       ) : isWebView ? (
         /* WEBVIEW FALLBACK */
@@ -2107,7 +2463,7 @@ export default function WatchScreen() {
 
       {/* Transparent tap-catcher ONLY when WebView is active or controls hidden in non-native states.
           Skipped during native playback so taps reach expo-video's native controls. */}
-      {!isPlaying && !pickerOpen && (
+      {!isPlaying && !pickerOpen && !episodesOpen && !companionOpen && (
         <Pressable
           style={[ABSOLUTE_FILL, { zIndex: 1 }]}
           onPress={tapToToggle}
@@ -2119,7 +2475,7 @@ export default function WatchScreen() {
           hidden, tapping ANYWHERE shows it (like YouTube / Netflix). Once
           the chrome is visible we remove this overlay so taps reach
           expo-video's native controls. */}
-      {isPlaying && !pickerOpen && !controlsVisible && !locked && (
+      {isPlaying && !pickerOpen && !episodesOpen && !companionOpen && !controlsVisible && !locked && (
         <View
           style={[ABSOLUTE_FILL, { zIndex: 2 }]}
           {...brightnessPan.panHandlers}
@@ -2182,8 +2538,34 @@ export default function WatchScreen() {
         </Animated.View>
       )}
 
+      {/* Next-episode countdown — shown at ≥97% instead of hopping instantly.
+          Party clients never see it (the host drives episode changes). */}
+      {(isPlaying || isWebView) && nextCountdown != null && !isPartyClient && !locked && nextEpisodeHref && (
+        <View style={ss.nextOverlay} pointerEvents="box-none">
+          <View style={ss.nextCard}>
+            <View style={ss.nextTimer}>
+              <Text style={ss.nextTimerText}>{nextCountdown}</Text>
+            </View>
+            <View style={ss.nextTextCol}>
+              <Text style={ss.nextLabel}>{t.nextEpisode}</Text>
+              <Text style={ss.nextHint}>{t.autoplayNextIn(nextCountdown)}</Text>
+            </View>
+            <Pressable
+              onPress={() => { setNextCountdown(null); goNextEpisode(true); }}
+              style={ss.chipBtnAccent}
+              hitSlop={6}
+            >
+              <Text style={ss.chipBtnAccentText}>{t.watchNow}</Text>
+            </Pressable>
+            <Pressable onPress={() => setNextCountdown(null)} style={ss.chipBtn} hitSlop={6}>
+              <Ionicons name="close" size={16} color={C.white} />
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       {/* Custom Controls Overlay */}
-      {isPlaying && !pickerOpen && controlsVisible && !locked && (
+      {isPlaying && !pickerOpen && !episodesOpen && !companionOpen && controlsVisible && !locked && (
         <View style={ss.controlsOverlay} pointerEvents="box-none">
           {/* Tap on empty space hides the chrome; vertical swipe adjusts brightness */}
           <View style={ABSOLUTE_FILL} {...brightnessPan.panHandlers} />
@@ -2241,6 +2623,35 @@ export default function WatchScreen() {
                 color={C.white}
               />
             </Pressable>
+            {pipSupported && (
+              <Pressable onPress={enterPip} style={ss.iconBtn} hitSlop={6} accessibilityLabel={t.pip}>
+                <Ionicons name="duplicate-outline" size={18} color={C.white} />
+              </Pressable>
+            )}
+            {subtitleCount > 0 && (
+              <Pressable
+                onPress={cycleSubtitles}
+                style={[ss.iconBtn, subtitleIdx >= 0 && ss.iconBtnAccent]}
+                hitSlop={6}
+                accessibilityLabel={t.subtitlesLabel}
+              >
+                <Ionicons
+                  name={subtitleIdx >= 0 ? "text" : "text-outline"}
+                  size={18}
+                  color={subtitleIdx >= 0 ? C.accent : C.white}
+                />
+              </Pressable>
+            )}
+            {companionEpNum != null && (
+              <Pressable
+                onPress={openCompanion}
+                style={[ss.iconBtn, companionOpen && ss.iconBtnAccent]}
+                hitSlop={6}
+                accessibilityLabel={t.companion}
+              >
+                <Ionicons name="sparkles-outline" size={18} color={companionOpen ? C.accent : C.white} />
+              </Pressable>
+            )}
             {renderDownloadBtn()}
             {renderPartyBtn()}
             <Pressable onPress={() => setPickerOpen(true)} style={ss.iconBtn} hitSlop={6}>
@@ -2307,12 +2718,32 @@ export default function WatchScreen() {
             </View>
 
             <View style={ss.ctrlRow}>
-              <Pressable onPress={skipForward85} style={ss.chipBtn}>
-                <Ionicons name="play-forward-circle-outline" size={16} color={C.white} />
-                <Text style={ss.chipBtnText}>{t.skip85s}</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <Pressable onPress={skipForward85} style={ss.chipBtn}>
+                  <Ionicons name="play-forward-circle-outline" size={16} color={C.white} />
+                  <Text style={ss.chipBtnText}>{t.skip85s}</Text>
+                </Pressable>
+                {!isPartyClient && (
+                  <Pressable
+                    onPress={cycleSleepTimer}
+                    style={[ss.chipBtn, sleepEndsAt != null && ss.chipBtnActive]}
+                    accessibilityLabel={t.sleepTimerShort(sleepMinutes)}
+                  >
+                    <Ionicons name="moon-outline" size={15} color={sleepEndsAt != null ? C.accent : C.white} />
+                    {sleepEndsAt != null && (
+                      <Text style={[ss.chipBtnText, { color: C.accent }]}>{t.sleepTimerShort(sleepMinutes)}</Text>
+                    )}
+                  </Pressable>
+                )}
+              </View>
 
               <View style={{ flexDirection: "row", gap: 8 }}>
+                {!isPartyClient && (
+                  <Pressable onPress={openEpisodes} style={ss.chipBtn}>
+                    <Ionicons name="list-outline" size={15} color={C.white} />
+                    <Text style={ss.chipBtnText}>{t.episodes}</Text>
+                  </Pressable>
+                )}
                 {prevEpisodeHref && (
                   <Pressable onPress={goPrevEpisode} style={ss.chipBtn}>
                     <Ionicons name="play-skip-back" size={14} color={C.white} />
@@ -2332,7 +2763,7 @@ export default function WatchScreen() {
       )}
 
       {/* TOP BAR for non-native states (WebView, loading) */}
-      {controlsVisible && !pickerOpen && !isPlaying && (
+      {controlsVisible && !pickerOpen && !episodesOpen && !companionOpen && !isPlaying && (
         <View style={ss.overlay} pointerEvents="box-none">
           <View style={[ss.ctrlTopBar, { paddingTop: (insets.top || 10) + 6 }]}>
             <LinearGradient
@@ -2361,6 +2792,31 @@ export default function WatchScreen() {
             <Pressable onPress={goToAnimePage} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="information-circle-outline" size={20} color={C.white} />
             </Pressable>
+            {!isPartyClient && (
+              <>
+                <Pressable onPress={openEpisodes} style={ss.iconBtn} hitSlop={6}>
+                  <Ionicons name="list-outline" size={18} color={C.white} />
+                </Pressable>
+                <Pressable
+                  onPress={cycleSleepTimer}
+                  style={[ss.iconBtn, sleepEndsAt != null && ss.iconBtnAccent]}
+                  hitSlop={6}
+                  accessibilityLabel={t.sleepTimerShort(sleepMinutes)}
+                >
+                  <Ionicons name="moon-outline" size={18} color={sleepEndsAt != null ? C.accent : C.white} />
+                </Pressable>
+                {companionEpNum != null && (
+                  <Pressable
+                    onPress={openCompanion}
+                    style={[ss.iconBtn, companionOpen && ss.iconBtnAccent]}
+                    hitSlop={6}
+                    accessibilityLabel={t.companion}
+                  >
+                    <Ionicons name="sparkles-outline" size={18} color={companionOpen ? C.accent : C.white} />
+                  </Pressable>
+                )}
+              </>
+            )}
             <Pressable onPress={skipForward} style={ss.iconBtn} hitSlop={6}>
               <Ionicons name="play-forward" size={18} color={C.white} />
             </Pressable>
@@ -2503,6 +2959,34 @@ export default function WatchScreen() {
           onClose={() => setPickerOpen(false)}
         />
       )}
+
+      {/* EPISODE LIST — same landscape side drawer pattern as the servers */}
+      {episodesOpen && (
+        <EpisodeSheet
+          episodes={epList}
+          currentIdx={currentEpIdx}
+          loading={epListLoading}
+          insets={insets}
+          onSelect={jumpToEpisode}
+          onClose={() => setEpisodesOpen(false)}
+        />
+      )}
+
+      {/* رفيق الأنمي — spoiler-safe AI companion drawer */}
+      {companionOpen && companionEpNum != null && (
+        <CompanionSheet
+          title={(animeTitleParam ? decodeURIComponent(animeTitleParam) : "") || animeTitle || episodeLabel || t.companion}
+          spoilerBound={companionEpNum}
+          messages={companionMsgs}
+          busy={companionBusy}
+          input={companionInput}
+          onChangeInput={setCompanionInput}
+          onSend={() => sendCompanion("chat")}
+          onRecap={() => sendCompanion("recap")}
+          onClose={() => setCompanionOpen(false)}
+          insets={insets}
+        />
+      )}
       <DownloadPicker visible={!!dlPicker} meta={dlPicker} onClose={() => setDlPicker(null)} />
     </View>
   );
@@ -2640,6 +3124,235 @@ function ServerSheet({
   );
 }
 
+/* ── Episode list — same landscape side drawer as ServerSheet ──────── */
+function EpisodeSheet({
+  episodes,
+  currentIdx,
+  loading,
+  insets,
+  onSelect,
+  onClose,
+}: {
+  episodes: Episode[];
+  currentIdx: number;
+  loading: boolean;
+  insets: { top: number };
+  onSelect: (episode: Episode) => void;
+  onClose: () => void;
+}) {
+  const reduced = useReducedMotion();
+  const hideX = Dimensions.get("window").width;
+  const slide = useRef(new Animated.Value(reduced ? 0 : 1)).current; // 1 = off-screen right
+  const backdrop = useRef(new Animated.Value(reduced ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (reduced) return;
+    Animated.parallel([
+      Animated.timing(slide, { toValue: 0, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const animateClose = () => {
+    if (reduced) { onClose(); return; }
+    Animated.parallel([
+      Animated.timing(slide, { toValue: 1, duration: 200, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) onClose(); });
+  };
+
+  const translateX = slide.interpolate({ inputRange: [0, 1], outputRange: [0, hideX] });
+
+  return (
+    <View style={ss.pickerOverlay}>
+      <Animated.View style={[ss.pickerBackdrop, { opacity: backdrop }]}>
+        <Pressable style={ABSOLUTE_FILL} onPress={animateClose} />
+      </Animated.View>
+      <Animated.View style={[ss.pickerSheet, { paddingTop: (insets.top || 10) + 10, transform: [{ translateX }] }]}>
+        <View style={ss.pickerHeader}>
+          <View style={ss.pickerHeaderLeft}>
+            <View style={ss.pickerHeaderIcon}>
+              <Ionicons name="list-outline" size={16} color={C.accent} />
+            </View>
+            <View>
+              <Text style={ss.pickerTitle}>{t.episodes}</Text>
+              <Text style={ss.pickerSub}>
+                {episodes.length > 0 ? t.episodeCount(episodes.length) : ""}
+              </Text>
+            </View>
+          </View>
+          <Pressable onPress={animateClose} style={ss.iconBtn} hitSlop={6}>
+            <Ionicons name="close" size={20} color={C.white} />
+          </Pressable>
+        </View>
+        {loading && episodes.length === 0 ? (
+          <View style={ss.selFinding}>
+            <ActivityIndicator size="small" color={C.accent} />
+            <Text style={ss.selFindingText}>{t.loading}</Text>
+          </View>
+        ) : episodes.length === 0 ? (
+          <Text style={ss.emptyText}>{t.noEpisodes}</Text>
+        ) : (
+          <ScrollView showsVerticalScrollIndicator={false} style={ss.pickerScroll} contentContainerStyle={ss.pickerContent}>
+            {episodes.map((ep, i) => {
+              const isCurrent = i === currentIdx;
+              const num = ep.number > 0 ? ep.number : i + 1;
+              return (
+                <Pressable
+                  key={`${ep.href || "ep"}-${i}`}
+                  disabled={!ep.href}
+                  onPress={() => onSelect(ep)}
+                  style={({ pressed }) => [
+                    ss.serverItem,
+                    isCurrent && ss.serverItemActive,
+                    pressed && { opacity: 0.7 },
+                    !ep.href && { opacity: 0.4 },
+                  ]}
+                >
+                  <View style={[ss.serverAvatar, isCurrent && { borderColor: C.accent }]}>
+                    <Text style={[ss.serverAvatarText, isCurrent && { color: C.accent }]}>{num}</Text>
+                  </View>
+                  <View style={ss.serverInfo}>
+                    <Text style={[ss.serverName, isCurrent && ss.serverNameActive]} numberOfLines={1}>
+                      {ep.title || `${t.episode} ${num}`}
+                    </Text>
+                  </View>
+                  {isCurrent && (
+                    <View style={ss.activeBadge}>
+                      <Ionicons name="play" size={9} color={C.textOnAccent} />
+                      <Text style={ss.activeBadgeText}>NOW</Text>
+                    </View>
+                  )}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
+      </Animated.View>
+    </View>
+  );
+}
+
+/* ── رفيق الأنمي — spoiler-safe AI companion drawer ────────────────── */
+function CompanionSheet({
+  title,
+  spoilerBound,
+  messages,
+  busy,
+  input,
+  onChangeInput,
+  onSend,
+  onRecap,
+  onClose,
+  insets,
+}: {
+  title: string;
+  spoilerBound: number;
+  messages: { role: "user" | "ai"; text: string }[];
+  busy: boolean;
+  input: string;
+  onChangeInput: (v: string) => void;
+  onSend: () => void;
+  onRecap: () => void;
+  onClose: () => void;
+  insets: { top: number };
+}) {
+  const reduced = useReducedMotion();
+  const hideX = Dimensions.get("window").width;
+  const slide = useRef(new Animated.Value(reduced ? 0 : 1)).current; // 1 = off-screen right
+  const backdrop = useRef(new Animated.Value(reduced ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (reduced) return;
+    Animated.parallel([
+      Animated.timing(slide, { toValue: 0, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const animateClose = () => {
+    if (reduced) { onClose(); return; }
+    Animated.parallel([
+      Animated.timing(slide, { toValue: 1, duration: 200, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(backdrop, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) onClose(); });
+  };
+
+  const translateX = slide.interpolate({ inputRange: [0, 1], outputRange: [0, hideX] });
+
+  return (
+    <View style={ss.pickerOverlay}>
+      <Animated.View style={[ss.pickerBackdrop, { opacity: backdrop }]}>
+        <Pressable style={ABSOLUTE_FILL} onPress={animateClose} />
+      </Animated.View>
+      <Animated.View style={[ss.pickerSheet, { paddingTop: (insets.top || 10) + 10, transform: [{ translateX }] }]}>
+        <View style={ss.pickerHeader}>
+          <View style={ss.pickerHeaderLeft}>
+            <View style={ss.pickerHeaderIcon}>
+              <Ionicons name="sparkles" size={16} color={C.accent} />
+            </View>
+            <View>
+              <Text style={ss.pickerTitle}>{t.companion}</Text>
+              <Text style={ss.pickerSub}>{t.companionSpoilerNote(spoilerBound)}</Text>
+            </View>
+          </View>
+          <Pressable onPress={animateClose} style={ss.iconBtn} hitSlop={6}>
+            <Ionicons name="close" size={20} color={C.white} />
+          </Pressable>
+        </View>
+
+        <ScrollView
+          style={ss.companionBody}
+          contentContainerStyle={ss.companionMessages}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {messages.length === 0 && (
+            <Text style={ss.companionWelcome}>{t.companionWelcome(title)}</Text>
+          )}
+          {messages.map((m, i) => (
+            <View key={`${m.role}-${i}`} style={[ss.msgBubble, m.role === "user" ? ss.msgUser : ss.msgAi]}>
+              <Text style={ss.msgText}>{m.text}</Text>
+            </View>
+          ))}
+          {busy && (
+            <View style={[ss.msgBubble, ss.msgAi, ss.msgBusy]}>
+              <ActivityIndicator size="small" color={C.accent} />
+              <Text style={ss.msgText}>{t.companionThinking}</Text>
+            </View>
+          )}
+        </ScrollView>
+
+        <Pressable onPress={onRecap} disabled={busy} style={[ss.companionChip, busy && { opacity: 0.5 }]}>
+          <Ionicons name="sparkles" size={14} color={C.accent} />
+          <Text style={ss.companionChipText}>{t.companionRecap}</Text>
+        </Pressable>
+
+        <View style={ss.companionInputRow}>
+          <TextInput
+            value={input}
+            onChangeText={onChangeInput}
+            placeholder={t.companionPlaceholder}
+            placeholderTextColor={C.textMuted}
+            style={ss.companionInput}
+            editable={!busy}
+            returnKeyType="send"
+            onSubmitEditing={onSend}
+            maxLength={500}
+          />
+          <Pressable
+            onPress={onSend}
+            disabled={busy || !input.trim()}
+            style={[ss.companionSendBtn, (busy || !input.trim()) && { opacity: 0.5 }]}
+          >
+            <Ionicons name="send" size={16} color={C.textOnAccent} />
+          </Pressable>
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
 const ss = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.player },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
@@ -2689,6 +3402,31 @@ const ss = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.78)", borderWidth: 1, borderColor: C.border,
   },
   toastText: { color: C.text, fontSize: 13, fontFamily: "Cairo_600SemiBold" },
+
+  // Next-episode countdown card (appears at ≥97%)
+  nextOverlay: {
+    ...ABSOLUTE_FILL, alignItems: "center", justifyContent: "flex-end",
+    paddingBottom: 132, zIndex: 8,
+  },
+  nextCard: {
+    width: "92%", maxWidth: 420,
+    flexDirection: "row", alignItems: "center", gap: 12,
+    backgroundColor: "rgba(0,0,0,0.85)", borderWidth: 1, borderColor: C.border,
+    borderRadius: R.lg, paddingHorizontal: 16, paddingVertical: 12,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 16, elevation: 10,
+  },
+  nextTimer: {
+    width: 42, height: 42, borderRadius: 21,
+    borderWidth: 2, borderColor: C.accent,
+    alignItems: "center", justifyContent: "center",
+  },
+  nextTimerText: {
+    color: C.white, fontSize: 18, fontWeight: "800",
+    fontFamily: "Outfit_800ExtraBold", fontVariant: ["tabular-nums"],
+  },
+  nextTextCol: { flex: 1, minWidth: 0, gap: 2 },
+  nextLabel: { color: C.white, fontSize: 14, fontFamily: "Cairo_700Bold" },
+  nextHint: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium" },
 
   // Screen-lock overlay
   lockLayer: { ...ABSOLUTE_FILL, alignItems: "center", justifyContent: "center" },
@@ -2853,6 +3591,10 @@ const ss = StyleSheet.create({
     minHeight: 48, borderRadius: R.md, paddingHorizontal: 16, paddingVertical: 10,
   },
   chipBtnText: { color: C.white, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
+  chipBtnActive: {
+    borderWidth: 1, borderColor: C.borderAccent,
+    backgroundColor: "rgba(139,147,255,0.16)",
+  },
   chipBtnAccent: {
     flexDirection: "row", alignItems: "center", gap: 6,
     backgroundColor: C.accent,
@@ -2929,6 +3671,51 @@ const ss = StyleSheet.create({
   pickerSub: { color: C.textMuted, fontSize: 12, marginTop: 4, fontFamily: "Cairo_500Medium" },
   pickerScroll: { flex: 1 },
   pickerContent: { gap: 7, paddingBottom: 20 },
+  emptyText: {
+    color: C.textMuted, fontSize: 13, textAlign: "center",
+    paddingVertical: 24, fontFamily: "Cairo_500Medium",
+  },
+
+  // رفيق الأنمي — companion drawer
+  companionBody: { flex: 1 },
+  companionMessages: { paddingVertical: 6, gap: 8 },
+  companionWelcome: {
+    color: C.textSecondary, fontSize: 13, lineHeight: 21,
+    textAlign: "right", writingDirection: "rtl", fontFamily: "Cairo_500Medium",
+  },
+  msgBubble: { maxWidth: "92%", borderRadius: R.md, paddingHorizontal: 12, paddingVertical: 9 },
+  msgUser: {
+    alignSelf: "flex-end",
+    backgroundColor: "rgba(139,147,255,0.18)",
+    borderWidth: 1, borderColor: C.borderAccent,
+  },
+  msgAi: {
+    alignSelf: "flex-start",
+    backgroundColor: C.surfaceContainer,
+    borderWidth: 1, borderColor: C.borderSoft,
+  },
+  msgBusy: { flexDirection: "row", alignItems: "center", gap: 8 },
+  msgText: {
+    color: C.text, fontSize: 13, lineHeight: 20,
+    textAlign: "right", writingDirection: "rtl", fontFamily: "Cairo_500Medium",
+  },
+  companionChip: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    alignSelf: "flex-end", marginTop: 8, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 100, backgroundColor: "rgba(139,147,255,0.12)",
+    borderWidth: 1, borderColor: C.borderAccent,
+  },
+  companionChipText: { color: C.accent, fontSize: 12, fontFamily: "Cairo_600SemiBold" },
+  companionInputRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  companionInput: {
+    flex: 1, minHeight: 44, borderRadius: R.md, paddingHorizontal: 14,
+    backgroundColor: C.surfaceContainer, borderWidth: 1, borderColor: C.borderSoft,
+    color: C.text, fontSize: 13, textAlign: "right", fontFamily: "Cairo_500Medium",
+  },
+  companionSendBtn: {
+    width: 44, height: 44, borderRadius: R.md, backgroundColor: C.accent,
+    alignItems: "center", justifyContent: "center",
+  },
 
   serverItem: {
     flexDirection: "row", alignItems: "center", gap: 11,

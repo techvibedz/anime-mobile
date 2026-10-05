@@ -192,7 +192,7 @@ const ss = StyleSheet.create({
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
     alignItems: "center", justifyContent: "center",
   },
-  title: { color: C.text, fontSize: 26, fontFamily: F.heading },
+  title: { color: C.text, fontSize: 22, lineHeight: 32, fontFamily: F.heading },
   body: { gap: 24, paddingBottom: 40 },
   card: {
     backgroundColor: C.surfaceContainer,

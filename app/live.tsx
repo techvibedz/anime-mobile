@@ -147,7 +147,7 @@ const s = StyleSheet.create({
   },
   counterRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   counterText: { alignItems: "flex-end" },
-  counterNum: { color: C.text, fontSize: 40, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", lineHeight: 46 },
+  counterNum: { color: C.text, fontSize: 32, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", lineHeight: 40 },
   counterLabel: { color: C.textSecondary, fontSize: 13, marginTop: 2, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   counterSub: { color: C.textMuted, fontSize: 12, marginTop: 14, lineHeight: 18, textAlign: "right", fontFamily: "Cairo_500Medium" },
 

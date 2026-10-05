@@ -260,7 +260,7 @@ const ss = StyleSheet.create({
   },
   body: { flex: 1, paddingTop: 8 },
   heading: {
-    color: C.text, fontSize: 34, lineHeight: 50, fontWeight: "700",
+    color: C.text, fontSize: 26, lineHeight: 40, fontWeight: "700",
     fontFamily: "Cairo_700Bold", textAlign: "right", writingDirection: "rtl",
   },
   sub: {
@@ -313,7 +313,7 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center", gap: 8,
     minHeight: 56, borderRadius: R.md, paddingVertical: 16,
   },
-  submitText: { color: C.textOnAccent, fontSize: 16, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  submitText: { flexShrink: 1, textAlign: "center", color: C.textOnAccent, fontSize: 14, lineHeight: 24, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   footer: { flexDirection: "row", justifyContent: "center", marginTop: 24 },
   footerText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_500Medium" },
@@ -325,7 +325,7 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center", marginBottom: 24,
   },
   confirmTitle: {
-    color: C.text, fontSize: 28, fontWeight: "800", marginBottom: 12,
+    color: C.text, fontSize: 22, lineHeight: 34, fontWeight: "800", marginBottom: 12,
     fontFamily: "Cairo_700Bold", textAlign: "right", writingDirection: "rtl",
   },
   resendBtn: {

@@ -183,7 +183,7 @@ const s = StyleSheet.create({
 
   body: { flex: 1, justifyContent: "center" },
   titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
-  cardTitle: { color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },
+  cardTitle: { flexShrink: 1, color: C.accent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold", textAlign: "right" },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.accent, marginRight: 8 },
   cardMsg: {
     color: C.text, fontSize: 14, lineHeight: 24, fontFamily: "Cairo_600SemiBold",

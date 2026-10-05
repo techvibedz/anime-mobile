@@ -78,6 +78,15 @@ function rememberResolvedHref(anilistId: number, href: string) {
   AsyncStorage.setItem(CACHE_PREFIX + anilistId, JSON.stringify({ href, ts: Date.now() })).catch(() => {});
 }
 
+/** Drop a resolved href that failed live verification, so the next mount
+ *  resolves fresh instead of retrying a poisoned 10-day cache entry. */
+export async function forgetResolvedHref(anilistId: number): Promise<void> {
+  try {
+    cacheMem.delete(anilistId);
+    await AsyncStorage.removeItem(CACHE_PREFIX + anilistId);
+  } catch {}
+}
+
 /* ── Resolution ── */
 
 const inflight = new Map<number, Promise<string | null>>();
@@ -120,7 +129,10 @@ function evaluateCandidate(
   if (titleScore < MIN_TITLE_SCORE) return null; // too weak — skip
   const titles = aniListLookupTitles(entry);
   const wantedSeason = Math.max(...titles.map((title) => seasonNum(title)), 0);
-  if (wantedSeason > 1) {
+  // Movie parts ("Heaven's Feel III", "Kizumonogatari III") are frequently
+  // titled without the numeral on sources; the format bias below already stops
+  // a movie card from opening a TV page, so exempt movies from the season gate.
+  if (wantedSeason > 1 && wantFmt !== "movie") {
     const gotSeason = relatedSeasonNum(matchName, wantedSeason);
     // Never open the unnumbered/base page for an explicit later-season card.
     if (gotSeason !== wantedSeason) return null;

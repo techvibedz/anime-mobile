@@ -23,6 +23,7 @@ function load(file) {
     if (name === './supabase') return { isSupabaseConfigured: false };
     if (name === './continueWatching') return load('lib/continueWatching.ts');
     if (name === './historyMerge') return load('lib/historyMerge.ts');
+    if (name === './completionMatch') return load('lib/completionMatch.ts');
     if (name === './storageMaintenance') return load('lib/storageMaintenance.ts');
     if (name === './history') return load('lib/history.ts');
     throw Error(name);
@@ -79,6 +80,36 @@ function load(file) {
   await c.recordAnimeCompletion({ hrefs: ['https://witanime.you/anime/drifted'], titles: ['Drifted Title'], lastEpNum: 12, caughtUp: true, finished: false });
   await c.reconcileCompletionFromEpisodes([{ animeHref: 'https://witanime.you/anime/drifted', animeTitle: 'Drifted Title', epNum: 12 }]);
   assert.equal((await c.getCompletionMap())['witanime/anime/drifted']?.caughtUp, true, 'drifted title keeps the badge');
+
+  // Grouped watch history: one row per anime across sources, with the last
+  // episode reached and a per-anime delete that removes every source alias.
+  const save = (over) => h.saveProgress({
+    episodeHref: '', episodeTitle: '', animeTitle: '', animeHref: '', image: '',
+    positionMs: 0, durationMs: 0, ...over,
+  });
+  await save({ episodeHref: 'https://anime3rb.com/episode/naruto/11', episodeTitle: 'الحلقة 11', animeTitle: 'Naruto', animeHref: 'https://anime3rb.com/anime/naruto', completed: true, epNum: 11 });
+  await new Promise((r) => setTimeout(r, 5));
+  await save({ episodeHref: 'https://witanime.you/episode/naruto-12', episodeTitle: 'الحلقة 12', animeTitle: 'Naruto', animeHref: 'https://witanime.you/anime/naruto', image: 'naruto.jpg', positionMs: 500000, durationMs: 1000000, epNum: 12 });
+  await new Promise((r) => setTimeout(r, 5));
+  await save({ episodeHref: 'https://anime4up.com/episode/naruto-12-sub', episodeTitle: 'الحلقة 12 مترجمة', animeTitle: 'Naruto', animeHref: 'https://anime4up.com/anime/naruto', positionMs: 0, durationMs: 0, epNum: 12 });
+  await new Promise((r) => setTimeout(r, 5));
+  await save({ episodeHref: 'https://witanime.you/episode/bleach-3', episodeTitle: 'الحلقة 3', animeTitle: 'Bleach', animeHref: 'https://witanime.you/anime/bleach', epNum: 3 });
+
+  let groups = h.groupHistoryByAnime(await h.getHistory());
+  const naruto = groups.find((g) => g.animeTitle === 'Naruto');
+  assert.equal(!!naruto, true, 'same anime under two sources groups into one row');
+  assert.equal(naruto.episodes, 2, 'the same episode on another source dedupes by episode number');
+  assert.equal(naruto.watched, 1, 'completed episode counted');
+  assert.equal(naruto.lastEpNum, 12, 'last episode reached shown');
+  assert.equal(naruto.image, 'naruto.jpg');
+  assert.equal(groups[0].animeTitle, 'Bleach', 'newest anime first');
+
+  await h.removeAnimeFromHistory('https://witanime.you/anime/naruto', 'Naruto');
+  groups = h.groupHistoryByAnime(await h.getHistory());
+  assert.equal(groups.some((g) => g.animeTitle === 'Naruto'), false, 'per-anime delete removes every source alias');
+  assert.equal(groups.some((g) => g.animeTitle === 'Bleach'), true, 'other anime untouched');
+
+  h.flushHistoryCloudPushes(); // clear the coalescing timer saveProgress left behind
   stop();
   console.log('Watch history and cold-start completion checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

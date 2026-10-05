@@ -144,16 +144,27 @@ export async function downloadAndInstallApk(
     // content:// URI backed by expo-file-system's FileProvider.
     const contentUri = await FileSystem.getContentUriAsync(result.uri);
 
-    await IntentLauncher.startActivityAsync(
-      "android.intent.action.INSTALL_PACKAGE",
-      {
-        data: contentUri,
-        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
-      }
-    );
+    // ACTION_VIEW + the APK MIME type is the supported way to open the system
+    // installer. ACTION_INSTALL_PACKAGE is deprecated since API 26 and on some
+    // OEM ROMs the installer opens but the install never lands, leaving the
+    // user on the old version. Both need the content:// URI + read grant.
+    await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+      data: contentUri,
+      flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      type: "application/vnd.android.package-archive",
+    });
   } catch {
-    // Anything goes wrong (no permission, download error, OEM quirk) → browser.
-    await openApkDownload(url);
+    // Failed before the installer could open (download error, no installer,
+    // OEM quirk). Never fall back silently: users took the browser download
+    // page for a completed install and stayed stuck on the old version.
+    Alert.alert(
+      "تعذّر بدء التثبيت",
+      "سيفتح المتصفح لتنزيل ملف التحديث. بعد اكتمال التنزيل، افتح الملف ثم اضغط «تثبيت».",
+      [
+        { text: "لاحقاً", style: "cancel" },
+        { text: "فتح المتصفح", onPress: () => void openApkDownload(url) },
+      ]
+    );
   }
 }
 

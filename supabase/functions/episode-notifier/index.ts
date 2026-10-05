@@ -350,36 +350,19 @@ Deno.serve(async (req) => {
   const messages: PushMessage[] = [];
   let pushedCount = 0;
 
-  // Claim (user, anime_key, episode) for dedup; true the first time only.
-  // `animeKey` MUST already be normalized (normAnimeKey) so .life/.you collapse.
-  // Race-safe: a bare INSERT lets the unique constraint arbitrate when the cron
-  // and an app-nudge run concurrently — the loser sees 23505 and skips, instead
-  // of a SELECT-then-INSERT gap that would double-push.
-  async function claimEpisode(userId: string, animeKey: string, episode: number): Promise<boolean> {
-    const { error } = await supabase.from("notified_episodes").insert({
-      user_id: userId,
-      anime_key: animeKey,
-      episode_number: episode,
-    });
-    return !error; // 23505 (already claimed) or any error → don't push
-  }
-
   for (const q of queue) {
     const normTitle = norm(q.anime_title);
     const nKey = normAnimeKey(q.anime_key); // TLD-stable dedup identity
 
-    // "all" users → everyone whose token predates nothing for this episode.
+    // Who this episode goes to: all "all" users, plus "mylist" users whose
+    // favorites match. Favorite hrefs are stored TLD-normalized, so compare
+    // against normalized keys too. `animeKey` MUST already be normalized
+    // (normAnimeKey) so a favorite saved under .life matches a .you report.
+    const eligible = new Map<string, string[]>(); // userId → tokens
     for (const [userId, tokens] of allTokensByUser) {
       if (predatesToken(userId, q)) continue; // older than token → seeded silently above
-      if (!(await claimEpisode(userId, nKey, q.episode_number))) continue;
-      for (const to of tokens) {
-        messages.push(buildMessage(to, q));
-        pushedCount++;
-      }
+      eligible.set(userId, tokens);
     }
-
-    // "mylist" users → only if this anime is in their favorites. Favorite hrefs
-    // are stored TLD-normalized, so compare against normalized keys too.
     for (const [userId, tokens] of mylistTokensByUser) {
       if (predatesToken(userId, q)) continue; // older than token → seeded silently above
       const hrefs = favHrefsByUser.get(userId);
@@ -389,8 +372,31 @@ Deno.serve(async (req) => {
         (q.anime_href && hrefs?.has(normAnimeKey(q.anime_href))) ||
         (normTitle && titles?.has(normTitle));
       if (!matches) continue;
-      if (!(await claimEpisode(userId, nKey, q.episode_number))) continue;
-      for (const to of tokens) {
+      eligible.set(userId, tokens);
+    }
+    if (eligible.size === 0) continue;
+
+    // One bulk claim per queue row. ON CONFLICT DO NOTHING RETURNING yields ONLY
+    // the rows this run actually inserted, so the unique constraint still
+    // arbitrates races between the cron and an app-nudge (the loser gets [] and
+    // skips) with no double-push. The old per-user bare INSERT produced a 23505
+    // Postgres ERROR + a REST round-trip for every already-claimed pair — the
+    // single largest log-ingestion source in this project.
+    const { data: claimed } = await supabase
+      .from("notified_episodes")
+      .upsert(
+        [...eligible.keys()].map((userId) => ({
+          user_id: userId,
+          anime_key: nKey,
+          episode_number: q.episode_number,
+        })),
+        { onConflict: "user_id,anime_key,episode_number", ignoreDuplicates: true },
+      )
+      .select("user_id");
+    if (!claimed) continue; // error → don't push (same as the old !error guard)
+
+    for (const { user_id } of claimed as { user_id: string }[]) {
+      for (const to of eligible.get(user_id) ?? []) {
         messages.push(buildMessage(to, q));
         pushedCount++;
       }

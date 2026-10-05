@@ -9,6 +9,8 @@ const KEYS = {
   autoplayNext: "@settings_autoplay_next",
   notificationScope: "@settings_notification_scope",
   autoSkipIntro: "@settings_auto_skip_intro",
+  prefetchNext: "@settings_prefetch_next",
+  dailyAnimeNotif: "@settings_daily_anime_notif",
 } as const;
 
 /** Which anime trigger new-episode notifications. */
@@ -41,6 +43,14 @@ export const setAutoplayNext = (v: boolean) => setBool(KEYS.autoplayNext, v);
 /** Automatically skip intro & outro during playback (default off). */
 export const getAutoSkipIntro = () => getBool(KEYS.autoSkipIntro, false);
 export const setAutoSkipIntro = (v: boolean) => setBool(KEYS.autoSkipIntro, v);
+
+/** Silent pre-buffer of the next episode while one plays (default on). */
+export const getPrefetchNext = () => getBool(KEYS.prefetchNext, true);
+export const setPrefetchNext = (v: boolean) => setBool(KEYS.prefetchNext, v);
+
+/** Daily "anime of the day" local notification (default off — opt-in). */
+export const getDailyAnimeNotif = () => getBool(KEYS.dailyAnimeNotif, false);
+export const setDailyAnimeNotif = (v: boolean) => setBool(KEYS.dailyAnimeNotif, v);
 
 /**
  * Notification scope (default "all"): notify for every new episode across all

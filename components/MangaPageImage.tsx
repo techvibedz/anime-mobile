@@ -72,7 +72,10 @@ export function MangaPageImage({ uri, page, headers, contentFit, fullResolution 
           // use the platform's safe downsampling instead of enormous bitmaps.
           allowDownscaling={!fullResolution}
           accessibilityLabel={`الصفحة ${page + 1}`}
-          onLoadStart={() => { displayed.current = false; setStatus("loading"); }}
+          // A re-request (e.g. the vertical box growing to the measured ratio)
+          // keeps the current bitmap on screen until the sharper one arrives —
+          // only the first load shows the skeleton.
+          onLoadStart={() => { if (!displayed.current) setStatus("loading"); }}
           onLoad={onMeasure}
           onDisplay={() => {
             displayed.current = true;

@@ -154,13 +154,16 @@ async function loadReaderPrefs(): Promise<ReaderPrefs> {
 interface VerticalDims {
   width: number;
   height: number;
-  contentFit: "fill" | "cover";
+  contentFit: "fill" | "cover" | "contain";
 }
 
 /** Container dimensions for a vertical page under the selected fit mode.
- * "fill" is always used with the exact ratio, so width-mode pages are flush at
- * both edges instead of being letterboxed by `contain`. "height" fills the
- * screen height and only crops ultra-wide spreads (cover). */
+ * Every non-cover mode uses the exact ratio, so `contain` fills the box exactly
+ * (same pixels as `fill`) while still letting expo-image re-decode when the
+ * placeholder box grows to the measured ratio — expo-image skips the resize
+ * re-request for `fill`, which left the small placeholder bitmap stretched and
+ * blurry until the reader remounted. "height" fills the screen height and only
+ * crops ultra-wide spreads (cover). */
 function verticalDims(
   fit: FitMode,
   screenW: number,
@@ -174,25 +177,25 @@ function verticalDims(
       return { width: screenW, height: screenH, contentFit: "fill" };
     case "screen": {
       const width = Math.min(screenW, screenH / ratio);
-      return { width, height: width * ratio, contentFit: "fill" };
+      return { width, height: width * ratio, contentFit: "contain" };
     }
     case "height": {
       const exactWidth = screenH / ratio;
-      if (exactWidth <= screenW) return { width: exactWidth, height: screenH, contentFit: "fill" };
+      if (exactWidth <= screenW) return { width: exactWidth, height: screenH, contentFit: "contain" };
       return { width: screenW, height: screenH, contentFit: "cover" };
     }
     case "original": {
       const width = naturalW > 0 ? Math.min(screenW, naturalW / dpr) : screenW;
-      return { width, height: width * ratio, contentFit: "fill" };
+      return { width, height: width * ratio, contentFit: "contain" };
     }
     case "smart": {
-      if (ratio >= 1) return { width: screenW, height: screenW * ratio, contentFit: "fill" };
+      if (ratio >= 1) return { width: screenW, height: screenW * ratio, contentFit: "contain" };
       const width = Math.min(screenW, screenH / ratio);
-      return { width, height: width * ratio, contentFit: "fill" };
+      return { width, height: width * ratio, contentFit: "contain" };
     }
     case "width":
     default:
-      return { width: screenW, height: screenW * ratio, contentFit: "fill" };
+      return { width: screenW, height: screenW * ratio, contentFit: "contain" };
   }
 }
 

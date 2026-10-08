@@ -13,12 +13,12 @@ function loadPure(file) {
   return ctx.exports;
 }
 const cache = loadPure(path.join(root, 'lib/requestCache.ts'));
-async function check(project, desktop, primarySource, missingWit = false, witCache = new Map()) {
+async function check(project, desktop, primarySource, missingWit = false, witCache = new Map(), noTitle = false) {
   const lib = path.join(project, desktop ? 'src/lib' : 'lib');
   const text = fs.readFileSync(path.join(lib, 'api.ts'), 'utf8');
   const ast = ts.createSourceFile('api.ts', text, ts.ScriptTarget.Latest, true);
   const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node) &&
-    ['fetchCompleteVideoServers', 'completePayload'].includes(node.name?.text)).map((node) => node.getText(ast)).join('\n');
+    ['fetchCompleteVideoServers', 'completePayload', 'titleFromSlug'].includes(node.name?.text)).map((node) => node.getText(ast)).join('\n');
   const providers = loadPure(path.join(lib, 'videoProviders.ts'));
   const href = (source) => source === 'anime3rb' ? 'https://anime3rb.com/episode/show/7'
     : source === 'anime4up' ? 'https://anime4up.example/episode/show-الحلقة-7/' : 'https://witanime.site/watch/show/7';
@@ -41,7 +41,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
     writeCache: async (key, data) => { witCache.set(key, data); events.push('cache:witanime'); },
     getWitBase: async () => 'https://witanime.site', rewriteWitUrl: (url) => url,
     resolveWitanimeEpisode: async (title, number, animeHref, _search, _aliases, _season, _read, onResolved) => {
-      assert.equal(title, 'Show'); assert.equal(number, 7);
+      assert.equal(title.toLowerCase(), 'show'); assert.equal(number, 7);
       events.push(animeHref ? 'lookup:witanime:known' : 'lookup:witanime:search');
       if (missingWit) return null;
       if (!animeHref) onResolved?.('https://witanime.site/anime/show');
@@ -59,7 +59,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
     scrapeAnime4upEpisodePageDirect: async () => ({ ...payload('anime4up').data }),
     resolveUp4EpisodeUrl: async () => href('anime4up'),
     fetchAnime3rbServersByUrl: async () => [server('anime3rb')],
-    fetchAnime3rbServers: async () => [server('anime3rb')],
+    fetchAnime3rbServers: async (title) => { events.push('a3rb-title:' + title); return [server('anime3rb')]; },
     resolveDirectServerList: async (servers, _timeout, _fresh, callback) => {
       const ready = await Promise.all(servers.map(async (s) => ({ ...s, videoUrl: await resolve(s) })));
       callback?.(ready); return ready;
@@ -73,14 +73,22 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText + '\nglobalThis.run = fetchCompleteVideoServers;', context);
   const partial = [];
-  const result = await context.run({ episodeUrl: href(primarySource), animeTitle: 'Show', episodeNumber: 7,
+  const result = await context.run({ episodeUrl: href(primarySource), animeTitle: noTitle ? undefined : 'Show', episodeNumber: 7,
     onCandidates: (p) => { partial.push(...p.data.servers.map((s) => s.source)); events.push('candidates'); },
     onPartial: () => events.push('playable'),
   });
   const expected = missingWit ? ['anime3rb', 'anime4up'] : ['anime3rb', 'anime4up', 'witanime'];
   assert.deepEqual([...new Set(result.data.servers.map((s) => s.source))].sort(), expected);
   for (const source of expected) assert.ok(partial.includes(source), `${source} should appear progressively`);
-  if (primarySource !== 'witanime') assert.ok(events.some((e) => e.startsWith('lookup:witanime')));
+  if (noTitle) {
+    // Entry points without a title param (notification taps, deep links) must
+    // still discover the other sources off the URL slug, or a dead primary
+    // leaves the user with zero servers. Witanime primaries prove it via the
+    // Anime3rb title lookup; anime3rb primaries (whose own URL identifies the
+    // episode) prove it via the Witanime title search.
+    assert.ok(events.includes('a3rb-title:show') || events.some((e) => e.startsWith('lookup:witanime')),
+      'slug-derived title must drive cross-source discovery: ' + events.join(' | '));
+  } else if (primarySource !== 'witanime') assert.ok(events.some((e) => e.startsWith('lookup:witanime')));
   assert.ok(events.indexOf('resolve:anime4up') >= 0, 'MP4Upload must be warmed');
   // Only a cross-source primary needs the lookup; when Witanime IS the primary
   // its own episode page already carries the servers.
@@ -92,6 +100,11 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
 (async () => {
   for (const primary of ['witanime', 'anime4up', 'anime3rb']) await check(root, false, primary);
   await check(root, false, 'anime4up', true);
+  // No title param (notification tap / deep link): the URL slug must still
+  // drive cross-source discovery, otherwise a dead primary leaves no servers.
+  await check(root, false, 'witanime', false, new Map(), true);
+  await check(root, false, 'anime3rb', false, new Map(), true);
+  console.log('Slug-derived title still discovers every source when no title param is passed');
   // Second episode of the same anime: the remembered anime page must be reused,
   // so the rate-limited /search is never touched again.
   const witCache = new Map();

@@ -575,9 +575,18 @@ async function getCrossSourceUrl(
   return url;
 }
 
+// Last path segment as a searchable title. Episode URLs end in the episode
+// number ("/watch/one-piece/1180"), so walk back to the anime slug — callers
+// resolving from an episode URL must get "one piece", not "1180". Route words
+// ("anime", "watch", …) are never useful as a title and yield "".
 function titleFromSlug(url: string): string {
   try {
-    const slug = decodeURIComponent(new URL(url).pathname.replace(/\/$/, "").split("/").pop() || "");
+    const parts = decodeURIComponent(new URL(url).pathname.replace(/\/$/, ""))
+      .split("/")
+      .filter(Boolean);
+    let slug = parts.pop() || "";
+    if (/^\d+$/.test(slug)) slug = parts.pop() || slug;
+    if (/^(?:watch|anime|episode|titles|movies?)$/i.test(slug)) return "";
     return slug.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
   } catch {
     return "";
@@ -1556,7 +1565,14 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       return [];
     };
 
-    const initialTitle = (options.animeTitle || "").trim();
+    // Title for cross-source discovery. Some entry points carry no title
+    // (notification taps, deep links, cold history hits) and a dead/blocked
+    // primary can't supply one either — derive it from the anime or episode
+    // URL slug so Anime3rb/Anime4up lookup still runs instead of leaving the
+    // user with zero servers.
+    const initialTitle = (options.animeTitle || "").trim()
+      || titleFromSlug(options.animeHref || "")
+      || titleFromSlug(episodeUrl);
     const warming = new Set<string>();
     const warm = (payload: VideoServersPayload) => {
       const servers = selectWarmupServers(payload.data.servers).filter((server) => !warming.has(server.iframeUrl));

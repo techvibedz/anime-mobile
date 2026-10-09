@@ -45,7 +45,7 @@ for (const name of names) {
 
 try {
   const videoServers = eval("`" + grab("EXTRACT_VIDEO_SERVERS") + "`");
-  for (const marker of ["seenLabels", "witPriority", "ready.status === 429", "'/watch/stream-gate/'", "provider: 'generic'"]) {
+  for (const marker of ["seenLabels", "witPriority", "ready.status === 429", "'/watch/stream-gate/'", "__witGateReplies", "provider: target ? provider(target) : 'generic'"]) {
     if (!videoServers.includes(marker)) throw new Error(`missing Witanime player marker: ${marker}`);
   }
   if (videoServers.includes("provider: witProvider")) throw new Error("Witanime stream gates must stay WebView-only");

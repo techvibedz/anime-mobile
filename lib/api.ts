@@ -24,6 +24,7 @@ import {
   searchAnime4upDirect,
   searchWitanimeDirect,
   fetchHtml,
+  fetchSourceHtml,
   getWitBase,
   rewriteWitUrl,
   searchAnime4upDirectList,
@@ -44,6 +45,8 @@ import {
   extractStreamwish,
   extractVideas,
   extractVidea,
+  extractVk,
+  extractShare4max,
   extractDoodstream,
   fetchAnime4upRecentPageDirect,
   fetchWitHomeDirect,
@@ -257,6 +260,8 @@ export interface VideoServer {
   iframeUrl: string;
   provider: string;
   videoUrl?: string;
+  sandbox?: string | false;
+  referrerPolicy?: string;
 }
 
 /* ── Search types ───────────────────────────── */
@@ -1331,6 +1336,8 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string, for
   // used to hide the anime4up servers for the whole 6h TTL.
   const valid = (d: VideoServersPayload) =>
     d.data.servers.length > 0 &&
+    // Session-bound WitAnime gates cannot use the six-hour embed cache.
+    !d.data.servers.some((s) => /\/watch\/stream-gate\//i.test(s.iframeUrl)) &&
     (!url4up || primaryIsUp4 || d.data.servers.some((s) => s.source === "anime4up"));
   return serverRequests.run(key, async () => {
     if (!force) {
@@ -1409,6 +1416,8 @@ async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Prom
         name: s.name,
         iframeUrl: s.iframeUrl,
         provider: s.provider,
+        sandbox: s.sandbox,
+        referrerPolicy: s.referrerPolicy,
         source,
       });
     }
@@ -1497,7 +1506,8 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     options.episodeNumber ?? "",
   ]);
   return completeVideoServerRequests.run(key, async () => {
-    const discoveryDeadline = Date.now() + 30_000;
+    const discoveryDeadline = Date.now() + 90_000;
+    const discovered = new Map<string, (VideoServer & { source?: string })[]>();
     const primaryIsUp4 = /anime4up/i.test(episodeUrl);
     const primaryIsA3rb = /anime3rb\.com\/episode\//i.test(episodeUrl);
     const primaryPromise = primaryIsA3rb
@@ -1519,9 +1529,9 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       const remembered = !known && title ? await readCache<string>(witAnimeKey(title), UP4_CACHE_TTL) : null;
       const href = await resolveWitanimeEpisode(
         title, episodeNumber, known || remembered,
-        (query) => withTimeout(searchWitanimeDirect(query), 12_000, null),
+        (query) => withTimeout(searchWitanimeDirect(query), 45_000, null),
         (name) => withTimeout(getAltTitles(name), 5_000, []), tm_seasonNum,
-        (url) => withTimeout(fetchHtml(url, base + "/"), 8_000, null),
+        (url) => withTimeout(fetchSourceHtml(url, base + "/", "/watch/"), 35_000, null),
         (animeUrl) => { if (title) void writeCache(witAnimeKey(title), animeUrl); },
       ).catch(() => null);
       return href ? fetchVideoServers(href, undefined, !!options.force).catch(() => null) : null;
@@ -1594,6 +1604,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       metadata: VideoServersPayload | null,
     ) => {
       if (servers.length === 0) return;
+      for (const server of servers) discovered.set(server.iframeUrl, [server]);
       warm({ success: true, data: { episodeTitle: metadata?.data.episodeTitle || "", animeTitle: initialTitle || metadata?.data.animeTitle || "", animeHref: options.animeHref || "", servers, serverCount: servers.length, navigation: { prev: null, next: null } } });
       options.onCandidates?.({
         success: true,
@@ -1630,7 +1641,6 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     if (!a3rbPromise) a3rbPromise = loadA3rb(resolvedTitle);
     if (!witPromise) witPromise = loadWit(resolvedTitle);
 
-    const discovered = new Map<string, (VideoServer & { source?: string })[]>();
     let lastCandidateSignature = "";
     const emitCandidates = (metadata: VideoServersPayload | null) => {
       const servers = mergeVideoServers([...discovered.values()]);
@@ -1715,6 +1725,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       source: "anime3rb",
     }));
     const candidates = mergeVideoServers([
+      ...discovered.values(),
       primary?.data.servers || [],
       wit?.data.servers || [],
       up4?.data.servers || [],
@@ -1727,7 +1738,8 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       false,
       (playable) => emit(playable, metadata),
     );
-    const servers = mergePlayableServers(candidates, playable);
+    // A fallback can finish during media resolution, after the lookup cutoff.
+    const servers = mergePlayableServers(mergeVideoServers([candidates, ...discovered.values()]), playable);
     return {
       success: servers.length > 0,
       data: {
@@ -2167,6 +2179,11 @@ async function resolveVideoFresh(iframeUrl: string, provider: string, priority: 
     const resolved = success(r);
     if (resolved) return resolved;
   }
+  if (provider === "vk" || provider === "share4max") {
+    const r = await (provider === "vk" ? extractVk(iframeUrl) : extractShare4max(iframeUrl)).catch(() => null);
+    const resolved = success(r);
+    if (resolved) return resolved;
+  }
   if (provider === "mega") {
     const url = await PantoufaDownloads?.startMegaStream(iframeUrl).catch(() => null);
     const resolved = success(url ? { url, type: "mp4" } : null);
@@ -2201,7 +2218,7 @@ export function resolveVideo(
   const normalized = normalizeServerUrl(iframeUrl);
   if (!normalized) return Promise.resolve({ success: false, error: "Invalid embed URL" });
   const opts = typeof options === "boolean" ? { priority: options, fresh: false } : options;
-  const key = `${provider}|${normalized}`;
+  const key = `${provider}|${normalized}|${opts.priority ? "fg" : "bg"}`;
   return videoResolutionRequests.run(
     key,
     () => resolveVideoFresh(normalized, provider, !!opts.priority),

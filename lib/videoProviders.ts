@@ -21,6 +21,19 @@ export const STREAM_BUFFER_POLICY = {
 export const VIDEO_USER_AGENT =
   "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
+export function witanimeGateSource(raw: string, settings: { sandbox?: string | false; referrerPolicy?: string } = {}): { html: string; baseUrl: string } | null {
+  let url: URL;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.origin !== "https://witanime.site" || !/^\/watch\/stream-gate\/[a-f0-9]{64}$/.test(url.pathname)) return null;
+  // Gates require an iframe request; opening one as the main document returns 404.
+  const sandbox = settings.sandbox === false ? "" : ` sandbox="${typeof settings.sandbox === "string" && /^[a-z][a-z -]*$/i.test(settings.sandbox) ? settings.sandbox : "allow-scripts allow-same-origin allow-presentation allow-forms allow-orientation-lock"}"`;
+  const referrerPolicy = settings.referrerPolicy === "origin" ? "origin" : "no-referrer";
+  return {
+    html: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;background:#000}</style></head><body><iframe src="${url.origin}${url.pathname}"${sandbox} referrerpolicy="${referrerPolicy}" allow="autoplay *; encrypted-media *; picture-in-picture *; fullscreen *" allowfullscreen></iframe></body></html>`,
+    baseUrl: url.origin + "/",
+  };
+}
+
 export function createGenerationGuard() {
   let current = 0;
   return {
@@ -64,7 +77,8 @@ export const PROVIDER_POLICIES: Record<string, ProviderPolicy> = {
   okru: { patterns: ["ok\\.ru", "odnoklassniki"], rank: 6, resolution: "directThenWebView", failureMode: "failed", supported: true, adaptive: true },
   videas: { patterns: ["app\\.videas\\.fr"], rank: 3, resolution: "directThenWebView", failureMode: "failed", supported: true },
   videa: { patterns: ["videa\\.", "vidvaita", "vidit", "videakid"], rank: 3, resolution: "directThenWebView", failureMode: "failed", supported: true },
-  vk: { patterns: ["vk\\.com"], rank: 11, resolution: "webview", failureMode: "webview", supported: true },
+  vk: { patterns: ["vk\\.com", "vkvideo\\.ru"], rank: 11, resolution: "directThenWebView", failureMode: "failed", supported: true },
+  vikingfile: { patterns: ["vik(?:i|1)ngfile"], rank: 8, resolution: "directThenWebView", failureMode: "failed", supported: true },
   mega: { patterns: ["mega\\.nz"], rank: 12, resolution: "direct", failureMode: "failed", supported: true },
   vid3rb: { patterns: ["vid3rb", "anime3rb"], rank: -1, resolution: "direct", failureMode: "failed", supported: true, downloadable: true },
   luluvdo: { patterns: ["luluvdo", "lulustream", "luluvid"], rank: 9, resolution: "directThenWebView", failureMode: "failed", supported: true },
@@ -288,6 +302,8 @@ export function validateMediaUrl(raw: string, provider = "generic"): boolean {
       return /\.(?:m3u8|mp4)$/i.test(url.pathname) || /^\/video\//i.test(url.pathname);
     }
     if (provider === "doodstream" && url.searchParams.has("token") && url.searchParams.has("expiry")) return true;
+    if (provider === "vikingfile") return /\.(?:mp4|mkv|webm|ogg)$/i.test(url.pathname);
+    if (provider === "vk" && /(^|\.)(?:vkuser\.net|okcdn\.ru)$/i.test(url.hostname)) return url.searchParams.has("sig") && url.searchParams.has("expires");
     if (provider === "dailymotion" && /(^|\.)(?:dailymotion\.com|dmcdn\.net)$/i.test(url.hostname)) return true;
     if (provider === "okru" && /(^|\.)(?:ok\.ru|mycdn\.me|okcdn\.)/i.test(url.hostname)) return true;
     if (/videa\.hu$/i.test(url.hostname) && /\/static\//i.test(url.pathname) && url.searchParams.has("md5")) return true;
@@ -352,6 +368,7 @@ export function videoPlaybackHeaders(videoUrl: string, iframeUrl: string, provid
     else if (provider === "okru") { referer = "https://ok.ru/"; origin = "https://ok.ru"; }
     else if (provider === "dailymotion") { referer = "https://www.dailymotion.com/"; origin = "https://www.dailymotion.com"; }
     else if (provider === "videa" || provider === "videas") referer = "https://videa.hu/";
+    else if (provider === "vk") { referer = "https://vk.com/"; origin = "https://vk.com"; }
     else if (provider === "doodstream") referer = iframeUrl ? `${new URL(iframeUrl).origin}/` : `https://${host}/`;
     else {
       const sourceOrigin = iframeUrl ? new URL(iframeUrl).origin : new URL(videoUrl).origin;

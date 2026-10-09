@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import {
+  witanimeGateSource,
   bufferAheadSeconds,
   classifyProvider,
   classifyProviderWithName,
@@ -29,6 +30,22 @@ import {
   validateDirectServers,
   validateMediaUrl,
 } from "./videoProviders";
+
+const gateToken = "a".repeat(64);
+const gateSource = witanimeGateSource(`https://witanime.site/watch/stream-gate/${gateToken}`);
+assert.equal(gateSource?.baseUrl, "https://witanime.site/");
+assert.ok(gateSource?.html.includes(`<iframe src="https://witanime.site/watch/stream-gate/${gateToken}"`));
+assert.ok(gateSource?.html.includes('referrerpolicy="no-referrer"'));
+assert.ok(gateSource?.html.includes('sandbox="allow-scripts allow-same-origin'));
+assert.ok(!witanimeGateSource(`https://witanime.site/watch/stream-gate/${gateToken}`, {sandbox:false})?.html.includes('sandbox='), 'HGCloud honors its unsandboxed setting');
+assert.ok(witanimeGateSource(`https://witanime.site/watch/stream-gate/${gateToken}`, {referrerPolicy:'origin'})?.html.includes('referrerpolicy="origin"'));
+assert.ok(!witanimeGateSource(`https://witanime.site/watch/stream-gate/${gateToken}`, {sandbox:'" onload="bad'})?.html.includes('onload='));
+assert.equal(witanimeGateSource("https://video.example/embed/1"), null);
+assert.equal(witanimeGateSource(`http://witanime.site/watch/stream-gate/${gateToken}`), null);
+assert.equal(witanimeGateSource('https://witanime.site/watch/stream-gate/\"bad'), null);
+assert.equal(validateMediaUrl('https://cdn.vikingfile.com/files/episode.mkv','vikingfile'),true);
+assert.equal(validateMediaUrl('https://cdn.vikingfile.com/files/episode.webm','vikingfile'),true);
+assert.equal(validateMediaUrl('https://cdn.vikingfile.com/files/archive.zip','vikingfile'),false);
 
 let passed = 0;
 let failed = 0;
@@ -103,15 +120,17 @@ test("the injected classifier uses the same provider rules", () => {
   ) as (url: string) => string;
   assert.equal(classify("https://app.videas.fr/embed/media/1"), "videas");
   assert.equal(classify("https://dsvplay.com/e/abc"), "doodstream");
+  assert.equal(classify("https://vkvideo.ru/video_ext.php?id=1"), "vk");
+  assert.equal(classify("https://vik1ngfile.site/f/abc"), "vikingfile");
   assert.equal(classify("https://new-player.example/e/1"), "generic");
 });
 
 test("keeps only non-native providers on visible WebView fallback", () => {
-  for (const provider of ["vk", "generic"]) {
+  for (const provider of ["generic"]) {
     assert.equal(isProviderSupported(provider), true, provider);
     assert.equal(providerFailureMode(provider), "webview", provider);
   }
-  for (const provider of ["voe", "okru", "uqload", "share4max", "streamruby", "mega"]) {
+  for (const provider of ["voe", "okru", "uqload", "share4max", "streamruby", "mega", "vk", "vikingfile"]) {
     assert.equal(providerFailureMode(provider), "failed", provider);
   }
   assert.equal(isProviderSupported("yonaplay"), false);
@@ -122,7 +141,7 @@ test("direct picker includes native extractors and hides WebView-only providers"
   for (const provider of ["vid3rb", "mp4upload", "streamwish", "videas", "doodstream", "dailymotion", "voe", "uqload", "okru", "videa", "mega"]) {
     assert.equal(isDirectProvider(provider), true, provider);
   }
-  for (const provider of ["generic", "yonaplay", "vk"]) {
+  for (const provider of ["generic", "yonaplay"]) {
     assert.equal(isDirectProvider(provider), false, provider);
   }
 });
@@ -334,6 +353,10 @@ test("media probe accepts reachable bytes and rejects HTTP failures", async () =
 });
 
 Promise.all(pending).then(() => {
+  assert.equal(validateMediaUrl('https://vk6-29.vkuser.net/?sig=valid&expires=1791800000','vk'),true);
+  assert.equal(validateMediaUrl('https://vkvd196.okcdn.ru/?sig=valid&expires=1791800000','vk'),true);
+  assert.equal(validateMediaUrl('https://vk6-29.vkuser.net.evil.example/?sig=valid&expires=1791800000','vk'),false);
+  assert.equal(validateMediaUrl('https://vk6-29.vkuser.net/','vk'),false);
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
 });

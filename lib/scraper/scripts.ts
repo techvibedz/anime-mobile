@@ -912,6 +912,8 @@ function collectIframes(seen, out) {
     if (!name) name = 'Server ' + (out.length + 1);
     out.push({ id: String(out.length), name: name, iframeUrl: src, provider: provider(src) });
   });
+  // Anime4up's server tabs are authoritative; page-wide iframes include ads.
+  if (out.length && document.querySelector('#episode-servers li[data-watch]')) return;
   document.querySelectorAll('iframe').forEach(function (f) {
     var src = (f.src || f.getAttribute('data-src') || '').trim();
     if (badIframe(src) || seen[src]) return;
@@ -920,7 +922,7 @@ function collectIframes(seen, out) {
   });
 }
 function extractTitles() {
-  var anime = document.querySelector('.anime-page-link a') || document.querySelector('h1');
+  var anime = document.querySelector('.anime-page-link a, h1 a[href*="/anime/"]') || document.querySelector('h1');
   var ep = document.querySelector('.main-section h3') || document.querySelector('.episode-title');
   var episodeTitle = (ep && ep.textContent.trim()) || '';
   if (!episodeTitle) {
@@ -945,9 +947,21 @@ async function runWitSite() {
   var sourcesUrl = sourceMatch[1].split(String.fromCharCode(92) + '/').join('/');
   try {
     var headers = { Accept: 'application/json', 'X-CSRF-TOKEN': csrf.getAttribute('content') || '' };
-    var response = await fetch(sourcesUrl, { method: 'POST', headers: headers });
-    if (!response.ok) throw new Error('sources-' + response.status);
-    var manifest = await response.json();
+    // Reuse the site's manifest so its session-bound tokens stay in sync.
+    var manifest = null;
+    for (var wait = 0; wait < 32; wait++) {
+      var state = window.Alpine && window.Alpine.$data && window.Alpine.$data(root);
+      if (state && state.sourcesLoaded) {
+        if (!state.sourcesError) manifest = { players: state.players };
+        break;
+      }
+      await new Promise(function (r) { setTimeout(r, 250); });
+    }
+    if (!manifest) {
+      var response = await fetch(sourcesUrl, { method: 'POST', headers: headers });
+      if (!response.ok) throw new Error('sources-' + response.status);
+      manifest = await response.json();
+    }
     var entries = [];
     var seenLabels = {};
     Object.keys(manifest.players || {}).forEach(function (quality) {
@@ -978,17 +992,28 @@ async function runWitSite() {
           ready = await fetch('/watch/stream-source/' + entry.token, { method: 'POST', headers: headers });
         }
         if (!ready.ok) continue;
+        var settings = await ready.json();
+        var hints = navigator.userAgentData;
+        window.__witGateReplies = window.__witGateReplies || {};
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type:'wit-gate', token:entry.token, url:location.origin+'/watch/stream-gate/'+entry.token,
+          ua:navigator.userAgent, language:navigator.language + ',en;q=0.9',
+          brands:hints && hints.brands ? hints.brands.map(function (b) { return JSON.stringify(b.brand)+';v='+JSON.stringify(b.version); }).join(', ') : '',
+          mobile:hints ? hints.mobile : true, platform:hints && hints.platform || 'Android'
+        }));
+        for (var gateWait = 0; gateWait < 52 && !(entry.token in window.__witGateReplies); gateWait++) await new Promise(function (r) { setTimeout(r,250); });
+        var target = window.__witGateReplies[entry.token];
         resolved.push({
         id: entry.token,
         name: ((entry.label || 'WitAnime') + ' ' + entry.quality).trim(),
-        iframeUrl: location.origin + '/watch/stream-gate/' + entry.token,
-        // The gate is session-bound, not the underlying provider URL. Keeping
-        // it WebView-only prevents a slow, doomed direct extraction and keeps
-        // it in the final server list when native validation is unavailable.
-        provider: 'generic',
+        iframeUrl: target || location.origin + '/watch/stream-gate/' + entry.token,
+        provider: target ? provider(target) : 'generic',
+        sandbox: settings.sandbox,
+        referrerPolicy: settings.referrerPolicy,
         });
       } catch (e) {}
-      if (i + 1 < entries.length) await new Promise(function (r) { setTimeout(r, 300); });
+      // Bursting gates returns intermittent 404/429 even for valid tokens.
+      if (i + 1 < entries.length) await new Promise(function (r) { setTimeout(r, 1200); });
     }
     var titles = extractTitles();
     var episodeLabel = null;
@@ -1007,6 +1032,8 @@ async function runWitSite() {
   }
 }
 async function runClicks() {
+  // Install the popup guard after source verification, before the tab sweep.
+  window.open = function(){ return null; };
   var seen = {};
   var out = [];
   var titles = extractTitles();
@@ -1121,7 +1148,7 @@ export const HOOK_VIDEO_BEFORE = `
 
   function isVideoUrl(u) {
     if (typeof u !== 'string') return false;
-    if (/\\.(m3u8|mp4)(\\?|$)/i.test(u)) return true;
+    if (/\\.(m3u8|mp4|mkv|webm|ogg)(\\?|$)/i.test(u)) return true;
     // videa.hu streams carry NO file extension — the path is
     // /static/<quality>/<numeric id>?md5=...&expires=... — so the extension
     // check above never matches them.
@@ -1254,8 +1281,8 @@ export const COLLECT_VIDEO_AFTER = `
     return null;
   }
   function extractSourceTag(html) {
-    var m = html.match(/<source[^>]*?src\\s*=\\s*["']([^"']+\\.(?:mp4|m3u8|webm)[^"']*)["']/i)
-         || html.match(/<video[^>]*?src\\s*=\\s*["']([^"']+\\.(?:mp4|m3u8|webm)[^"']*)["']/i);
+    var m = html.match(/<source[^>]*?src\\s*=\\s*["']([^"']+\\.(?:mp4|m3u8|webm|mkv|ogg)[^"']*)["']/i)
+         || html.match(/<video[^>]*?src\\s*=\\s*["']([^"']+\\.(?:mp4|m3u8|webm|mkv|ogg)[^"']*)["']/i);
     return m ? m[1] : null;
   }
   function extractGeneric(text) {

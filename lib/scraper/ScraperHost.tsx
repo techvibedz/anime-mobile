@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import { _claimNext, _consumeCancelled, _hasPending, _peek, _resolve, _reject, _subscribe, ScrapeJob } from "./bus";
 import { VIDEO_USER_AGENT } from "../videoProviders";
+import { applicationId } from "expo-application";
+import { fetch as browserFetch } from "expo/fetch";
+import { resolveWitGateRedirect } from './witGate';
 import { remoteLog } from "../remoteLog";
 import {
   classifySourceFailure,
@@ -106,11 +109,16 @@ function ScraperSlot({
   const attemptIndexRef = useRef(0);
   const changingUrlRef = useRef(false);
   const topLevelUrlRef = useRef("");
+  const activeJobIdRef = useRef(job?.id);
+  activeJobIdRef.current = job?.id;
   // URL the after-load script was last early-injected into. Reset on every
   // load start so reloads/redirects re-inject into the new document.
   const lastInjectedUrlRef = useRef<string | null>(null);
 
   const currentUrl = job?.urls[attemptIndex] || job?.url || "";
+  const source = identifySource(currentUrl);
+  const sourceBrowser = source === "witanime" || source === "anime4up";
+  const verificationBrowser = sourceBrowser || /^https:\/\/(?:[^/]+\.)?vik(?:i|1)ngfile\.(?:com|site)\//i.test(currentUrl);
 
   useEffect(() => {
     attemptIndexRef.current = 0;
@@ -184,7 +192,14 @@ function ScraperSlot({
     if (!job) return;
     try {
       const msg = JSON.parse(e.nativeEvent.data);
-      if (msg.type === "result") {
+      if (msg.type === "wit-gate" && source === "witanime" && /^https:\/\/witanime\.site\/watch\/stream-gate\/[a-f0-9]{64}$/.test(msg.url)) {
+        const activeJobId = job.id;
+        // Gates bind to the browser identity, including client hints. A UA-only
+        // native request returns 404 even with the shared session cookies.
+        void resolveWitGateRedirect(msg.url, msg, applicationId || 'com.anime.mobile', browserFetch).then((target) => {
+          if (activeJobIdRef.current === activeJobId) webRef.current?.injectJavaScript(`window.__witGateReplies=window.__witGateReplies||{};window.__witGateReplies[${JSON.stringify(msg.token)}]=${JSON.stringify(target)};true;`);
+        });
+      } else if (msg.type === "result") {
         if (changingUrlRef.current) return;
         if (timerRef.current) clearTimeout(timerRef.current);
         void markSourceHealthy(currentUrl).catch(() => {});
@@ -216,7 +231,8 @@ function ScraperSlot({
     <WebView
       ref={webRef}
       source={job ? { uri: currentUrl } : BLANK_SOURCE}
-      userAgent={VIDEO_USER_AGENT}
+      // Source manifests and verification require the WebView's real identity.
+      userAgent={verificationBrowser ? undefined : VIDEO_USER_AGENT}
       javaScriptEnabled
       domStorageEnabled
       thirdPartyCookiesEnabled
@@ -238,7 +254,7 @@ function ScraperSlot({
       // stray ad iframe can't reject a job that the page itself would resolve.
       injectedJavaScriptForMainFrameOnly={!job?.allFrames}
       injectedJavaScriptBeforeContentLoadedForMainFrameOnly={!job?.allFrames}
-      injectedJavaScriptBeforeContentLoaded={ANTI_HIJACK_JS + (job?.injectBefore || "")}
+      injectedJavaScriptBeforeContentLoaded={verificationBrowser && !job?.injectBefore ? undefined : ANTI_HIJACK_JS + (job?.injectBefore || "")}
       injectedJavaScript={job ? wrapOnce(job) : "true;"}
       onShouldStartLoadWithRequest={shouldStartLoad}
       onLoadStart={(e) => {
@@ -266,7 +282,7 @@ function ScraperSlot({
         if (sc === 403 || sc === 503 || sc === 429) return;
         failAttempt(`HTTP ${sc}`, sc, isRetryableSourceStatus(sc));
       }}
-      style={{ width: 1, height: 1 }}
+      style={{ position: "absolute", width: 360, height: 640 }}
     />
   );
 }
@@ -336,7 +352,7 @@ export function ScraperHost() {
   return (
     <View
       pointerEvents="none"
-      style={{ position: "absolute", left: -1000, top: -1000, width: SLOT_COUNT, height: 1, opacity: 0 }}
+      style={{ position: "absolute", left: -1000, top: -1000, width: 360, height: 640, opacity: 0 }}
     >
       {slots.map((job, i) => (
         <ScraperSlot key={i} job={job} onDone={() => clearSlot(i)} />

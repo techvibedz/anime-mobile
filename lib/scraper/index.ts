@@ -230,7 +230,7 @@ export async function findCrossSourceUrl(
 
 /* ── VIDEO SERVERS (find iframes on episode page) ── */
 
-export type RawServer = { id: string; name: string; iframeUrl: string; provider: string };
+export type RawServer = { id: string; name: string; iframeUrl: string; provider: string; sandbox?: string | false; referrerPolicy?: string };
 
 export async function scrapeVideoServers(episodeUrl: string) {
   const url = /witanime\./i.test(episodeUrl)
@@ -252,7 +252,7 @@ export async function scrapeVideoServers(episodeUrl: string) {
 export async function extractVideoUrl(embedUrl: string, priority = false) {
   return enqueue({
     url: embedUrl,
-    injectBefore: HOOK_VIDEO_BEFORE,
+    injectBefore: /vik(?:i|1)ngfile\.(?:com|site)/i.test(embedUrl) ? undefined : HOOK_VIDEO_BEFORE,
     injectAfter: COLLECT_VIDEO_AFTER,
     // 40s: the collector's internal 28s loop starts at early injection (first
     // bytes), so on a slow connection the page load no longer eats the whole

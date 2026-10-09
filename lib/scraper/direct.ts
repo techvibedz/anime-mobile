@@ -16,7 +16,7 @@ import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
 import { fuzzyScore } from "../fuzzy";
 import { remoteLog } from "../remoteLog";
-import { classifyProvider, classifyProviderWithName, VIDEO_USER_AGENT as BROWSER_UA } from "../videoProviders";
+import { classifyProvider, classifyProviderWithName, probeMediaUrl, videoPlaybackHeaders, VIDEO_USER_AGENT as BROWSER_UA } from "../videoProviders";
 import {
   candidateForAttempt,
   clearSourcePreference,
@@ -285,6 +285,12 @@ async function fetchHtmlViaWebView(url: string, marker: string, priority = false
   } catch {
     return null;
   }
+}
+
+// Cross-source discovery must survive the same Cloudflare blocks as playback.
+export async function fetchSourceHtml(url: string, referer: string, marker: string): Promise<string | null> {
+  const html = await fetchHtml(url, referer, [8000]);
+  return html && !looksLikeCfChallenge(html) ? html : fetchHtmlViaWebView(url, marker, true);
 }
 
 // anime3rb/vid3rb HTML with automatic WebView escalation. `marker` is a
@@ -1021,7 +1027,8 @@ export async function searchWitanimeDirect(query: string): Promise<WitCard[] | n
   if (!query) return null;
   const base = await getWitBase();
   const url = `${base}/search?q=${encodeURIComponent(query)}`;
-  const html = await witSearchRequest(url, base + "/");
+  const direct = await witSearchRequest(url, base + "/");
+  const html = direct && !looksLikeCfChallenge(direct) ? direct : await fetchHtmlViaWebView(url, "og:title", true);
   if (!html) return null;
   return parseWitCards(html);
 }
@@ -1149,7 +1156,7 @@ export async function searchAnime4upDirect(
 ): Promise<string | null> {
   if (!searchTitle) return null;
   const url = `${UP4_BASE}/?search_param=animes&s=${encodeURIComponent(searchTitle)}`;
-  const html = await fetchHtml(url, UP4_BASE + "/");
+  const html = await fetchSourceHtml(url, UP4_BASE + "/", "anime4up");
   if (!html) return null;
   // anime4up cards expose the anime URL twice (overlay <a> + title <h3><a>).
   // Pull the title link so we get the URL and display title together.
@@ -1561,7 +1568,7 @@ export async function findUp4EpisodeAcrossPages(
   animeUrl: string,
   epNumber: number,
 ): Promise<string | null> {
-  const html = await fetchHtml(animeUrl, UP4_BASE + "/");
+  const html = await fetchSourceHtml(animeUrl, UP4_BASE + "/", "/episode/");
   if (!html) return null;
   const eps = parseUp4Episodes(html);
   const hit = eps.find((e) => e.number === epNumber);
@@ -1586,7 +1593,7 @@ export async function findUp4EpisodeAcrossPages(
   for (let i = 0; i < 5; i++) {
     if (visited.has(page)) break;
     visited.add(page);
-    const ph = await fetchHtml(up4PageUrl(animeUrl, page), UP4_BASE + "/");
+    const ph = await fetchSourceHtml(up4PageUrl(animeUrl, page), UP4_BASE + "/", "/episode/");
     if (!ph) return null;
     const pe = parseUp4Episodes(ph);
     if (pe.length === 0) return null;
@@ -1649,7 +1656,7 @@ export function parseUp4Servers(html: string): RawServer[] {
 export async function scrapeAnime4upEpisodePageDirect(
   episodeUrl: string,
 ): Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string } | null> {
-  const html = await fetchHtml(episodeUrl, UP4_BASE + "/");
+  const html = await fetchHtml(episodeUrl, UP4_BASE + "/", [8000]);
   if (!html) return null;
   const servers = parseUp4Servers(html);
   if (servers.length === 0) return null;
@@ -2789,18 +2796,80 @@ export function pickMediaUrl(text: string): string | null {
 
 // Exported for the round-trip test in embedExtract.test.ts.
 export function extractFromPacked(html: string): string | null {
-  const head = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)/.exec(html);
-  if (!head) return null;
-  const m = html
-    .slice(head.index)
-    .match(/\}\s*\(\s*'((?:[^'\\]|\\.)*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:[^'\\]|\\.)*)'\s*\.\s*split\s*\(\s*'\|'\s*\)/);
-  if (!m) return null;
-  try {
-    const unpacked = unpackPacked(m[1].replace(/\\(.)/g, "$1"), +m[2], +m[3], m[4].split("|"));
-    return pickMediaUrl(unpacked);
-  } catch {
-    return null;
+  for (const head of html.matchAll(/eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*[dr]\s*\)/g)) {
+    const m = html
+      .slice(head.index)
+      .match(/\}\s*\(\s*'((?:[^'\\]|\\.)*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'((?:[^'\\]|\\.)*)'\s*\.\s*split\s*\(\s*'\|'\s*\)/);
+    if (!m) continue;
+    try {
+      const unpacked = unpackPacked(m[1].replace(/\\(.)/g, "$1"), +m[2], +m[3], m[4].split("|"));
+      const url = pickMediaUrl(unpacked);
+      if (url) return url;
+    } catch {}
   }
+  return null;
+}
+
+export function extractVkUrl(html: string): string | null {
+  const sources = Array.from(html.matchAll(/"(?:url|mp4_)(\d{3,4})"\s*:\s*"([^"]+)"/g))
+    .sort((a, b) => Number(b[1]) - Number(a[1]));
+  const rawSources = [...sources.map(source => source[2]), ...Array.from(html.matchAll(/"hls(?:_fmp4)?"\s*:\s*"([^"]+)"/g), source => source[1])];
+  for (const raw of rawSources) {
+    const url = raw.replace(/\\\//g, "/").replace(/\\u0026/g, "&").replace(/&amp;/g, "&");
+    if (/^https?:\/\//.test(url) && !DECOY_RE.test(url)) return url;
+  }
+  return null;
+}
+
+export async function extractVk(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  const canonical = new URL(embedUrl);
+  if (canonical.hostname === "vkvideo.ru") canonical.hostname = "vk.com";
+  const got = await fetchEmbed(canonical.toString(), 10000, "https://vk.com/");
+  const url = got.html && extractVkUrl(got.html);
+  if (!url) return null;
+  const candidates = [url];
+  const failover = got.html?.match(/"failover_host"\s*:\s*"([^"]+)"/)?.[1];
+  if (failover && /(^|\.)(?:vkuser\.net|okcdn\.ru)$/i.test(failover) && /(^|\.)(?:vkuser\.net|okcdn\.ru)$/i.test(new URL(url).hostname)) {
+    const alternate = new URL(url);
+    alternate.hostname = failover;
+    candidates.push(alternate.toString());
+  }
+  for (const candidate of candidates) {
+    if (await probeMediaUrl(candidate, videoPlaybackHeaders(candidate, canonical.toString(), "vk"), fetch, 4000)) return { url: candidate, type: mediaType(candidate) };
+  }
+  return null;
+}
+
+export async function extractShare4max(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  const got = await fetchEmbed(embedUrl, 8000);
+  const data = got.html?.match(/<script\b[^>]*data-page=["']app["'][^>]*>([\s\S]*?)<\/script>/i)?.[1];
+  if (!data) return null;
+  const page = JSON.parse(data);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  let streams: unknown;
+  try {
+    const response = await fetch(got.finalUrl, {
+      signal: controller.signal,
+      headers: { "User-Agent": BROWSER_UA, "X-Inertia": "true", "X-Inertia-Version": page.version,
+        "X-Inertia-Partial-Component": page.component, "X-Inertia-Partial-Data": "streams", "X-Requested-With": "XMLHttpRequest" },
+    });
+    if (!response.ok) return null;
+    streams = (await response.json())?.props?.streams?.data;
+  } finally { clearTimeout(timer); }
+  if (!Array.isArray(streams)) return null;
+  // Megamax aggregates mirrors; use the existing progressive extractor at the best quality.
+  for (const stream of streams.sort((a, b) => parseInt(b.label) - parseInt(a.label))) {
+    for (const mirror of stream.mirrors || []) {
+      if (mirror.driver !== "mp4upload" || typeof mirror.link !== "string") continue;
+      let url: string;
+      try { url = new URL(mirror.link, got.finalUrl).toString(); } catch { continue; }
+      if (!/(^|\.)mp4upload\.com$/i.test(new URL(url).hostname)) continue;
+      const resolved = await extractMp4upload(url).catch(() => null);
+      if (resolved && await probeMediaUrl(resolved.url, videoPlaybackHeaders(resolved.url, url, "mp4upload"))) return resolved;
+    }
+  }
+  return null;
 }
 
 export function isMp4uploadMediaUrl(raw: string): boolean {
@@ -2833,7 +2902,7 @@ type VideaRequest = { url: string; keyPrefix: string };
 // the same small transform used by VideaPlayerClasses.min.js; no browser DOM is
 // needed, so the signed media URL can go straight to Expo Video.
 export function buildVideaXmlRequest(embedUrl: string, html: string, sessionId = "pantoufa"): VideaRequest | null {
-  const token = html.match(/\bvar\s+_xt\s*=\s*["']([^"']+)["']/)?.[1];
+  const token = html.match(/\b(?:var|let|const)\s+_xt\s*=\s*["']([^"']+)["']/)?.[1];
   let videoId = "";
   try { videoId = new URL(embedUrl).searchParams.get("v") || ""; } catch {}
   if (!token || !videoId) return null;
@@ -2850,7 +2919,7 @@ export function buildVideaXmlRequest(embedUrl: string, html: string, sessionId =
   const encoded = state.a + state.g + state.j + state.d;
   const source = state.c + state.h + state.i + state.b;
   let mixed = "";
-  for (let i = 0; i < encoded.length; i++) mixed += source.charAt(i - (alphabet.indexOf(encoded[i]) - 31));
+  for (let i = 0; i < encoded.length; i++) mixed += source.at(i - (alphabet.indexOf(encoded[i]) - 31)) || "";
   keys = ["f", "h", "c", "b", "i"];
   for (let i = 0; i < mixed.length; i++) {
     const key = keys[Math.floor(i / 8) + 1];

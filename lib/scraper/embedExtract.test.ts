@@ -6,6 +6,7 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
+import { extractVkUrl } from './direct';
 import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, looksLikeCfChallenge, parseA3rbGenres, parseA3rbSynopsis, parseAnime4upEpisodeTitles, parseAnime4upRecentHtml, parseAnime4upStreamUrl, parseAnime4upSubtitles, parseUp4Episodes, parseUp4Servers, parseWitAnimeSections, pickHighestHlsVariant, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
@@ -37,6 +38,17 @@ function pack(script: string): string {
 const M3U8 = "https://cdn.example.com/master.m3u8?token=abc123";
 const MP4 = "https://vid.example.net/field/film480.mp4?sign=zz99";
 const MP4UPLOAD = "https://s14.mp4upload.com:282/d/video.mp4?token=abc";
+
+test('VK supports modern fMP4 HLS and unescapes signed query parameters',()=>{
+ assert.equal(extractVkUrl(String.raw`{"hls_fmp4":"https:\/\/cdn.example.com\/master.m3u8?a=1\u0026b=2"}`),'https://cdn.example.com/master.m3u8?a=1&b=2');
+});
+test('VK chooses the highest valid progressive quality and rejects decoys',()=>{
+ assert.equal(extractVkUrl(JSON.stringify({url1080:'https://test-videos.co.uk/sample.mp4',url720:MP4,url240:'https://cdn.example.com/low.mp4'})),MP4);
+ assert.equal(extractVkUrl(JSON.stringify({mp4_1080:MP4,mp4_480:'https://cdn.example.com/low.mp4',hls:M3U8})),MP4);
+});
+test('packed extraction skips an earlier ad block to find the episode',()=>{
+ assert.equal(extractFromPacked(pack("var file='https://test-videos.co.uk/sample.mp4';")+pack(`var file='${M3U8}';`)),M3U8);
+});
 
 test("packed JW setup round-trips to the m3u8", () => {
   const html = `<html><script>${pack(`jwplayer("v").setup({file:"${M3U8}",width:"100%"});`)}</script></html>`;

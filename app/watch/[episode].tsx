@@ -45,6 +45,7 @@ import { C, R, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
 import {
+  witanimeGateSource,
   bufferAheadSeconds,
   createGenerationGuard,
   episodeNumberFromUrl,
@@ -57,6 +58,7 @@ import {
   videoPlaybackHeaders,
 } from "../../lib/videoProviders";
 import { _cancelBackground } from "../../lib/scraper/bus";
+import { isTopLevelWebViewError } from "../../lib/scraper/sourceDomains";
 import { cueAt, parseVtt, type SubtitleCue } from "../../lib/subtitles";
 import { remoteLog } from "../../lib/remoteLog";
 
@@ -1166,9 +1168,8 @@ export default function WatchScreen() {
               const current = existing.get(state.server.iframeUrl);
               if (!current || (!current.videoUrl && state.videoUrl)) existing.set(state.server.iframeUrl, state);
             }
-            const next = sortVideoServers([...existing.values()].map((state) => state.server)).map(
-              (server) => existing.get(server.iframeUrl)!,
-            );
+            // Keep indices stable while the picker sorts rows for display.
+            const next = [...existing.values()];
             return unchanged(next) ? previous : next;
           }
           const next = states.map((state) => {
@@ -1196,7 +1197,7 @@ export default function WatchScreen() {
         onCandidates: (candidates) => {
           if (!loadGenerationRef.current.isCurrent(generation)) return;
           partialApplied = true;
-          applyPayload(candidates, force || serversRef.current.length > 0, true);
+          applyPayload(candidates, true, true);
           setLoading(false);
         },
         // Primary source's servers land first — show them immediately instead
@@ -1207,19 +1208,20 @@ export default function WatchScreen() {
           partialApplied = true;
           // Merge (not replace) when servers are already on screen — a manual
           // refresh must not wipe the playing server's state or selection.
-          applyPayload(partial, force || serversRef.current.length > 0, true);
+          applyPayload(partial, true, true);
           setLoading(false);
         },
       });
       if (!loadGenerationRef.current.isCurrent(generation)) return;
       setNoServersFinal(true);
       if (!res.success || res.data.servers.length === 0) {
+        if (partialApplied) return;
         setTitle(res.data.episodeTitle || "");
         setAnimeTitle(res.data.animeTitle || "");
         setServers([]);
         return;
       }
-      applyPayload(res, force || partialApplied);
+      applyPayload(res, true, true);
     } catch (e: any) {
       if (loadGenerationRef.current.isCurrent(generation)) setError(e.message || "Failed to load");
     } finally {
@@ -1469,9 +1471,7 @@ export default function WatchScreen() {
 
   // Pick a server from the selection layout → resolve + play it directly.
   const pickServer = useCallback((idx: number) => {
-    loadGenerationRef.current.next();
     _cancelBackground();
-    setNoServersFinal(true);
     selectServer(idx);
     setPicked(true);
   }, [selectServer]);
@@ -2158,6 +2158,7 @@ export default function WatchScreen() {
 
   // WebView ref for seeking
   const webViewRef = useRef<any>(null);
+  const webViewDocumentRef = useRef("");
 
   // For native player: tapping the video itself toggles expo-video's native controls.
   // We MUST NOT wrap VideoView in a Pressable that intercepts taps — it kills native controls.
@@ -2396,7 +2397,7 @@ export default function WatchScreen() {
         <WebView
           ref={webViewRef}
           key={`wv-${activeIdx}-${active?.server.id}`}
-          source={{ uri: iframeUrl }}
+          source={witanimeGateSource(iframeUrl, active?.server) || { uri: iframeUrl }}
           style={ss.player}
           allowsFullscreenVideo
           mediaPlaybackRequiresUserAction={false}
@@ -2409,6 +2410,7 @@ export default function WatchScreen() {
           originWhitelist={["https://*", "http://*"]}
           injectedJavaScript={ADBLOCK_JS + webViewResumeScript(serverStartPositionMs) + PROGRESS_JS}
           onMessage={onWebViewProgress}
+          onLoadStart={e => { webViewDocumentRef.current = e.nativeEvent.url; }}
           startInLoadingState
           renderLoading={() => (
             <View style={[ss.player, ss.centered]}>
@@ -2432,10 +2434,12 @@ export default function WatchScreen() {
             return false;
           }}
           onOpenWindow={() => {}}
-          onHttpError={() => {
+          onHttpError={(e) => {
+            if (!isTopLevelWebViewError(e.nativeEvent.url, webViewDocumentRef.current)) return;
             setServers((p) => p.map((s, i) => i === activeIdx ? { ...s, status: "failed" } : s));
           }}
-          onError={() => {
+          onError={(e) => {
+            if (!isTopLevelWebViewError(e.nativeEvent.url, webViewDocumentRef.current)) return;
             setServers((p) => p.map((s, i) => i === activeIdx ? { ...s, status: "failed" } : s));
           }}
         />
@@ -2463,11 +2467,10 @@ export default function WatchScreen() {
 
       {/* Transparent tap-catcher ONLY when WebView is active or controls hidden in non-native states.
           Skipped during native playback so taps reach expo-video's native controls. */}
-      {!isPlaying && !pickerOpen && !episodesOpen && !companionOpen && (
+      {!isPlaying && (!isWebView || !controlsVisible) && !pickerOpen && !episodesOpen && !companionOpen && (
         <Pressable
           style={[ABSOLUTE_FILL, { zIndex: 1 }]}
           onPress={tapToToggle}
-          pointerEvents={isWebView && controlsVisible ? 'box-none' : 'auto'}
         />
       )}
 

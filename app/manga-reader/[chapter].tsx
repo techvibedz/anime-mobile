@@ -204,6 +204,13 @@ function verticalDims(
   }
 }
 
+// A fixed decode target avoids decoding again at every measured-height change.
+// shortcut: very long strips lose pixel density; use native tiling if full-density strips are needed.
+function verticalDecodeSize(screenWidth: number, dpr: number): { width: number; height: number } {
+  const width = Math.max(1, Math.min(4096, Math.ceil(screenWidth * dpr)));
+  return { width, height: Math.max(1, Math.min(8192, Math.floor(8_000_000 / width))) };
+}
+
 export default function MangaReaderScreen() {
   const params = useLocalSearchParams<{ chapter?: string; title?: string; num?: string; cover?: string }>();
   const ref = typeof params.chapter === "string" ? params.chapter : "";
@@ -746,10 +753,10 @@ export default function MangaReaderScreen() {
                   bottomInset={insets.bottom}
                 />
               }
-              removeClippedSubviews={false}
-              initialNumToRender={3}
-              maxToRenderPerBatch={3}
-              windowSize={5}
+              removeClippedSubviews={true}
+              initialNumToRender={1}
+              maxToRenderPerBatch={1}
+              windowSize={3}
               updateCellsBatchingPeriod={60}
               showsVerticalScrollIndicator={false}
             />
@@ -1349,9 +1356,11 @@ const VerticalPage = memo(function VerticalPage({ uri, page, headers, onDisplaye
   const dims = ratio > 0
     ? verticalDims(fit, screenWidth, screenHeight, ratio, naturalWidthCache.get(uri) ?? 0, dpr)
     : { width: screenWidth, height: screenWidth * 1.45, contentFit: "contain" as const };
+  const decodeSize = useMemo(() => verticalDecodeSize(screenWidth, dpr), [screenWidth, dpr]);
   return (
     <View style={{ width: dims.width, height: dims.height, alignSelf: "center", backgroundColor: M.night }}>
       <MangaPageImage key={uri} uri={uri} page={page} headers={headers} contentFit={dims.contentFit} onDisplayed={onDisplayed}
+        decodeSize={fit === "width" || fit === "smart" ? decodeSize : undefined}
         onMeasure={(event) => {
           const { width: w, height: h } = event.source;
           if (w > 0 && h > 0) {

@@ -24,6 +24,8 @@ assert.ok(reader.includes("Gesture.Native()"), "reader: native list gesture comp
 assert.ok(pageImage.includes("allowDownscaling={!fullResolution}"), "reader: long strips must retain safe downsampling");
 assert.ok(!reader.includes("Image.loadAsync"), "reader: prefetch must not decode full-size pages a second time");
 assert.ok(!reader.includes("Image.prefetch("), "reader: Android prefetch must not add uncancellable original-size decodes");
+const continuousList = reader.match(/key="manga-vertical"[\s\S]*?showsVerticalScrollIndicator=\{false\}/)?.[0] ?? "";
+assert.ok(continuousList.includes("removeClippedSubviews={true}"), "webtoon: offscreen strips must be detached from native drawing");
 assert.ok(!reader.includes("numberOfTaps(2)"), "reader: double-tap zoom must stay removed");
 assert.ok(!reader.includes("doubleTap"), "reader: double-tap zoom must stay removed");
 

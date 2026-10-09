@@ -9,12 +9,13 @@ import { useReducedMotion } from "../lib/motion";
 import { MangaSkeleton } from "./MangaUI";
 
 /** Shared recovery for every reader mode. A retry must bypass a failed cache entry. */
-export function MangaPageImage({ uri, page, headers, contentFit, fullResolution = false, onMeasure, onDisplayed }: {
+export function MangaPageImage({ uri, page, headers, contentFit, fullResolution = false, decodeSize, onMeasure, onDisplayed }: {
   uri: string;
   page: number;
   headers: Record<string, string>;
   contentFit: ImageProps["contentFit"];
   fullResolution?: boolean;
+  decodeSize?: { width: number; height: number };
   onMeasure: (event: ImageLoadEventData) => void;
   onDisplayed: (uri: string) => void;
 }) {
@@ -62,12 +63,12 @@ export function MangaPageImage({ uri, page, headers, contentFit, fullResolution 
       {status !== "error" && (
         <Image
           key={`${src}:${attempt}`}
-          source={{ uri: src, headers, ...(attempt ? { cacheKey: `${src}|retry:${attempt}` } : {}) }}
+          source={{ uri: src, headers, ...decodeSize, ...(attempt ? { cacheKey: `${src}|retry:${attempt}` } : {}) }}
           style={MANGA_FILL}
           contentFit={contentFit}
-          cachePolicy={attempt ? "none" : "disk"}
+          cachePolicy={attempt ? "none" : decodeSize ? "memory-disk" : "disk"}
           recyclingKey={`${src}:${attempt}`}
-          transition={reducedMotion ? 0 : 80}
+          transition={decodeSize || reducedMotion ? 0 : 80}
           // Full-resolution zoom is only safe for ordinary scans. Long strips
           // use the platform's safe downsampling instead of enormous bitmaps.
           allowDownscaling={!fullResolution}

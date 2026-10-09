@@ -23,6 +23,7 @@ assert.ok(reader.includes("blocksExternalGesture"), "reader: pinch must block th
 assert.ok(reader.includes("Gesture.Native()"), "reader: native list gesture composition missing");
 assert.ok(pageImage.includes("allowDownscaling={!fullResolution}"), "reader: long strips must retain safe downsampling");
 assert.ok(!reader.includes("Image.loadAsync"), "reader: prefetch must not decode full-size pages a second time");
+assert.ok(!reader.includes("Image.prefetch("), "reader: Android prefetch must not add uncancellable original-size decodes");
 assert.ok(!reader.includes("numberOfTaps(2)"), "reader: double-tap zoom must stay removed");
 assert.ok(!reader.includes("doubleTap"), "reader: double-tap zoom must stay removed");
 
@@ -46,7 +47,7 @@ assert.ok(reader.includes("pagedV"), "reader: vertical paged mode missing");
 assert.ok(pageImage.includes("<MangaSkeleton"), "reader: page loading shimmer missing");
 assert.ok(pageImage.includes("onLoadStart"), "reader: page loading state missing");
 assert.ok(pageImage.includes("onRetry") || pageImage.includes("t.retry"), "reader: page retry state missing");
-assert.ok(reader.includes("upgradeMangaPage"), "reader: page URL quality upgrade missing");
+assert.ok(pageImage.includes("upgradeMangaPage"), "reader: page URL quality upgrade missing");
 
 // Chrome only on tap: drags and pinches hide it.
 assert.ok(reader.includes("setChrome(false)"), "reader: chrome must hide on scroll/zoom");

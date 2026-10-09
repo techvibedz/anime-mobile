@@ -118,7 +118,7 @@ function ScraperSlot({
   const currentUrl = job?.urls[attemptIndex] || job?.url || "";
   const source = identifySource(currentUrl);
   const sourceBrowser = source === "witanime" || source === "anime4up";
-  const verificationBrowser = sourceBrowser || /^https:\/\/(?:[^/]+\.)?vik(?:i|1)ngfile\.(?:com|site)\//i.test(currentUrl);
+  const verificationBrowser = sourceBrowser || /^https:\/\/(?:[^/]+\.)?(?:vik(?:i|1)ngfile\.(?:com|site)|3asq\.online|mangalik\.net|mangawy\.org)\//i.test(currentUrl);
 
   useEffect(() => {
     attemptIndexRef.current = 0;

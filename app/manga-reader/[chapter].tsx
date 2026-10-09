@@ -18,7 +18,6 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Image } from "expo-image";
 import { StatusBar } from "expo-status-bar";
 import { MangaPageImage } from "../../components/MangaPageImage";
 import { normFuzzy } from "../../lib/fuzzy";
@@ -44,7 +43,6 @@ import {
   setMangaChapterRead,
   useReadChapters,
 } from "../../lib/manga/store";
-import { upgradeMangaPage } from "../../lib/manga/cover";
 import { replaceMangaReader } from "../../lib/manga/nav";
 import { ChapterRow } from "../../components/ChapterRow";
 import { MangaState } from "../../components/MangaUI";
@@ -254,9 +252,7 @@ export default function MangaReaderScreen() {
   // can lose the race against the chapter fetch). Re-renders the vertical pages
   // so they pick up exact heights instead of the 1.45× placeholder.
   const [ratioTick, setRatioTick] = useState(0);
-  // True from touch-down through a fling (plus a short tail). Background
-  // prefetch decodes full-size pages; running those while the user scrolls
-  // competes with the visible page's decode and is what made scrolling stutter.
+  // Keep the next-chapter network request out of active drags and flings.
   const [scrolling, setScrolling] = useState(false);
 
   const verticalRef = useRef<FlatList<string>>(null);
@@ -272,7 +268,6 @@ export default function MangaReaderScreen() {
   const directionRef = useRef(prefs.direction);
   const saveRef = useRef<(pageIndex: number, total: number) => void>(() => {});
   const touchRef = useRef({ x: 0, y: 0, t: 0 });
-  const prefetchedPagesRef = useRef(new Set<number>());
   const nextChapterPrefetchRef = useRef<string | null>(null);
   const zoomedRef = useRef(false);
   const restoringRef = useRef(false);
@@ -364,7 +359,6 @@ export default function MangaReaderScreen() {
     restoredRef.current = false;
     userInteractedRef.current = false;
     pendingPageRef.current = 0;
-    prefetchedPagesRef.current = new Set();
     nextChapterPrefetchRef.current = null;
 
     void fetchMangaChapter(chapterSource, chapterMangaId, chapterId, { force: reloadKey > 0 })
@@ -527,25 +521,8 @@ export default function MangaReaderScreen() {
   // silently stop saving progress in continuous mode.
   const viewabilityConfig = useRef({ viewAreaCoveragePercentThreshold: 15, minimumViewTime: 250 }).current;
 
-  // ── prefetch: pages ahead + the next chapter near the end ──────────────────
-  // Prefetching decodes a full-size page on Android, so it only runs once the
-  // scroll settles: during a drag or fling the decode would fight the visible
-  // page for CPU/memory and drop frames.
-  useEffect(() => {
-    if (!pages || pages.length === 0 || scrolling) return;
-    for (const target of [index + 1, index + 2]) {
-      if (target >= pages.length || prefetchedPagesRef.current.has(target)) continue;
-      // A page already on screen is in the image cache — prefetching it again
-      // is a wasted full-size decode.
-      if (displayedPagesRef.current.has(pages[target])) continue;
-      prefetchedPagesRef.current.add(target);
-      // Warm the exact URL the page cell will render (quality upgrade applied),
-      // otherwise the prefetch would warm a bitmap that never displays.
-      void Image.prefetch(upgradeMangaPage(pages[target]), { cachePolicy: "disk", headers: imageHeaders })
-        .then((ok) => { if (!ok) prefetchedPagesRef.current.delete(target); })
-        .catch(() => { prefetchedPagesRef.current.delete(target); });
-    }
-  }, [index, pages, imageHeaders, scrolling]);
+  // Virtualized page cells load ahead at display size; Image.prefetch on
+  // Android would add uncancellable full-resolution decodes during scrolling.
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {

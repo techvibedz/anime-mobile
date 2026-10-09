@@ -182,13 +182,15 @@ assert.equal(position.userInteractedRef.current, true);
 
 (async () => {
   const calls = [];
+  let cachedHome = null, offline = false;
   const fuzzy = load("lib/fuzzy.ts", {});
   const aggregate = load("lib/manga/aggregate.ts", {
     "@react-native-async-storage/async-storage": { getItem: async () => null, setItem: async () => {} },
     "../fuzzy": fuzzy,
     "../requestCache": { createRequestCache: () => ({ run: (_, fn) => fn() }), withTimeout: (promise) => promise },
-    "./api": { async searchManga(source, query, options) {
+    "./api": { readCachedMangaHome: async source => source === "asq" ? cachedHome : null, async searchManga(source, query, options) {
       calls.push({ source, query, options });
+      if (offline) return [];
       return [{ source, id: options.genres[0], title: `One Piece ${options.genres[0]}`, cover: null }];
     } },
   });
@@ -202,5 +204,42 @@ assert.equal(position.userInteractedRef.current, true);
     assert.equal(call.options.status, "مستمر");
   }
   assert.equal(results.length, 2, "genre union must dedupe titles across sources");
+  offline = true;
+  cachedHome = { featured: [{ source: "asq", id: "colored", title: "One Piece Colored", cover: "cover" }], sections: [{ items: [
+    { source: "asq", id: "original", title: "One Piece", cover: null },
+    { source: "asq", id: "unrelated", title: "Naruto", cover: null },
+  ] }] };
+  const partials=[];
+  const recovered = await aggregate.searchMergedManga("One Piece", undefined, cards => partials.push(cards));
+  assert.equal(recovered.length,2,"both editions shown on home remain searchable during a source outage");
+  assert.ok(recovered.some(card=>card.id === "original"));
+  assert.equal(recovered[0].id,"original","the exact series must rank ahead of an alternate edition");
+  assert.equal(partials[0].length,2,"known cards stream before network searches finish");
+  assert.equal((await aggregate.searchMergedManga("One Piece",{genres:["أكشن"]})).length,0,"home fallback must not bypass genre selection");
+  assert.equal((await aggregate.searchMergedManga("One Piece",{page:2})).length,0,"home fallback must not repeat page one forever");
+
+  let requests=0;const bounds=[];
+  const requestCache=load("lib/requestCache.ts",{},{setTimeout,clearTimeout});
+  const adapter={search:async()=>++requests===1?[]:[{source:"asq",id:"original",title:"One Piece",cover:null}]};
+  const api=load("lib/manga/api.ts",{
+    "@react-native-async-storage/async-storage":{getItem:async()=>null,setItem:async()=>{}},
+    "../requestCache":{...requestCache,withTimeout:(promise,ms)=>{bounds.push(ms);return promise;}},
+    "./sources/asq":{asqSource:adapter},"./sources/mangawy":{mangawySource:adapter},"./sources/mangalik":{mangalikSource:adapter},
+  });
+  assert.equal((await api.searchManga("asq","One Piece")).length,0);
+  assert.equal((await api.searchManga("asq","One Piece")).length,1,"a transient empty response must be retried rather than cached");
+  assert.equal(requests,2);
+  assert.ok(bounds.every(ms=>ms>=41_000),"search cap must allow direct retries and browser verification to finish");
+  const hubAst=ts.createSourceFile("hub.tsx",fs.readFileSync("app/(tabs)/manga.tsx","utf8"),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let emitSource;
+  function findEmit(node){if(ts.isVariableDeclaration(node)&&node.name.getText(hubAst)==="emit"&&node.initializer?.getText(hubAst).includes("rawResultsRef"))emitSource=node.initializer.getText(hubAst);ts.forEachChild(node,findEmit);}
+  findEmit(hubAst);assert.ok(emitSource);
+  const colored={id:"colored"},original={id:"original"};const rawResultsRef={current:[colored]};
+  const emitContext={seq:1,searchSeqRef:{current:1},trimmed:"One Piece",page:1,rawResultsRef,setResults:()=>{},mergeCards:cards=>cards};
+  const emitJs=ts.transpileModule(`var emit=${emitSource};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  vm.runInNewContext(emitJs+"\nemit;",emitContext)([original,colored]);
+  assert.equal(rawResultsRef.current[0],original,"a late exact result must replace the earlier stream's ordering");
+  emitContext.page=2;vm.runInNewContext(emitJs+"\nemit;",emitContext)([{id:"page-two"}]);
+  assert.equal(rawResultsRef.current.length,3,"pagination must still append earlier pages");
   console.log("Manga recovery: retries, watchdog, safe decoding and combined search passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

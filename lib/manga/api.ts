@@ -89,8 +89,9 @@ export function searchManga(
   if (!q) return Promise.resolve([]);
   // Hard cap per source: a stuck fetch must never hold the whole search page.
   return withTimeout(
-    searchCache.run(`${source}|${q}|${filterKey(options)}`, () => MANGA_SOURCES[source].search(q, options)),
-    15_000,
+    searchCache.run(`${source}|${q}|${filterKey(options)}`, () => MANGA_SOURCES[source].search(q, options), { valid: cards => cards.length > 0 }),
+    // Direct retries plus the 28s browser fallback must fit inside this cap.
+    45_000,
     [],
   );
 }

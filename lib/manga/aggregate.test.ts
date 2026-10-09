@@ -40,7 +40,17 @@ async function main() {
   assert.equal(mangaTitleKey("Solo Leveling"), "solo leveling");
   assert.equal(mangaTitleKey("Solo Leveling (مانهوا)"), "solo leveling");
   assert.equal(mangaTitleKey("  Re:Zero  "), "re zero");
-  assert.equal(mangaTitleKey("One Piece Colored"), "one piece");
+  assert.equal(mangaTitleKey("One Piece Colored"), "one piece colored");
+  assert.notEqual(mangaTitleKey("One Piece"), mangaTitleKey("One Piece Colored"));
+  assert.notEqual(mangaTitleKey("ون بيس"), mangaTitleKey("ون بيس ملون"));
+  assert.ok(strictTitleScore("One Piece", "One Piece Colored") < 0.88);
+  const editions = mergeCards([
+    card({ source: "asq", id: "colored", title: "One Piece Colored", cover: "cover", latest: "367", rating: "5" }),
+    card({ source: "asq", id: "original", title: "One Piece", latest: "1195" }),
+    card({ source: "mangalik", id: "copy", title: "One Piece Colored", latest: "366" }),
+  ]);
+  assert.equal(editions.length, 2, "alternate editions stay separate while genuine duplicates still merge");
+  assert.ok(editions.some(card => card.id === "original" && card.title === "One Piece"));
 
   assert.equal(chapterNumberKey("الفصل 179"), "179");
   assert.equal(chapterNumberKey("١٧٩"), "179");

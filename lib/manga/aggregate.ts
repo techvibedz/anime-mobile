@@ -14,7 +14,7 @@
 // from the best source are served by whichever source has them.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { levenshtein, normFuzzy, sourceSearchQueries } from "../fuzzy";
+import { fuzzyScore, levenshtein, normFuzzy, sourceSearchQueries } from "../fuzzy";
 import { createRequestCache, withTimeout } from "../requestCache";
 import {
   browseMangaAll,
@@ -51,8 +51,8 @@ export function sourceRank(source: MangaSourceId): number {
 
 /** Type words that sources append to titles but that are not part of the work. */
 const TITLE_NOISE = new Set([
-  "manga", "manhwa", "manhua", "comic", "novel", "webtoon", "colored", "color",
-  "مانجا", "مانهوا", "مانها", "رواية", "ملون", "ملونة", "مترجم", "مترجمة",
+  "manga", "manhwa", "manhua", "comic", "novel", "webtoon",
+  "مانجا", "مانهوا", "مانها", "رواية", "مترجم", "مترجمة",
 ]);
 
 /** Normalized title key shared by cards, search hits and details. */
@@ -358,6 +358,17 @@ export async function searchMergedManga(
   const q = query.trim();
   if (!q) return [];
   const collected: MangaCard[] = [];
+  const results = () => mergeCards(collected).sort((a, b) => strictTitleScore(q, b.title) - strictTitleScore(q, a.title));
+  // Home cards remain searchable when a source's search is temporarily down.
+  // Genre membership is only known by the source, so don't bypass that filter.
+  if ((options?.page ?? 1) === 1 && !options?.genres?.length) {
+    const home = await readCachedMergedHome();
+    if (home) {
+      const known = [...home.featured, ...home.sections.flatMap(section => section.items)];
+      collected.push(...known.filter(card => fuzzyScore(q, card.title) >= 0.8));
+      if (collected.length) onPartial?.(results());
+    }
+  }
   await Promise.all(
     COMBINED_SOURCES.map(async (source) => {
       try {
@@ -367,14 +378,14 @@ export async function searchMergedManga(
           const items = await searchManga(source, q, { ...options, genres: genre ? [genre] : [] });
           if (!items.length) return;
           collected.push(...items);
-          onPartial?.(mergeCards(collected));
+          onPartial?.(results());
         }));
       } catch {
         // degrade quietly — the other sources still answer
       }
     }),
   );
-  return mergeCards(collected);
+  return results();
 }
 
 /** Combined genre browse for one page. */
@@ -481,7 +492,8 @@ async function findMatch(source: MangaSourceId, title: string): Promise<MangaCar
 }
 
 const mergedDetailCache = createRequestCache<MergedMangaDetail>(10 * 60_000);
-const MERGED_DETAIL_PREFIX = "manga_merged_detail_v1:";
+// Old merged metadata could combine the original and colored chapter lists.
+const MERGED_DETAIL_PREFIX = "manga_merged_detail_v2:";
 const SWR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 async function readSwr(key: string): Promise<MergedMangaDetail | null> {

@@ -151,7 +151,8 @@ export default function MangaHubScreen() {
     const options = { ...active, genres: selectedGenres, page };
     const emit = (cards: MangaCard[]) => {
       if (seq !== searchSeqRef.current) return;
-      rawResultsRef.current = mergeCards([...rawResultsRef.current, ...cards]);
+      // Search streams are cumulative and ranked; keep their latest ordering.
+      rawResultsRef.current = trimmed && page === 1 ? cards : mergeCards([...rawResultsRef.current, ...cards]);
       setResults(rawResultsRef.current);
     };
     try {

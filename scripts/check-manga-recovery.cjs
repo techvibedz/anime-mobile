@@ -88,15 +88,15 @@ function advance(ms) {
 render();
 assert.equal(image().props.allowDownscaling, true, "continuous strips must downsample safely");
 assert.equal(image().props.source.headers.Referer, props.headers.Referer);
-props = { ...props, decodeSize: { width: 1080, height: 7407 } }; render();
+props = { ...props, decodeSize: { width: 1080, height: 2_147_483_647 } }; render();
 assert.equal(image().props.source.width, 1080, "webtoon decode width must not depend on the guessed page height");
-assert.equal(image().props.source.height, 7407);
+assert.equal(image().props.source.height, 2_147_483_647);
 assert.equal(image().props.cachePolicy, "memory-disk", "page resize must reuse the active decoded bitmap");
 assert.equal(image().props.transition, 0, "webtoon scroll must not crossfade two tall textures");
 image().props.onError(); render();
 assert.equal(image().props.source.uri, original, "missing upgraded image must fall back to provider URL");
 assert.equal(image().props.cachePolicy, "none", "recovery must bypass failed cache entries");
-assert.equal(image().props.source.width, 1080, "recovery must retain the decode budget");
+assert.equal(image().props.source.width, 1080, "recovery must retain the stable decode size");
 image().props.onError(); advance(800);
 image().props.onError(); render();
 assert.equal(image(), undefined, "automatic retries must stop");
@@ -138,24 +138,31 @@ const effectFunctions = [];
 const refFunctions = [];
 let saveFunction;
 let interactionFunction;
+let dprInitializer;
 function visit(node) {
   if (ts.isCallExpression(node) && node.expression.getText(readerAst) === "useEffect") effectFunctions.push(node.arguments[0].getText(readerAst));
   if (ts.isCallExpression(node) && node.expression.getText(readerAst) === "useRef" && ts.isArrowFunction(node.arguments[0])) refFunctions.push(node.arguments[0].getText(readerAst));
   if (ts.isVariableDeclaration(node) && node.name.getText(readerAst) === "beginInteraction") interactionFunction = node.initializer.arguments[0].getText(readerAst);
+  if (ts.isVariableDeclaration(node) && node.name.getText(readerAst) === "dpr") dprInitializer = node.initializer.getText(readerAst);
   if (ts.isBinaryExpression(node) && node.left.getText(readerAst) === "saveRef.current") saveFunction = node.right.getText(readerAst);
   ts.forEachChild(node, visit);
 }
 visit(readerAst);
+assert.equal(vm.runInNewContext(dprInitializer, { PixelRatio: { get: () => 3.5 } }), 3.5, "high-density phones must not have their pixel ratio capped");
 const decodeFunction = readerAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "verticalDecodeSize");
-assert(decodeFunction, "continuous reader must bound tall image decodes");
+assert(decodeFunction, "continuous reader must retain a stable decode target");
 const decodeSize = vm.runInNewContext(ts.transpileModule(`${decodeFunction.getText(readerAst)}; verticalDecodeSize`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText);
-for (const [width, dpr] of [[360, 3], [800, 2], [2000, 3], [1, 1]]) {
+for (const [width, dpr] of [[360, 3.5], [800, 2], [2000, 3], [1, 1]]) {
   const target = decodeSize(width, dpr);
-  assert(target.width > 0 && target.height > 0);
-  assert(target.width <= 4096 && target.height <= 8192, "long strips must fit a bounded decode target");
-  assert(target.width * target.height <= 8_000_000, "one strip must not allocate an unbounded bitmap");
+  assert.equal(target.width, Math.ceil(width * dpr), "decode must retain the screen's full pixel density");
+  assert.equal(target.height, 2_147_483_647, "decode target must fit Android's signed integer dimensions");
+  for (const ratio of [1.45, 17, 40]) {
+    const sourceWidth = target.width * 2, sourceHeight = sourceWidth * ratio;
+    const scale = Math.min(1, target.width / sourceWidth, target.height / sourceHeight);
+    assert.equal(sourceWidth * scale, target.width, "strip length must not reduce horizontal detail");
+  }
 }
 assert.equal(decodeSize(360, 3).width, 1080, "ordinary scans must retain display pixel density");
 const position = {

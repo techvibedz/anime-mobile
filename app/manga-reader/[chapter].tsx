@@ -205,10 +205,10 @@ function verticalDims(
 }
 
 // A fixed decode target avoids decoding again at every measured-height change.
-// shortcut: very long strips lose pixel density; use native tiling if full-density strips are needed.
 function verticalDecodeSize(screenWidth: number, dpr: number): { width: number; height: number } {
-  const width = Math.max(1, Math.min(4096, Math.ceil(screenWidth * dpr)));
-  return { width, height: Math.max(1, Math.min(8192, Math.floor(8_000_000 / width))) };
+  const width = Math.max(1, Math.ceil(screenWidth * dpr));
+  // Glide's contain fit must be limited by display width, never strip height.
+  return { width, height: 2_147_483_647 };
 }
 
 export default function MangaReaderScreen() {
@@ -239,7 +239,7 @@ export default function MangaReaderScreen() {
     : `https://mangawy.org/series/${encodeURIComponent(chapterMangaId)}/chapter/${encodeURIComponent(chapterId)}` }), [chapterSource, chapterMangaId, chapterId]);
   const { width, height } = useWindowDimensions();
   const widthRounded = Math.round(width);
-  const dpr = Math.min(PixelRatio.get() || 2, 3);
+  const dpr = PixelRatio.get() || 2;
 
   const [pages, setPages] = useState<string[] | null>(null);
   const [detail, setDetail] = useState<MergedMangaDetail | null>(null);

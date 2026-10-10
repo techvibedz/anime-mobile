@@ -93,6 +93,26 @@ assert.equal(image().props.source.width, 1080, "webtoon decode width must not de
 assert.equal(image().props.source.height, 2_147_483_647);
 assert.equal(image().props.cachePolicy, "memory-disk", "page resize must reuse the active decoded bitmap");
 assert.equal(image().props.transition, 0, "webtoon scroll must not crossfade two tall textures");
+// A large original scan can take longer than the watchdog while bytes arrive.
+const initialKey = image().props.recyclingKey;
+for (let chunk = 1; chunk <= 4; chunk++) {
+  advance(15_000);
+  assert.equal(typeof image()?.props.onProgress, "function", "page downloads must report progress to the watchdog");
+  image().props.onProgress({ loaded: chunk * 1024, total: 8192 }); render();
+  assert.equal(image().props.recyclingKey, initialKey, "progressing originals must not be cancelled and restarted");
+}
+advance(15_000);
+image().props.onProgress({ loaded: 4096, total: 8192 }); render();
+advance(5_000);
+assert.notEqual(image().props.recyclingKey, initialKey, "duplicate progress must not hide a stalled download");
+assert.equal(image().props.source.uri, original, "stalled upgrades must retain the existing provider fallback");
+// Automatic retries and manual retries must also respect advancing bytes.
+const retryKey = image().props.recyclingKey;
+for (let chunk = 1; chunk <= 3; chunk++) {
+  advance(15_000);
+  image().props.onProgress({ loaded: chunk * 1024, total: 8192 }); render();
+  assert.equal(image().props.recyclingKey, retryKey);
+}
 image().props.onError(); render();
 assert.equal(image().props.source.uri, original, "missing upgraded image must fall back to provider URL");
 assert.equal(image().props.cachePolicy, "none", "recovery must bypass failed cache entries");

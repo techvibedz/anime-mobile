@@ -23,6 +23,7 @@ export function MangaPageImage({ uri, page, headers, contentFit, fullResolution 
   const [attempt, setAttempt] = useState(0);
   const [status, setStatus] = useState<"loading" | "loaded" | "error">("loading");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadedBytes = useRef(0);
   const displayed = useRef(false);
   const reducedMotion = useReducedMotion();
   const clearTimer = useCallback(() => {
@@ -50,12 +51,18 @@ export function MangaPageImage({ uri, page, headers, contentFit, fullResolution 
     }
   }, [src, uri, attempt, clearTimer]);
 
+  const armWatchdog = useCallback(() => {
+    clearTimer();
+    if (!displayed.current) timer.current = setTimeout(recover, 20_000);
+  }, [recover, clearTimer]);
+
   useEffect(() => {
     if (status === "loaded" || status === "error") return;
     displayed.current = false;
-    timer.current = setTimeout(recover, 20_000);
+    loadedBytes.current = 0;
+    armWatchdog();
     return clearTimer;
-  }, [src, attempt, status, recover, clearTimer]);
+  }, [src, attempt, status, armWatchdog, clearTimer]);
 
   return (
     <View style={MANGA_FILL}>
@@ -77,6 +84,13 @@ export function MangaPageImage({ uri, page, headers, contentFit, fullResolution 
           // keeps the current bitmap on screen until the sharper one arrives —
           // only the first load shows the skeleton.
           onLoadStart={() => { if (!displayed.current) setStatus("loading"); }}
+          // Slow original scans must finish; only a download that stops advancing is stalled.
+          onProgress={({ loaded }) => {
+            if (loaded > loadedBytes.current) {
+              loadedBytes.current = loaded;
+              armWatchdog();
+            }
+          }}
           onLoad={onMeasure}
           onDisplay={() => {
             displayed.current = true;

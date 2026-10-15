@@ -321,7 +321,9 @@ let active = 0;
 let lastStart = 0;
 const waiting: (() => void)[] = [];
 
-function schedule<T>(fn: () => Promise<T>): Promise<T> {
+// `priority` jumps the waiting line: the detail page's own Info facts must not
+// sit behind a screenful of poster-badge lookups.
+function schedule<T>(fn: () => Promise<T>, priority = false): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const run = async () => {
       active++;
@@ -339,6 +341,7 @@ function schedule<T>(fn: () => Promise<T>): Promise<T> {
       }
     };
     if (active < MAX_CONCURRENT) run();
+    else if (priority) waiting.unshift(run);
     else waiting.push(run);
   });
 }
@@ -369,8 +372,11 @@ function cleanQuery(title: string): string {
 // 429 (rate limit) and 5xx (MAL transiently down). Returns parsed JSON or null.
 async function jikanGet(url: string, maxAttempts = 3): Promise<any | null> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // A hung Jikan request used to hold a queue slot (and the Info tab) forever.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
       if (res.status === 429 || res.status >= 500) {
         if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
         continue;
@@ -379,6 +385,8 @@ async function jikanGet(url: string, maxAttempts = 3): Promise<any | null> {
       return await res.json();
     } catch {
       if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    } finally {
+      clearTimeout(timer);
     }
   }
   return null;
@@ -529,7 +537,7 @@ export async function fetchAnimeMal(title: string, full = false): Promise<MalDat
       }
     } catch {}
     try {
-      const data = await schedule(() => doFetch(title, full));
+      const data = await schedule(() => doFetch(title, full), full);
       // Only cache a real hit; an empty result is likely a transient miss and
       // should be free to retry on the next visit.
       if (data.score != null || data.fields.length > 0) {

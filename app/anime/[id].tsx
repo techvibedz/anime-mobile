@@ -199,12 +199,14 @@ export default function AnimeDetailScreen() {
   }, [id]));
 
   // Resolve the lightweight MyAnimeList score for the header badge once the
-  // title is known. The slower full facts load only when the Info tab opens.
+  // title is known, and prefetch the slower full facts so the Info tab is
+  // ready (or already in flight — fetchAnimeMal de-dupes) when it's opened.
   useEffect(() => {
     if (!data?.title) return;
     setMalScore(peekMalRating(data.title) ?? null);
     let cancelled = false;
     fetchAnimeMal(data.title).then((m) => { if (!cancelled) setMalScore(m.score); });
+    void fetchAnimeInfo(data.title);
     return () => { cancelled = true; };
   }, [data?.title]);
 

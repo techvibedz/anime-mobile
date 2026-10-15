@@ -10,6 +10,8 @@ import {
   RefreshControl,
   StyleSheet,
   Animated,
+  Easing,
+  useWindowDimensions,
 } from "react-native";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -82,11 +84,36 @@ function SkeletonGrid({ width, layout }: { width: number; layout: CardLayout }) 
   );
 }
 
+/* Indeterminate sweep for the console's bottom edge while a search runs —
+ * the old static gradient read as a frozen line, not activity. */
+function ProgressSweep() {
+  const { width } = useWindowDimensions();
+  const reduced = useReducedMotion();
+  const x = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (reduced) { x.setValue(0.5); return; }
+    const loop = Animated.loop(
+      Animated.timing(x, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.cubic), useNativeDriver: true, isInteraction: false }),
+    );
+    x.setValue(0);
+    loop.start();
+    return () => loop.stop();
+  }, [x, reduced]);
+  const bar = width * 0.4;
+  return (
+    <Animated.View style={{ width: bar, height: 2, transform: [{ translateX: x.interpolate({ inputRange: [0, 1], outputRange: [-bar, width] }) }] }}>
+      <LinearGradient colors={["transparent", C.accent, "transparent"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ABSOLUTE_FILL} />
+    </Animated.View>
+  );
+}
+
 /* Memoized result card — built on the unified <PosterCard>. Without this,
  * every visible poster re-rendered on each keystroke (the search-progress strip
  * toggles parent state) and on every pagination append. */
 const ResultCard = memo(function ResultCard({ item, width, layout }: { item: SearchResult; width: number; layout: CardLayout }) {
+  // Short fade-rise so streamed-in results ease in instead of popping.
   return (
+    <Rise distance={8} duration={220}>
     <PosterCard
       image={item.image}
       title={item.title}
@@ -108,6 +135,7 @@ const ResultCard = memo(function ResultCard({ item, width, layout }: { item: Sea
       }
       bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} style={INLINE_POSTER_BADGE} />}
     />
+    </Rise>
   );
 });
 
@@ -120,6 +148,9 @@ export default function SearchScreen() {
   const [items, setItems] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
+  // The previous grid stays up while a new query runs — dimmed, so it doesn't
+  // read as this query's results until the first real ones land.
+  const [stale, setStale] = useState(false);
   const [incompleteSearch, setIncompleteSearch] = useState(false);
   const [activeGenre, setActiveGenre] = useState("All");
   const [genrePage, setGenrePage] = useState(1);
@@ -230,17 +261,34 @@ export default function SearchScreen() {
     // Keep the current grid visible while searching — a slim progress bar
     // signals activity instead of blanking the whole screen.
     setSearching(true);
+    setStale(true);
     setIncompleteSearch(false);
     setHasMore(false);
+    // Progressive: the first source paints at once; later ones (anime3rb
+    // streams card-by-card) are coalesced to one repaint per 250ms so the grid
+    // doesn't re-sort and jump a dozen times a second. The seq guard drops any
+    // partial from a query the user has already moved past.
+    let latest: SearchResult[] = [];
+    let lastPaint = 0;
+    let paintTimer: ReturnType<typeof setTimeout> | null = null;
+    const paint = () => {
+      paintTimer = null;
+      if (seq !== reqSeq.current) return;
+      lastPaint = Date.now();
+      setItems(latest);
+      setLoading(false);
+      setStale(false);
+    };
     try {
-      // Progressive: witanime results paint almost immediately; anime4up and
-      // anime3rb stream in and append without blanking the grid. The seq guard
-      // drops any partial from a query the user has already moved past.
       const res = await searchAnime(q.trim(), (partial) => {
         if (seq !== reqSeq.current) return;
-        setItems(partial);
-        setLoading(false);
+        latest = partial;
+        if (paintTimer) return;
+        const wait = 250 - (Date.now() - lastPaint);
+        if (wait <= 0) paint();
+        else paintTimer = setTimeout(paint, wait);
       });
+      if (paintTimer) { clearTimeout(paintTimer); paintTimer = null; }
       if (seq !== reqSeq.current) return;
       if (res.success) {
         setItems(res.data.results);
@@ -249,7 +297,8 @@ export default function SearchScreen() {
       else setItems([]);
     } catch { if (seq === reqSeq.current) setItems([]); }
     finally {
-      if (seq === reqSeq.current) { setLoading(false); setSearching(false); }
+      if (paintTimer) clearTimeout(paintTimer);
+      if (seq === reqSeq.current) { setLoading(false); setSearching(false); setStale(false); }
     }
   }, [loadBrowse]);
 
@@ -425,12 +474,7 @@ export default function SearchScreen() {
           <View style={ss.glowLine} />
           {searching && (
             <View style={ss.progressStrip}>
-              <LinearGradient
-                colors={["transparent", C.accent, "transparent"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={ABSOLUTE_FILL}
-              />
+              <ProgressSweep />
             </View>
           )}
         </View>
@@ -446,6 +490,7 @@ export default function SearchScreen() {
         <SkeletonGrid width={cards.cardWidth} layout={cards.layout} />
       ) : items.length > 0 ? (
         <FlatList
+          style={stale && searching ? { opacity: 0.45 } : undefined}
           key={`${cards.layout}-${cards.columns}`}
           data={items}
           numColumns={cards.columns}

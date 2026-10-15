@@ -71,7 +71,21 @@ async function checks() {
 
   const duplicates = api({ searchWitanimeDirectList: async () => ({ results: [raw('witanime', 1, 'JoJo')] }),
     searchAnime4upDirectList: async () => [raw('anime4up', 1, 'JoJo'), raw('anime4up', 1, 'JoJo'), raw('anime4up', 6)] });
-  assert.equal((await duplicates.search('JoJo')).data.results.length, 3, 'same-title alternate URLs survive; repeated URLs do not');
+  assert.equal((await duplicates.search('JoJo')).data.results.length, 2, 'one card per anime across sources; repeated URLs collapse too');
+  const tld = api({ searchWitanimeDirectList: async () => ({ results: [{ ...raw('witanime', 1, 'JoJo'), href: 'https://witanime.you/anime/jojo-1' }] }) },
+    { success: true, data: { query: 'JoJo', results: [raw('witanime', 1, 'JoJo')], totalResults: 1 } });
+  assert.equal((await tld.search('JoJo')).data.results.length, 1, 'rotated witanime TLD is the same anime');
+  const parts = api({ searchAnime4upDirectList: async () => [raw('anime4up', 1, 'JoJo'), raw('anime4up', 2, 'JoJo')] });
+  assert.equal((await parts.search('JoJo')).data.results.length, 2, 'same-named batches on one source stay distinct');
+  const words = [];
+  const staged = api({ searchWitanimeDirectList: async q => { words.push(q); return { results: [raw('witanime', 1, 'Naruto Shippuden')] }; } });
+  await staged.search('Naruto Shippuden');
+  assert.ok(!words.includes('naruto'), 'single-word fallbacks wait for a full-text miss');
+  const completeCache = { success: true, data: { query: 'jojo', results: [raw('anime3rb', 1)], totalResults: 1, incompleteSources: [] } };
+  let refetched = 0;
+  const hot = api({ searchAnime4upDirectList: async () => { refetched++; return []; } }, completeCache);
+  assert.equal((await hot.search('jojo')).data.results.length, 1);
+  assert.equal(refetched, 0, 'a complete cached search answers without re-scraping');
 
   const oldCache = { success: true, data: { query: 'jojo', results: [raw('anime3rb', 1)], totalResults: 1 } };
   const cached = api({ searchAnime4upDirectList: async () => [raw('anime4up', 6)] }, oldCache);
@@ -140,7 +154,7 @@ async function checks() {
   const states = [];
   const timers = new Map();
   const ctx = { exports: {}, useCallback: fn => fn, reqSeq: { current: 0 }, modeRef: { current: 'browse' }, debounceRef: { current: null }, inputRef: { current: null },
-    setItems: rows => states.push(rows), setLoading() {}, setSearching() {}, setHasMore() {}, setIncompleteSearch() {}, setQuery() {}, setActiveGenre() {},
+    setItems: rows => states.push(rows), setLoading() {}, setSearching() {}, setStale() {}, setHasMore() {}, setIncompleteSearch() {}, setQuery() {}, setActiveGenre() {},
     loadBrowse() {}, loadGenre() {}, searchAnime: () => new Promise(resolve => { finish = resolve; }),
     setTimeout: fn => { const id = timers.size + 1; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id) };
   vm.runInNewContext(compile(callbacks) + '\nexports.actions = {doSearch, onChangeText, handleClear, handleGenre};', ctx);
@@ -163,7 +177,7 @@ async function liveCheck() {
   const result = await runtime.search('jojo');
   const counts = {};
   for (const row of result.data.results) counts[row.source] = (counts[row.source] || 0) + 1;
-  assert.ok(counts.anime4up >= 8 && counts.anime3rb >= 8, 'live JoJo franchise entries must survive aggregation');
+  assert.ok(result.data.results.length >= 8, 'live JoJo franchise entries must survive aggregation');
   for (const part of ['Part 3', 'Part 4', 'Part 5', 'Part 6']) assert.ok(result.data.results.some(row => row.title.includes(part)), `missing ${part}`);
   const opened = [];
   for (const row of result.data.results.filter(row => /stone-ocean-part-[23]/.test(row.href))) {
@@ -181,7 +195,7 @@ async function liveCheck() {
       opened.push({ source: row.source, title: row.title, episodes: episodes.length, servers: servers.length });
     }
   }
-  assert.equal(opened.length, 4, 'both previously missing Stone Ocean batches open from both sources');
+  assert.equal(opened.length, 2, 'both previously missing Stone Ocean batches open (one card each)');
   console.log(JSON.stringify({ query: 'jojo', counts, incompleteSources: result.data.incompleteSources, opened }, null, 2));
 }
 (live ? liveCheck() : checks()).catch(error => { console.error(error); process.exitCode = 1; });

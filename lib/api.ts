@@ -58,7 +58,7 @@ import {
   type MediaSubtitle,
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
-import { fuzzyScore, sourceSearchQueries } from "./fuzzy";
+import { fuzzyScore, normFuzzy, sourceSearchQueries, wordSearchFallbacks } from "./fuzzy";
 import { identifySource, type SourceId } from "./scraper/sourceDomains";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
 import { readCloudHome, writeCloudHome } from "./homeCloudCache";
@@ -1794,10 +1794,33 @@ async function searchAnimeFresh(
   cached: SearchResult[] = [],
 ): Promise<SearchPayload> {
   const startedAt = Date.now();
-  const results: SearchResult[] = cached.map((item) => ({ ...item }));
-  const seen = new Set(results.map((item) => item.href.replace(/\/$/, "")));
+  // One card per anime: the detail page already unions episodes from every
+  // source by title, so the same show from witanime + anime4up + anime3rb was
+  // three identical cards. URL keys drop the host's TLD (witanime rotates
+  // .life/.you, so cached and fresh hrefs differed); title keys only collapse
+  // ACROSS sources — one source's same-named batches stay distinct parts.
+  const urlKey = (href: string) => href.replace(/^https?:\/\/(www\.)?/i, "").replace(/^([^/]*?)\.[a-z]+(?=\/|$)/i, "$1").replace(/\/+$/, "").toLowerCase();
+  // anime3rb decorates titles ("أنمي … مترجم"); strip that on the raw text —
+  // normFuzzy's NFKD splits the hamza off أ, so a post-normalize match misses.
+  const titleKey = (title: string) => normFuzzy(title.replace(/(^|\s)(أنمي|انمي|إنمي|مترجم|مترجمة|اونلاين|أونلاين)(?=\s|$)/g, " "));
+  const results: SearchResult[] = [];
+  const seen = new Set<string>();
+  const titleSource = new Map<string, string | undefined>();
   const incomplete = new Set<SourceId>();
   let active = true;
+  let pairFound = false;
+  const accept = (item: SearchResult): boolean => {
+    const key = urlKey(item.href);
+    if (!item.title || !key || seen.has(key)) return false;
+    const tk = titleKey(item.title);
+    const source = item.source ?? identifySource(item.href) ?? undefined;
+    if (tk && titleSource.has(tk) && titleSource.get(tk) !== source) return false;
+    seen.add(key);
+    if (tk && !titleSource.has(tk)) titleSource.set(tk, source);
+    results.push(item);
+    return true;
+  };
+  for (const item of cached) accept({ ...item });
   const rank = () => {
     const scores = new Map(results.map((item) => [item.href, fuzzyScore(query, item.title)]));
     results.sort((a, b) => (scores.get(b.href) ?? 0) - (scores.get(a.href) ?? 0));
@@ -1806,27 +1829,28 @@ async function searchAnimeFresh(
   const mergeIn = (arr: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis?: string | null }[]) => {
     if (!active) return;
     let added = false;
-    for (const item of arr) {
-      // Keep alternate source links and distinct parts, even when their titles match.
-      const key = item.href.replace(/\/$/, "");
-      if (!item.title || !key || seen.has(key)) continue;
-      seen.add(key);
-      results.push(toSearchResult(item));
-      added = true;
-    }
+    for (const item of arr) if (accept(toSearchResult(item))) added = true;
     if (added) emit();
   };
   const SOURCE_MS = 60_000;
   const searchPair = async (sourceQuery: string) => {
     await Promise.all([
       withTimeout(searchWitanimeDirectList(sourceQuery).catch(() => null), SOURCE_MS, null)
-        .then((hit) => { if (hit) mergeIn(hit.results); else incomplete.add("witanime"); }),
+        .then((hit) => { if (hit) { if (hit.results.length) pairFound = true; mergeIn(hit.results); } else incomplete.add("witanime"); }),
       withTimeout(searchAnime4upDirectList(sourceQuery).catch(() => null), SOURCE_MS, null)
-        .then((hit) => { if (hit) mergeIn(hit); else incomplete.add("anime4up"); }),
+        .then((hit) => { if (hit) { if (hit.length) pairFound = true; mergeIn(hit); } else incomplete.add("anime4up"); }),
     ]);
   };
+  // Full text + its normalized spelling first. The single-word fallbacks
+  // ("naruto", "shippuden") only run when those found nothing: firing all six
+  // variants per source at once flooded the grid with loose word matches and
+  // queued ~12 page loads (some through the serial WebView) per keystroke.
+  const wordSet = new Set(wordSearchFallbacks(query));
+  const plan = sourceSearchQueries(query);
+  const primary = plan.filter((q) => !wordSet.has(q.toLowerCase()));
+  const words = plan.filter((q) => wordSet.has(q.toLowerCase()));
   await Promise.all([
-    ...sourceSearchQueries(query).map(searchPair),
+    Promise.all(primary.map(searchPair)).then(() => (pairFound ? undefined : Promise.all(words.map(searchPair)))),
     withTimeout(searchAnime3rbDirectList(query, (card) => mergeIn([card])).catch(() => null), SOURCE_MS, null)
       .then((hit) => { if (hit) mergeIn(hit); else incomplete.add("anime3rb"); }),
   ]);
@@ -1867,6 +1891,9 @@ export async function searchAnime(
   const key = SEARCH_CACHE_PREFIX + query.toLowerCase();
   const cached = await readCache<SearchPayload>(key, SEARCH_CACHE_TTL);
   if (cached?.data.results.length) onPartial?.(cached.data.results);
+  // A complete search from the last 15 min is answered instantly — re-scraping
+  // three sites for the same query (back-navigation, retyping) was pure wait.
+  if (cached?.data.results.length && cached.data.incompleteSources?.length === 0) return cached;
   // Cached partial searches must refresh this screen, not just tomorrow's disk cache.
   const data = await searchRequests.run(key, () => searchAnimeFresh(query, onPartial, cached?.data.results));
   if (data.data.results.length > 0) void writeCache(key, data);

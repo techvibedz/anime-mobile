@@ -15,7 +15,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { normAnimeKey, animeTitleKey, getCompletedSets, subscribeHistory } from "./history";
-import { matchingRecords, sameSource } from "./completionMatch";
+import { matchingRecords, sameSource, isBlobRecord } from "./completionMatch";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 import { createRequestCache, withTimeout } from "./requestCache";
 import { pruneCacheStorage } from "./storageMaintenance";
@@ -53,6 +53,17 @@ function uniq(arr: (string | null | undefined)[]): string[] {
 // whole map from AsyncStorage (and the provider's refresh re-parsed it again on
 // every change event). All writes go through saveCompletionMap.
 let completionCache: Record<string, AnimeCompletion> | null = null;
+
+/** Reset a blob record (see isBlobRecord) to its own identity — the page its
+ *  key names — with a cleared state the next detail visit / feed reconcile
+ *  recomputes from history. Its badge state mixed several anime, so it can't be
+ *  trusted. Returns null when the record is fine. */
+function repairBlob(rec: AnimeCompletion): AnimeCompletion | null {
+  if (!isBlobRecord(rec, normAnimeKey, animeTitleKey)) return null;
+  const own = normAnimeKey(rec.key);
+  const hrefs = rec.hrefs.filter((h) => normAnimeKey(h) === own);
+  return { key: rec.key, hrefs: hrefs.length ? hrefs : [rec.key], titles: [], lastEpNum: 0, caughtUp: false, finished: false, updatedAt: Date.now() };
+}
 let completionLoading: Promise<Record<string, AnimeCompletion>> | null = null;
 
 export async function getCompletionMap(): Promise<Record<string, AnimeCompletion>> {
@@ -60,7 +71,17 @@ export async function getCompletionMap(): Promise<Record<string, AnimeCompletion
   if (!completionLoading) completionLoading = (async () => {
     try {
       const raw = await AsyncStorage.getItem(KEY);
-      completionCache = raw ? JSON.parse(raw) : {};
+      const map: Record<string, AnimeCompletion> = raw ? JSON.parse(raw) : {};
+      const repaired: AnimeCompletion[] = [];
+      for (const rec of Object.values(map)) {
+        const fixed = repairBlob(rec);
+        if (fixed) { map[rec.key] = fixed; repaired.push(fixed); }
+      }
+      completionCache = map;
+      if (repaired.length) {
+        void saveCompletionMap(map);
+        for (const rec of repaired) pushToCloud(rec).catch(() => {});
+      }
     } catch {
       completionCache = {};
     }
@@ -132,6 +153,9 @@ export async function recordAnimeCompletion(rec: {
   lastEpNum: number;
   caughtUp: boolean;
   finished?: boolean;
+  /** History has an entry (watched or not) for the last episode. False = it
+   *  aged out of the capped local history, which must not erase the badge. */
+  lastTracked?: boolean;
 }): Promise<void> {
   const hrefs = uniq(rec.hrefs);
   const titles = uniq(rec.titles);
@@ -144,16 +168,24 @@ export async function recordAnimeCompletion(rec: {
   // vs anime4up, "III" vs "Ⅲ") with its own caughtUp state — a card resolving
   // the stale copy then showed no badge although the finale was watched.
   const matches = matchCompletionRecords(map, hrefs, titles);
-  const existing = matches.sort((a, b) => b.lastEpNum - a.lastEpNum || b.updatedAt - a.updatedAt)[0];
-  const key = existing?.key ?? (normAnimeKey(hrefs[0]) || animeTitleKey(titles[0]));
+  const anchor = normAnimeKey(hrefs[0] || "") || animeTitleKey(titles[0]);
+  // This page's own record: the copy keyed by its href (any TLD, or the legacy
+  // full-URL key), else the best existing copy, else a new one.
+  const existing = matches.find((r) => normAnimeKey(r.key) === anchor) ??
+    [...matches].sort((a, b) => b.lastEpNum - a.lastEpNum || b.updatedAt - a.updatedAt)[0];
+  const key = existing?.key ?? anchor;
   if (!key) return;
-  const prev = existing ?? map[key];
-  const next: AnimeCompletion = {
-    key,
-    // The detail page's own href goes FIRST: hrefs[0] is the anchor source whose
-    // feed items may move lastEpNum (reconcileCompletionFromEpisodes).
-    hrefs: uniq([...hrefs, ...matches.flatMap((r) => r.hrefs)]),
-    titles: uniq([...matches.flatMap((r) => r.titles), ...titles]),
+  const prev = existing;
+  // Local history keeps only the newest MAX_ITEMS episodes: an anime finished
+  // months ago no longer shows its finale as watched, and re-recording false
+  // over the good record made its badge vanish for good. Keep the durable mark
+  // of any copy at this same episode count unless history explicitly knows the
+  // finale (watched or unmarked).
+  const durable = rec.lastTracked === false && !rec.caughtUp
+    ? matches.find((r) => r.lastEpNum === rec.lastEpNum && r.caughtUp)
+    : undefined;
+  if (durable) rec = { ...rec, caughtUp: true, finished: rec.finished ?? durable.finished };
+  const state = {
     // The detail page is authoritative: it records the episode list the user
     // actually sees. Keeping a higher stored number (a feed item from another
     // source, a different numbering) made the badge impossible to ever earn —
@@ -162,21 +194,33 @@ export async function recordAnimeCompletion(rec: {
     lastEpNum: rec.lastEpNum,
     caughtUp: rec.caughtUp,
     finished: rec.caughtUp && (rec.finished ?? (prev?.lastEpNum === rec.lastEpNum && !!prev.finished)),
+  };
+  const next: AnimeCompletion = {
+    key,
+    // Only THIS record's own hrefs/titles plus the page's. Unioning every
+    // match's identity into every match snowballed one bad link into a blob of
+    // unrelated anime (One Piece + Mushoku Tensei shared one badge state).
+    // The page's href goes FIRST: hrefs[0] is the anchor source whose feed
+    // items may move lastEpNum (reconcileCompletionFromEpisodes).
+    hrefs: uniq([...hrefs, ...(existing?.hrefs || [])]),
+    titles: uniq([...(existing?.titles || []), ...titles]),
+    ...state,
     updatedAt: Date.now(),
   };
-  if (matches.length && matches.every((r) =>
-    r.caughtUp === next.caughtUp && r.finished === next.finished && r.lastEpNum === next.lastEpNum &&
-    r.hrefs[0] === next.hrefs[0] &&
-    r.hrefs.length === next.hrefs.length && r.titles.length === next.titles.length)) {
+  const sameState = (r: AnimeCompletion) =>
+    r.caughtUp === state.caughtUp && r.finished === state.finished && r.lastEpNum === state.lastEpNum;
+  if (existing && matches.every(sameState) && existing.hrefs[0] === next.hrefs[0] &&
+    existing.hrefs.length === next.hrefs.length && existing.titles.length === next.titles.length) {
     if (rec.finished === undefined && next.caughtUp && !next.finished)
       void confirmFinished(map, matches, titles[0] || next.titles[0], next.lastEpNum);
     return;
   }
-  for (const match of matches) map[match.key] = { ...next, key: match.key };
+  // Other copies of this anime (other source keys) take the state only.
+  for (const match of matches) if (match.key !== key) map[match.key] = { ...match, ...state, updatedAt: next.updatedAt };
   map[key] = next;
   await saveCompletionMap(map);
   notify();
-  const updated = matches.length ? matches.map((r) => map[r.key]) : [next];
+  const updated = [next, ...matches.filter((r) => r.key !== key).map((r) => map[r.key])];
   for (const changed of updated) pushToCloud(changed).catch(() => {});
   if (rec.finished === undefined && next.caughtUp && !next.finished)
     void confirmFinished(map, updated, titles[0] || next.titles[0], next.lastEpNum);
@@ -194,7 +238,7 @@ export async function pullCompletionFromCloud(): Promise<void> {
   if (!data) return;
   const map = await getCompletionMap();
   for (const row of data as any[]) {
-    const cloud: AnimeCompletion = {
+    let cloud: AnimeCompletion = {
       key: row.anime_key,
       hrefs: Array.isArray(row.hrefs) ? row.hrefs : [],
       titles: Array.isArray(row.titles) ? row.titles : [],
@@ -203,6 +247,15 @@ export async function pullCompletionFromCloud(): Promise<void> {
       finished: !!row.finished,
       updatedAt: new Date(row.updated_at).getTime(),
     };
+    const repaired = repairBlob(cloud);
+    if (repaired) {
+      // Never let a blob back in: a repaired local copy wins, else store the repair.
+      if (map[cloud.key] && !isBlobRecord(map[cloud.key], normAnimeKey, animeTitleKey)) cloud = { ...map[cloud.key] };
+      else cloud = repaired;
+      map[cloud.key] = cloud;
+      pushToCloud(cloud).catch(() => {});
+      continue;
+    }
     const local = map[cloud.key];
     // Newest write wins, but keep the union of known hrefs/titles either way.
     if (!local || (cloud.updatedAt >= local.updatedAt && cloud.lastEpNum >= local.lastEpNum)) {
@@ -273,11 +326,7 @@ export async function reconcileCompletionFromEpisodes(
       index(rec);
       recs = [rec];
     }
-    // Only a feed item from the anchor source (hrefs[0] — the detail page's own
-    // source) may move the episode number; another source's numbering inflated
-    // lastEpNum past the list the detail page shows. See sameSource.
     const itemKey = normAnimeKey(it.animeHref || "");
-    const canRaise = recs.some((rec) => sameSource(itemKey, normAnimeKey(rec.hrefs[0] || "")));
     // Update EVERY copy, not just the first — duplicate records otherwise keep
     // a stale state, and a card resolving the stale copy never shows the badge.
     for (const rec of recs) {
@@ -288,7 +337,10 @@ export async function reconcileCompletionFromEpisodes(
         index(map[rec.key]);
         changed = true;
       }
-      if (!canRaise) continue;
+      // Only a feed item from this copy's anchor source (hrefs[0] — the detail
+      // page's own source) may move its episode number; another source's
+      // numbering inflated lastEpNum past the list the detail page shows.
+      if (!sameSource(itemKey, normAnimeKey(rec.hrefs[0] || ""))) continue;
       const cur = newestByKey.get(rec.key) || 0;
       if (it.epNum > cur) newestByKey.set(rec.key, it.epNum);
     }
@@ -431,20 +483,33 @@ export interface CompletionLookup {
   }): AnimeCompletion | null;
 }
 
-function buildLookup(map: Record<string, AnimeCompletion>): CompletionLookup {
+export function buildLookup(map: Record<string, AnimeCompletion>): CompletionLookup {
   const byHref = new Map<string, AnimeCompletion>();
   const byTitle = new Map<string, AnimeCompletion>();
+  // A record "owns" the page it was recorded from (its key / anchor hrefs[0]).
+  // A card resolves its own page's record first: another source's copy that
+  // merely lists this href (added by a title match) runs on that source's
+  // numbering and must not override it.
+  const byAnchor = new Map<string, AnimeCompletion>();
   // Index by the TLD-stable anime key + decoration-folded title so a badge
   // resolves regardless of which rotating witanime TLD (.life/.you) or which
   // source's decorated title a card carries vs. what was recorded.
-  for (const rec of Object.values(map).sort((a, b) => a.lastEpNum - b.lastEpNum || a.updatedAt - b.updatedAt)) {
+  // Later entries win a slot: higher episode count first, then — at the same
+  // count — a caught-up/finished copy over an unmarked duplicate (a stub or an
+  // eviction artifact), then the newest write.
+  const rank = (r: AnimeCompletion) => (r.finished ? 2 : r.caughtUp ? 1 : 0);
+  for (const rec of Object.values(map).sort((a, b) => a.lastEpNum - b.lastEpNum || rank(a) - rank(b) || a.updatedAt - b.updatedAt)) {
     for (const h of rec.hrefs) { const key = normAnimeKey(h); if (key) byHref.set(key, rec); }
+    for (const h of [rec.key, rec.hrefs[0]]) { const key = normAnimeKey(h || ""); if (key) byAnchor.set(key, rec); }
     for (const tt of rec.titles) { const key = animeTitleKey(tt); if (key) byTitle.set(key, rec); }
   }
   return {
     byHref,
     byTitle,
     get({ hrefs, titles }) {
+      for (const h of hrefs || []) {
+        if (h) { const r = byAnchor.get(normAnimeKey(h)); if (r) return r; }
+      }
       for (const h of hrefs || []) {
         if (h) { const r = byHref.get(normAnimeKey(h)); if (r) return r; }
       }

@@ -45,3 +45,20 @@ export function sameSource(a: string, b: string): boolean {
   const sb = b.split("/")[0];
   return !sa || !sb || sa === sb;
 }
+
+/**
+ * A record whose hrefs/titles span several DIFFERENT anime — the residue of the
+ * old "union every match into every match" write, which snowballed one bad
+ * link into a blob (One Piece + Mushoku Tensei sharing one badge state). A real
+ * record has one page per source (witanime / anime4up / anime3rb, TLDs fold
+ * away) and a couple of title spellings; measured max on real data: 3 / 2.
+ */
+export function isBlobRecord(
+  rec: CompletionLike,
+  normalizeHref: (value: string) => string,
+  normalizeTitle: (value: string) => string,
+): boolean {
+  const slugs = new Set(rec.hrefs.map((h) => normalizeHref(h).split("/").pop() || "").filter(Boolean));
+  const titles = new Set(rec.titles.map(normalizeTitle).filter(Boolean));
+  return slugs.size >= 5 || titles.size >= 4;
+}

@@ -2,7 +2,7 @@
 // shows no badge" path. Run:  npx tsx lib/completionMatch.test.ts
 
 import assert from "node:assert";
-import { matchingRecords, sameSource } from "./completionMatch";
+import { matchingRecords, sameSource, isBlobRecord } from "./completionMatch";
 
 const rec = (name: string, hrefs: string[], titles: string[]) => ({ name, hrefs, titles });
 const names = (records: { name: string }[]) => records.map((r) => r.name);
@@ -44,5 +44,13 @@ assert.deepEqual(matchingRecords([rec("other", ["h9"], ["t9"])], keys("h1"), key
 assert.equal(sameSource("witanime/anime/x", "witanime/anime/y"), true);
 assert.equal(sameSource("anime4up/anime/x", "witanime/anime/x"), false);
 assert.equal(sameSource("", "witanime/anime/x"), true);
+
+// Blob detection: the real One Piece/Mushoku residue vs a normal 3-source record.
+const id = (v: string) => v;
+assert.equal(isBlobRecord({ hrefs: ["w/anime/x", "a/anime/x-tv", "r/titles/x"], titles: ["x", "x 2nd"] }, id, id), false);
+assert.equal(isBlobRecord({
+  hrefs: ["w/anime/mushoku-iii", "w/anime/mushoku", "w/anime/one-piece", "a/anime/one-piece-gfjgfh", "w/anime/one-piece-heroines", "w/anime/eris"],
+  titles: ["mushoku iii", "one piece", "one piece heroines", "mushoku", "eris"],
+}, id, id), true);
 
 console.log("completionMatch.test.ts — all assertions passed");

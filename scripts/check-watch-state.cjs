@@ -51,9 +51,16 @@ function load(file) {
     { key: 'old-wit-key', hrefs: ['https://witanime.life/anime/test/'], titles: ['Test Anime'] },
     { key: 'old-up4-key', hrefs: ['https://anime4up.com/anime/test'], titles: ['أنمي Test Anime مترجم'] },
   ].map(rec => ({ ...rec, lastEpNum: 12, caughtUp: true, finished: true, updatedAt: 1 }));
-  storage.set('anime_completion_v2', JSON.stringify(Object.fromEntries(copies.map(rec => [rec.key, rec]))));
+  // Residue of the old union-every-match write: one record mixing five anime.
+  const blob = { key: 'witanime/anime/one-piece', lastEpNum: 1180, caughtUp: true, finished: true, updatedAt: 1,
+    hrefs: ['mushoku-iii', 'mushoku', 'one-piece', 'one-piece-gfjgfh', 'one-piece-heroines', 'eris'].map(s => `https://witanime.you/anime/${s}/`),
+    titles: ['Mushoku Tensei III', 'One Piece', 'One Piece: Heroines', 'Mushoku Tensei', 'Eris no Goblin Toubatsu'] };
+  storage.set('anime_completion_v2', JSON.stringify(Object.fromEntries([...copies, blob].map(rec => [rec.key, rec]))));
   const c = load('lib/completion.tsx');
   assert.equal(await c.countCompletedAnime(), 1, 'legacy source copies count as one completed anime');
+  const repairedBlob = (await c.getCompletionMap())[blob.key];
+  assert.deepEqual([repairedBlob.hrefs, repairedBlob.titles, repairedBlob.caughtUp], [['https://witanime.you/anime/one-piece/'], [], false], 'blob record is reset to its own page');
+  delete (await c.getCompletionMap())[blob.key];
   const meta = { episodeTitle: 'episode 12', animeTitle: 'Test Anime', animeHref: 'https://witanime.you/anime/test', epNum: 12 };
   const entry = { ...meta, episodeHref: 'https://anime3rb.com/episode/test/12', image: '', positionMs: 95000, durationMs: 100000, updatedAt: 1 };
   storage.set('watch_history', JSON.stringify([entry, { ...entry, episodeHref: 'https://anime4up.com/episode/test-12', completed: true }]));
@@ -76,7 +83,10 @@ function load(file) {
   await c.reconcileCompletionFromEpisodes([meta]);
   assert.equal(Object.values(await c.getCompletionMap())[0].caughtUp, true);
   await c.reconcileCompletionFromEpisodes([{ ...meta, epNum: 13 }]);
-  assert.ok(Object.values(await c.getCompletionMap()).every(rec => !rec.caughtUp && !rec.finished), 'new episode clears EVERY raw/source copy');
+  // Each copy follows its own source's numbering: the witanime item clears the
+  // witanime copy, and the lookup shows the copy with the higher episode count.
+  assert.equal((await c.getCompletionMap())['old-wit-key'].caughtUp, false, 'new episode clears the copy on its source');
+  assert.equal(c.buildLookup(await c.getCompletionMap()).get({ hrefs: [meta.animeHref], titles: [meta.animeTitle] }).caughtUp, false, 'card shows the cleared copy');
   assert.equal(Object.keys(await c.getCompletionMap()).length, 2, 'normalized matching reuses existing records');
   await c.recordAnimeCompletion({ hrefs: [meta.animeHref], titles: [meta.animeTitle], lastEpNum: 12, caughtUp: true, finished: true });
   // The detail page is authoritative over the list it shows: a stored higher
@@ -84,11 +94,14 @@ function load(file) {
   // after reopening the page). A real newer episode re-raises it via the feed.
   assert.ok(Object.values(await c.getCompletionMap()).every(rec => rec.lastEpNum === 12 && rec.caughtUp), 'detail page repairs an inflated episode number');
   await c.reconcileCompletionFromEpisodes([{ ...meta, epNum: 13 }]);
-  assert.ok(Object.values(await c.getCompletionMap()).every(rec => rec.lastEpNum === 13 && !rec.caughtUp), 'anchor-source new episode clears it again');
+  const m13 = await c.getCompletionMap();
+  assert.ok(m13['old-wit-key'].lastEpNum === 13 && !m13['old-wit-key'].caughtUp, 'anchor-source new episode clears it again');
   await c.recordAnimeCompletion({ hrefs: [meta.animeHref, 'https://anime4up.com/anime/test'], titles: [meta.animeTitle], lastEpNum: 13, caughtUp: true, finished: true });
   // anime4up numbers/uploads differently from the witanime list the detail page anchors on.
   await c.reconcileCompletionFromEpisodes([{ animeHref: 'https://anime4up.com/anime/test', animeTitle: meta.animeTitle, epNum: 25 }]);
-  assert.ok(Object.values(await c.getCompletionMap()).every(rec => rec.lastEpNum === 13 && rec.caughtUp), 'another source\'s number cannot inflate lastEpNum');
+  const m25 = await c.getCompletionMap();
+  assert.ok(m25['old-wit-key'].lastEpNum === 13 && m25['old-wit-key'].caughtUp, 'another source\'s number cannot inflate lastEpNum');
+  assert.equal(c.buildLookup(m25).get({ hrefs: [meta.animeHref], titles: [meta.animeTitle] }).caughtUp, true, 'witanime card keeps its badge');
 
   // Title-key folding: spellings that previously produced different keys must
   // now produce the same key (Latin diacritics, Arabic hamza/taa-marbuta/
@@ -97,6 +110,18 @@ function load(file) {
   assert.equal(h.animeTitleKey('النمر الأسود'), h.animeTitleKey('النمر الاسود'));
   assert.equal(h.animeTitleKey('مُشاهدة أنمي'), h.animeTitleKey('مشاهدة انمي'));
   assert.equal(h.animeTitleKey('الموسم ٢'), h.animeTitleKey('الموسم 2'));
+  // Episode-page scrapes glue the episode label onto the anime title.
+  assert.equal(h.animeTitleKey('Tokyo Revengers: Tenjiku-hen\n      الحلقة 5'), h.animeTitleKey('Tokyo Revengers: Tenjiku-hen'));
+
+  // The finale aged out of the capped local history (MAX_ITEMS): reopening the
+  // detail page must not erase the durable mark, and a caught-up copy must win
+  // the lookup over an unmarked duplicate at the same episode count.
+  const aged = { hrefs: ['https://witanime.you/anime/aged'], titles: ['Aged Anime'], lastEpNum: 16 };
+  await c.recordAnimeCompletion({ ...aged, caughtUp: true, finished: true });
+  await c.recordAnimeCompletion({ ...aged, caughtUp: false, lastTracked: false });
+  assert.equal((await c.getCompletionMap())['witanime/anime/aged'].caughtUp, true, 'aged-out finale keeps its badge');
+  await c.recordAnimeCompletion({ ...aged, caughtUp: false, lastTracked: true });
+  assert.equal((await c.getCompletionMap())['witanime/anime/aged'].caughtUp, false, 'explicit unmark still clears it');
 
   // The player can establish the badge on the finale when no record exists yet
   // (opened from a rail, detail page never visited) — only when the opener said

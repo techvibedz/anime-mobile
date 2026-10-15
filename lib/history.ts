@@ -498,7 +498,11 @@ export function animeTitleKey(s: string | null | undefined): string {
   // that different sources' scrapes produce for the SAME anime.
   // Decoration tokens are still filtered on the folded tokens; the set carries
   // both hamza spellings of each word.
+  // Episode-page scrapes sometimes glue the episode label onto the anime title
+  // ("Tokyo Revengers: Tenjiku-hen\n الحلقة 5") — drop it so that watch still
+  // counts for the anime.
   const key = raw
+    .replace(/\s*الحلقة\s*[0-9٠-٩]+[\s\S]*$/, "")
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[\u064B-\u0655\u0640\u0670]/g, "")
@@ -575,6 +579,9 @@ export interface CompletedSets {
   knownTitles: Set<string>;
   /** Includes unwatched entries, so an explicit unmark differs from eviction. */
   knownNumbersByTitle: Map<string, Set<number>>;
+  /** Normalized hrefs of EVERY history entry (watched or not) — with
+   *  knownNumbersByTitle, tells "unwatched" apart from "aged out of history". */
+  knownHrefs: Set<string>;
 }
 
 export async function getCompletedSets(): Promise<CompletedSets> {
@@ -583,7 +590,10 @@ export async function getCompletedSets(): Promise<CompletedSets> {
   const numbersByTitle = new Map<string, Set<number>>();
   const knownTitles = new Set<string>();
   const knownNumbersByTitle = new Map<string, Set<number>>();
+  const knownHrefs = new Set<string>();
   for (const e of list) {
+    knownHrefs.add(normHref(e.episodeHref));
+    knownHrefs.add(normAnimeKey(e.episodeHref));
     const tkAll = animeTitleKey(e.animeTitle);
     const n = deriveEpNum(e);
     if (tkAll) knownTitles.add(tkAll);
@@ -602,7 +612,7 @@ export async function getCompletedSets(): Promise<CompletedSets> {
       set.add(n);
     }
   }
-  return { hrefs, numbersByTitle, knownTitles, knownNumbersByTitle };
+  return { hrefs, numbersByTitle, knownTitles, knownNumbersByTitle, knownHrefs };
 }
 
 /** True if an episode is watched by EITHER a same-source href match OR a
@@ -617,6 +627,18 @@ export function isEpisodeWatched(
     if (set && set.has(opts.epNum)) return true;
   }
   return false;
+}
+
+/** True if history has ANY entry (watched or not) for this episode. False means
+ *  the history simply doesn't know it — local history keeps only the newest
+ *  MAX_ITEMS episodes, so an old finale ages out and must not read as unwatched. */
+export function isEpisodeTracked(
+  sets: CompletedSets,
+  opts: { hrefs: (string | null | undefined)[]; epNum?: number | null; animeTitle?: string | null },
+): boolean {
+  if (opts.hrefs.some((h) => h && (sets.knownHrefs.has(normHref(h)) || sets.knownHrefs.has(normAnimeKey(h))))) return true;
+  return opts.epNum != null && !!opts.animeTitle &&
+    !!sets.knownNumbersByTitle.get(animeTitleKey(opts.animeTitle))?.has(opts.epNum);
 }
 
 /**

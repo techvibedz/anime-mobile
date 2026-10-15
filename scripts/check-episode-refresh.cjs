@@ -156,7 +156,7 @@ async function screenChecks() {
   const recordHook = screen.body.statements.find(n => ts.isExpressionStatement(n) && n.expression.expression?.getText(ast) === 'useEffect' && n.getText(ast).includes('recordAnimeCompletion'));
   const records = [];
   const recordContext = { exports: {}, useEffect: fn => { recordContext.cleanup = fn(); },
-    data: detail(12), animeHref: url, maxNum: 12, setsLoaded: true, caughtUp: true, merged: null,
+    data: detail(12), animeHref: url, maxNum: 12, setsLoaded: true, caughtUp: true, lastTracked: true, merged: null,
     recordAnimeCompletion: async rec => records.push(rec) };
   evaluate(recordHook.getText(ast), recordContext);
   await tick();

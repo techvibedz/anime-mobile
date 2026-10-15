@@ -25,7 +25,7 @@ import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, fetchWitanimeSe
 import type { AnimeDetail, Episode, RelatedAnimeCard } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
-import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, subscribeHistory, type CompletedSets } from "../../lib/history";
+import { getCompletedSets, isEpisodeWatched, isEpisodeTracked, animeTitleKey, normHref, toggleWatched, subscribeHistory, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
 import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, peekMalRating } from "../../lib/animeInfo";
@@ -83,7 +83,7 @@ export default function AnimeDetailScreen() {
   // Completed-episode index (across all anime). Carries both per-href matches
   // (same source) and per-anime episode-number matches (cross source), so a
   // "watched" badge shows regardless of which source the episode was played in.
-  const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map(), knownTitles: new Set(), knownNumbersByTitle: new Map() });
+  const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map(), knownTitles: new Set(), knownNumbersByTitle: new Map(), knownHrefs: new Set() });
   // True once the first getCompletedSets() has resolved. The completion-record
   // effect below must wait for it — running against the initial EMPTY set wrote
   // caughtUp:false over a good record whenever the episode payload landed first.
@@ -268,23 +268,24 @@ export default function AnimeDetailScreen() {
   // recording effect below depends only on these PRIMITIVES — not the `completed`
   // object (which gets a new reference on every focus) — so toggling any
   // non-final episode no longer re-fires the AniList airing check.
-  const { maxNum, caughtUp } = useMemo(() => {
-    if (!data) return { maxNum: 0, caughtUp: false };
+  const { maxNum, caughtUp, lastTracked } = useMemo(() => {
+    if (!data) return { maxNum: 0, caughtUp: false, lastTracked: false };
     const all = [...data.episodes, ...trusted.up4, ...trusted.a3rb];
     let mx = 0;
     let hasNum = false;
     for (const e of all) {
       if (e.number != null && e.number > mx) { mx = e.number; hasNum = true; }
     }
-    if (!hasNum) return { maxNum: 0, caughtUp: false };
+    if (!hasNum) return { maxNum: 0, caughtUp: false, lastTracked: false };
     const lastHrefs = all.filter((e) => e.number === mx).map((e) => e.href);
-    return { maxNum: mx, caughtUp: isEpisodeWatched(completed, { hrefs: lastHrefs, epNum: mx, animeTitle: data.title }) };
+    const last = { hrefs: lastHrefs, epNum: mx, animeTitle: data.title };
+    return { maxNum: mx, caughtUp: isEpisodeWatched(completed, last), lastTracked: isEpisodeTracked(completed, last) };
   }, [data, trusted, completed]);
 
   useEffect(() => {
     if (!data || !animeHref || maxNum === 0 || !setsLoaded) return;
-    void recordAnimeCompletion({ hrefs: [animeHref, merged?.anime4up], titles: [data.title], lastEpNum: maxNum, caughtUp }).catch(() => {});
-  }, [data?.title, animeHref, merged?.anime4up, maxNum, caughtUp, setsLoaded]);
+    void recordAnimeCompletion({ hrefs: [animeHref, merged?.anime4up], titles: [data.title], lastEpNum: maxNum, caughtUp, lastTracked }).catch(() => {});
+  }, [data?.title, animeHref, merged?.anime4up, maxNum, caughtUp, lastTracked, setsLoaded]);
 
   const handleToggleWatched = useCallback(async (ep: GridEpisode) => {
     // Use whichever source href exists so source-only episodes (no witanime

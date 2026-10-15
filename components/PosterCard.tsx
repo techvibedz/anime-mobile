@@ -163,18 +163,25 @@ export const PosterCard = memo(function PosterCard({
           <Text style={s.rank}>{rank}</Text>
         )}
 
-        {/* NEW badge — top-left, reserved spot. */}
-        {newBadge && (
-          <View style={s.newBadge}>
-            <Text style={s.newBadgeText}>{t.newBadge}</Text>
+        {/* Slot furniture — each corner pair shares one wrapping row so the
+            pills can never overlap on narrow (3-column) cards; when both don't
+            fit, the left one drops to its own line instead. */}
+        {!row && (newBadge || topLeft || topRight) ? (
+          <View style={[s.slotRow, s.topRow]} pointerEvents="box-none">
+            {topRight ? <View style={s.slot}>{topRight}</View> : null}
+            {newBadge ? (
+              <View style={[s.slot, s.slotLeft, s.newBadge]}>
+                <Text style={s.newBadgeText}>{t.newBadge}</Text>
+              </View>
+            ) : topLeft ? <View style={[s.slot, s.slotLeft]}>{topLeft}</View> : null}
           </View>
-        )}
-
-        {/* Slot furniture */}
-        {!row && topLeft && !newBadge ? <View style={s.topLeft}>{topLeft}</View> : null}
-        {!row && topRight ? <View style={s.topRight}>{topRight}</View> : null}
-        {!row && bottomLeft ? <View style={s.bottomLeft}>{bottomLeft}</View> : null}
-        {!row && bottomRight ? <View style={s.bottomRight}>{bottomRight}</View> : null}
+        ) : null}
+        {!row && (bottomLeft || bottomRight) ? (
+          <View style={[s.slotRow, s.bottomRow]} pointerEvents="box-none">
+            {bottomRight ? <View style={s.slot}>{bottomRight}</View> : null}
+            {bottomLeft ? <View style={[s.slot, s.slotLeft]}>{bottomLeft}</View> : null}
+          </View>
+        ) : null}
         {centerOverlay ? <View style={s.center}>{centerOverlay}</View> : null}
         {!row ? footer : null}
         {!row ? gridTitle : null}
@@ -276,7 +283,6 @@ const s = StyleSheet.create({
 
   // NEW badge — top-left reserved spot (clears the rank).
   newBadge: {
-    position: "absolute", top: 8, left: 8, zIndex: 4,
     backgroundColor: C.ember,
     borderRadius: R.xs, paddingHorizontal: 7, paddingVertical: 3,
   },
@@ -286,10 +292,17 @@ const s = StyleSheet.create({
   },
 
   // Slot anchors
-  topLeft: { position: "absolute", top: 8, left: 8, zIndex: 3 },
-  topRight: { position: "absolute", top: 8, right: 8, zIndex: 3 },
-  bottomLeft: { position: "absolute", bottom: GRID_TITLE_BAND + 8, left: 8, zIndex: 3 },
-  bottomRight: { position: "absolute", bottom: GRID_TITLE_BAND + 8, right: 8, zIndex: 3 },
+  // row-reverse puts the first child (right slot) on the right; direction ltr
+  // stops Arabic-locale devices flipping it. Margins, not gap (Yoga bug with
+  // gap + row-reverse).
+  slotRow: {
+    position: "absolute", left: 6, right: 6, zIndex: 3,
+    direction: "ltr", flexDirection: "row-reverse", flexWrap: "wrap",
+  },
+  topRow: { top: 6, alignItems: "flex-start" },
+  bottomRow: { bottom: GRID_TITLE_BAND + 6, alignItems: "flex-end" },
+  slot: { margin: 2, maxWidth: "100%" },
+  slotLeft: { marginRight: "auto" }, // keeps left slots left, alone or wrapped
   center: {
     ...ABSOLUTE_FILL,
     alignItems: "center", justifyContent: "center",

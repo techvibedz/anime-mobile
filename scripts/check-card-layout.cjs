@@ -139,7 +139,9 @@ const theme = loadUi("lib/theme.ts", {});
   const longTitle = "A very long anime title that must not expand the entire grid row";
   const posterSource = fs.readFileSync("components/PosterCard.tsx", "utf8");
   assert(posterSource.includes("export const GRID_TITLE_BAND"), "the overlaid title band must be a shared constant for callers");
-  assert(posterSource.includes("bottom: GRID_TITLE_BAND + 8"), "bottom badges must clear the overlaid title");
+  // Row at +6 plus each slot's 2px margin = pills 8px above the title.
+  assert(posterSource.includes("bottom: GRID_TITLE_BAND + 6") && posterSource.includes("slot: { margin: 2"), "bottom badges must clear the overlaid title");
+  assert(posterSource.includes('flexWrap: "wrap"') && !/topRight: \{ position: "absolute"/.test(posterSource), "corner badges must share a wrapping row so they never overlap");
   let presses = 0;
   for (const layout of ["compact", "comfortable", "list"]) {
     const tree = card.PosterCard({ title: longTitle, subtitle: "TV", image: "poster", width: 108, layout, onPress: () => presses++ });

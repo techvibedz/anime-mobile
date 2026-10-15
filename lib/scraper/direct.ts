@@ -14,7 +14,7 @@ import type { RawServer } from "./index";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
-import { fuzzyScore } from "../fuzzy";
+import { fuzzyScore, normFuzzy, sourceSearchQueries } from "../fuzzy";
 import { remoteLog } from "../remoteLog";
 import { classifyProvider, classifyProviderWithName, probeMediaUrl, videoPlaybackHeaders, VIDEO_USER_AGENT as BROWSER_UA } from "../videoProviders";
 import {
@@ -24,12 +24,14 @@ import {
   identifySource,
   isRetryableSourceStatus,
   isValidSourceHtml,
+  looksLikeCfChallenge,
   markSourceHealthy,
   rewriteToCandidate,
   SOURCE_DOMAINS,
 } from "./sourceDomains";
 
 export { classifyProvider } from "../videoProviders";
+export { looksLikeCfChallenge } from "./sourceDomains";
 
 const UP4_BASE = "https://w1.anime4up.rest";
 const A3RB_BASE = "https://anime3rb.com";
@@ -149,12 +151,18 @@ export async function fetchHtml(
   attemptTimeouts: readonly number[] = FETCH_ATTEMPT_TIMEOUTS,
   extraHeaders?: Record<string, string>,
 ): Promise<string | null> {
-  const ATTEMPTS = attemptTimeouts.length;
+  if (!attemptTimeouts.length) return null;
   const candidates = await getSourceCandidates(url);
+  const ATTEMPTS = Math.max(attemptTimeouts.length, candidates.length);
+  const deadline = Date.now() + Math.max(attemptTimeouts.reduce((sum, ms) => sum + ms, 0), attemptTimeouts[0] * candidates.length);
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const attemptUrl = candidateForAttempt(candidates, attempt);
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), attemptTimeouts[attempt - 1]);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return null;
+    // A fast-path call still tries every configured mirror inside its budget.
+    const timeoutMs = Math.min(attemptTimeouts[Math.min(attempt - 1, attemptTimeouts.length - 1)], remaining);
+    const t = setTimeout(() => controller.abort(), timeoutMs);
     // 429/503 mean "too fast": honour Retry-After and step back harder than the
     // generic 600ms, otherwise the retry lands in the same rate-limit window and
     // every attempt is wasted.
@@ -171,17 +179,16 @@ export async function fetchHtml(
           ...(extraHeaders ?? {}),
         },
       });
-      clearTimeout(t);
       if (res.ok) {
         const html = await res.text();
         const source = identifySource(attemptUrl);
-        if (!source || isValidSourceHtml(source, html)) {
+        if (html && !looksLikeCfChallenge(html) && (!source || isValidSourceHtml(source, html))) {
           void markSourceHealthy(attemptUrl).catch(() => {});
           return html;
         }
         void clearSourcePreference(attemptUrl).catch(() => {});
-        if (attempt === ATTEMPTS) return null;
-        continue;
+        if (attempt === ATTEMPTS || (looksLikeCfChallenge(html) && candidates.length === 1)) return null;
+        throw new Error("unexpected source content");
       }
       if (res.status === 404 || res.status === 410) return null;
       const retryable = isRetryableSourceStatus(res.status);
@@ -190,11 +197,13 @@ export async function fetchHtml(
         retryDelayMs = Math.max(retryAfterMs(res.headers.get("retry-after")), 1200 * attempt);
       }
     } catch {
-      clearTimeout(t);
       void clearSourcePreference(attemptUrl).catch(() => {});
       if (attempt === ATTEMPTS) return null;
+    } finally {
+      // Includes the body read: headers alone do not complete a request.
+      clearTimeout(t);
     }
-    await new Promise((r) => setTimeout(r, retryDelayMs));
+    await new Promise((r) => setTimeout(r, Math.min(retryDelayMs, Math.max(0, deadline - Date.now()))));
   }
   return null;
 }
@@ -235,11 +244,10 @@ async function rawGetA3rb(url: string): Promise<{ html: string | null; status: n
           Referer: rewriteToCandidate(A3RB_BASE + "/", attemptUrl),
         },
       });
-      clearTimeout(t);
       lastStatus = res.status;
       if (res.ok) {
         const html = await res.text();
-        if (isValidSourceHtml("anime3rb", html)) {
+        if (!identifySource(attemptUrl) ? !looksLikeCfChallenge(html) : isValidSourceHtml("anime3rb", html)) {
           void markSourceHealthy(attemptUrl).catch(() => {});
           return { html, status: res.status };
         }
@@ -249,24 +257,14 @@ async function rawGetA3rb(url: string): Promise<{ html: string | null; status: n
       // stays cheap and does NOT escalate to a WebView load.
       if (res.status === 404 || res.status === 410) return { html: null, status: res.status };
     } catch {
-      clearTimeout(t);
+      lastStatus = 0;
       void clearSourcePreference(attemptUrl).catch(() => {});
+    } finally {
+      clearTimeout(t);
     }
     if (attempt < ATTEMPTS) await new Promise((r) => setTimeout(r, 500 * attempt));
   }
   return { html: null, status: lastStatus };
-}
-
-// A REAL Cloudflare interstitial only. Cloudflare injects its JS-detection
-// snippet (`/cdn-cgi/challenge-platform/scripts/jsd/main.js`) into every
-// protected page — including fully-served ones — so matching the bare
-// "challenge-platform" token marked normal pages as blocked and made the
-// anime4up CDN extractor bail out on every attempt (the "anime4up1/2 don't
-// work" bug). Keep only markers that appear on an actual challenge page.
-export function looksLikeCfChallenge(html: string): boolean {
-  return /just a moment|cf-browser-verification|cf_chl_opt|id="cf-please-wait"|Checking your browser|Attention Required/i.test(
-    html,
-  );
 }
 
 // One-shot WebView render: loads the URL in the hidden real-browser pool and
@@ -276,12 +274,13 @@ async function fetchHtmlViaWebView(url: string, marker: string, priority = false
   try {
     const r = (await enqueue({
       url,
-      injectAfter: EXTRACT_RENDERED_HTML(marker),
+      // Use the browser job's available budget on slow verification pages.
+      injectAfter: EXTRACT_RENDERED_HTML(marker, false, timeoutMs - 1000),
       timeoutMs,
       priority,
     })) as { html?: string } | null;
     const html = r?.html || null;
-    return html && !looksLikeCfChallenge(html) ? html : null;
+    return html && !looksLikeCfChallenge(html) && (!marker || html.includes(marker)) ? html : null;
   } catch {
     return null;
   }
@@ -290,7 +289,7 @@ async function fetchHtmlViaWebView(url: string, marker: string, priority = false
 // Cross-source discovery must survive the same Cloudflare blocks as playback.
 export async function fetchSourceHtml(url: string, referer: string, marker: string): Promise<string | null> {
   const html = await fetchHtml(url, referer, [8000]);
-  return html && !looksLikeCfChallenge(html) ? html : fetchHtmlViaWebView(url, marker, true);
+  return html && (!marker || html.includes(marker)) ? html : fetchHtmlViaWebView(url, marker, true);
 }
 
 // anime3rb/vid3rb HTML with automatic WebView escalation. `marker` is a
@@ -1209,7 +1208,7 @@ export async function searchAnime4upDirectList(
 ): Promise<{ title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: string | null }[] | null> {
   if (!query) return null;
   const url = `${UP4_BASE}/?search_param=animes&s=${encodeURIComponent(query)}`;
-  const html = await fetchHtml(url, UP4_BASE + "/");
+  const html = await fetchSourceHtml(url, UP4_BASE + "/", "og:title");
   if (!html) return null;
   const out: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: string | null }[] = [];
   const seen = new Set<string>();
@@ -1291,7 +1290,7 @@ export async function fetchWitMoviesListing(): Promise<WitCard[] | null> {
 export async function fetchAnime4upHomeDirect(): Promise<
   WitHome | null
 > {
-  const html = await fetchHtml(UP4_BASE + "/", UP4_BASE + "/");
+  const html = await fetchSourceHtml(UP4_BASE + "/", UP4_BASE + "/", "anime-card-container");
   if (!html) return null;
   return parseAnime4upHomeHtml(html);
 }
@@ -1804,11 +1803,12 @@ export function parseWitGateTarget(
   return null;
 }
 
-async function fetchWitPlayerResponse(url: string, init: RequestInit, timeoutMs = 12000): Promise<Response> {
+async function fetchWitPlayerResponse(url: string, init: RequestInit, timeoutMs = 12000): Promise<{ response: Response; text: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal, credentials: "include" });
+    const response = await fetch(url, { ...init, signal: controller.signal, credentials: "include" });
+    return { response, text: await response.text() };
   } finally {
     clearTimeout(timer);
   }
@@ -1849,8 +1849,8 @@ async function resolveWitManifestServers(
     ...(cookie ? { Cookie: cookie } : {}),
   };
   const manifestResponse = await fetchWitPlayerResponse(config.sourcesUrl, { method: "POST", headers });
-  if (!manifestResponse.ok) return [];
-  const entries = parseWitManifestEntries(await manifestResponse.json());
+  if (!manifestResponse.response.ok) return [];
+  const entries = parseWitManifestEntries(JSON.parse(manifestResponse.text));
   // Each entry costs up to three sequential requests (stream-source, gate
   // redirect, gate follow). Running the entries in PARALLEL turns a 4-provider
   // page from ~12 serial round-trips into the slowest single provider — the
@@ -1858,23 +1858,23 @@ async function resolveWitManifestServers(
   const resolved = await Promise.all(entries.map(async (entry): Promise<RawServer | null> => {
     const sourceUrl = `${origin}/watch/stream-source/${entry.token}`;
     let ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
-    if (ready?.status === 429) {
+    if (ready?.response.status === 429) {
       await new Promise((resolve) => setTimeout(resolve, 800));
       ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
     }
-    if (!ready?.ok) return null;
+    if (!ready?.response.ok) return null;
     const gateUrl = `${origin}/watch/stream-gate/${entry.token}`;
     let target: string | null = null;
     try {
       const gate = await fetchWitPlayerResponse(gateUrl, { method: "GET", headers, redirect: "manual" });
-      target = parseWitGateTarget(gate.headers.get("location"), await gate.text(), gate.url, gateUrl);
+      target = parseWitGateTarget(gate.response.headers.get("location"), gate.text, gate.response.url, gateUrl);
     } catch {}
     // Some React Native networking versions ignore/manual-hide redirects.
     // A normal follow still exposes the final provider URL on Response.url.
     if (!target) {
       try {
         const gate = await fetchWitPlayerResponse(gateUrl, { method: "GET", headers, redirect: "follow" });
-        target = parseWitGateTarget(null, "", gate.url, gateUrl);
+        target = parseWitGateTarget(null, "", gate.response.url, gateUrl);
       } catch {}
     }
     if (!target) return null;
@@ -1911,10 +1911,10 @@ export async function scrapeWitanimeEpisodePageDirect(
       Referer: base + "/",
     },
   }).catch(() => null);
-  const html = page?.ok ? await page.text() : await fetchHtml(resolvedEpisodeUrl, base + "/");
+  const html = page?.response.ok && !looksLikeCfChallenge(page.text) ? page.text : await fetchHtml(resolvedEpisodeUrl, base + "/");
   if (!html) return null;
   const servers = parseWitServers(html);
-  if (servers.length === 0) servers.push(...await resolveWitManifestServers(html, resolvedEpisodeUrl, page ? witSessionCookie(page) : ""));
+  if (servers.length === 0) servers.push(...await resolveWitManifestServers(html, resolvedEpisodeUrl, page ? witSessionCookie(page.response) : ""));
   if (servers.length === 0) return null;
   const deent = (s: string) =>
     s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
@@ -2302,6 +2302,43 @@ export async function searchAnime3rbCatalogFuzzy(
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit);
+}
+
+// Search lists need every matching franchise entry, unlike playback's one-title lookup.
+export async function searchAnime3rbDirectList(
+  query: string,
+  onResult?: (card: WitCard) => void,
+): Promise<WitCard[] | null> {
+  if (!(await fetchA3rbCatalog()).length) return null;
+  const matches = new Map<string, { slug: string; score: number }>();
+  for (const sourceQuery of sourceSearchQueries(query)) {
+    const hits = await searchAnime3rbCatalogFuzzy(sourceQuery, 40);
+    const exact = hits.filter(({ slug }) => normFuzzy(slug).includes(normFuzzy(sourceQuery)));
+    // Broad franchise hits win over unrelated fuzzy guesses such as JoJo → Heat Guy J.
+    for (const hit of exact.length ? exact : hits.slice(0, 3)) {
+      matches.set(hit.slug, { slug: hit.slug, score: fuzzyScore(query, hit.slug.replace(/-/g, " ")) });
+    }
+  }
+  const candidates = [...matches.values()].sort((a, b) => b.score - a.score).slice(0, 40);
+  const results: WitCard[] = [];
+  let next = 0;
+  let failed = false;
+  const deadline = Date.now() + 60_000;
+  await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, async () => {
+    while (next < candidates.length) {
+      if (Date.now() >= deadline) { failed = true; break; }
+      const { slug } = candidates[next++];
+      const href = `${A3RB_BASE}/titles/${slug}`;
+      const detail = await scrapeAnime3rbTitlePage(href).catch(() => null);
+      if (!detail?.title) { failed = true; continue; }
+      const card = { title: detail.title, href, image: detail.poster || null,
+        type: null, status: null, synopsis: detail.synopsis || null };
+      results.push(card);
+      onResult?.(card);
+    }
+  }));
+  // Successful siblings already streamed; null tells the caller recovery was partial.
+  return failed ? null : results;
 }
 
 /* ── anime3rb: anime (title) page → detail + full episode list ──

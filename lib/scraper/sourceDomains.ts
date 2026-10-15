@@ -116,7 +116,21 @@ const SOURCE_MARKERS: Record<SourceId, RegExp> = {
 };
 
 export function isValidSourceHtml(source: SourceId, html: string): boolean {
-  return SOURCE_MARKERS[source].test(html);
+  return !looksLikeCfChallenge(html) && SOURCE_MARKERS[source].test(html);
+}
+
+export function looksLikeCfChallenge(html: string): boolean {
+  // Cloudflare also adds challenge-platform/jsd to valid pages; that is not a block.
+  return /just a moment|cf-browser-verification|cf_chl_opt|id=["']cf-please-wait["']|Checking your browser|Attention Required/i.test(html);
+}
+
+export function isVerificationSourceUrl(rawUrl: string): boolean {
+  if (identifySource(rawUrl)) return true;
+  try {
+    return /(^|\.)(3asq\.online|mangalik\.net|mangawy\.org|vik(?:i|1)ngfile\.(?:com|site))$/i.test(new URL(rawUrl).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function isRetryableSourceStatus(status: number): boolean {

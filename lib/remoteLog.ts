@@ -29,6 +29,9 @@ let _env: {
   osVersion: string;
   device: string | null;
   appVersion: string;
+  updateId: string | null;
+  runtimeVersion: string | null;
+  isEmbeddedLaunch: boolean;
 } | null = null;
 
 function env() {
@@ -38,6 +41,7 @@ function env() {
     const { Platform } = require("react-native");
     const Device = require("expo-device");
     const App = require("expo-application");
+    const Updates = require("expo-updates");
     const { supabase, isSupabaseConfigured } = require("./supabase");
     _env = {
       supabase,
@@ -50,6 +54,9 @@ function env() {
       // reports the newest release and hides stale installs). Lazy require:
       // expo-application pulls in react-native, which explodes under node.
       appVersion: App.nativeApplicationVersion ?? appVersion.version,
+      updateId: Updates.updateId,
+      runtimeVersion: Updates.runtimeVersion,
+      isEmbeddedLaunch: Updates.isEmbeddedLaunch,
     };
   } catch {
     // No RN runtime (node tests / scripts) — stays null, remoteLog no-ops.
@@ -108,7 +115,7 @@ export function remoteLog(
       level,
       tag,
       message,
-      context: context ?? null,
+      context: { ...context, updateId: e.updateId, runtimeVersion: e.runtimeVersion, isEmbeddedLaunch: e.isEmbeddedLaunch },
       app_version: e.appVersion,
       platform: e.platform,
       device: e.device,

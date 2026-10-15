@@ -9,8 +9,10 @@ const ts = require("typescript");
 const code = ts.transpileModule(fs.readFileSync("app/_layout.tsx", "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
-const expected = require("../app.json").expo.plugins
-  .find(plugin => Array.isArray(plugin) && plugin[0] === "expo-font")[1].fonts
+const fontPlugin = require("../app.json").expo.plugins
+  .find(plugin => Array.isArray(plugin) && plugin[0] === "expo-font");
+// Legacy APKs load these bundled font assets at runtime instead of embedding them.
+const expected = (fontPlugin?.[1].fonts ?? fs.readdirSync("assets/fonts").filter(file => file.endsWith(".ttf")))
   .map(file => path.basename(file, ".ttf")).sort();
 
 function startup(loaded, error = null) {

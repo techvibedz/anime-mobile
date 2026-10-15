@@ -4,7 +4,7 @@
 // back to an anime taken straight from the sources' own top list, so the card
 // never just disappears. Tapping always opens a pre-resolved source href.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
@@ -35,6 +35,12 @@ const VERIFIED_KEY = "@daily_pick_verified_v1";
 const MAX_CANDIDATES = 8;
 // Total verification budget before the source-native fallback takes over.
 const SCAN_DEADLINE_MS = 40_000;
+// The first hidden-WebView job of a process pays a one-time browser-init cost
+// on the UI thread; a below-the-fold daily card must not trigger it while the
+// user is tapping the freshly loaded feed. Later focuses keep the plain 5s.
+const FOCUS_RUN_DELAY_MS = 5_000;
+const COLD_START_RUN_AT_MS = 15_000;
+const appStartedAt = Date.now();
 
 type DailyPick = {
   id: string | number;
@@ -79,7 +85,7 @@ export function AnimeOfTheDay() {
     }, []),
   );
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     let alive = true;
     setPick(null);
     const { season, year } = currentSeason();
@@ -243,11 +249,13 @@ export function AnimeOfTheDay() {
       }
     };
 
-    run().catch(() => {});
+    const delay = Math.max(FOCUS_RUN_DELAY_MS, COLD_START_RUN_AT_MS - (Date.now() - appStartedAt));
+    const timer = setTimeout(() => { void run().catch(() => {}); }, delay);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
-  }, [dayKey]);
+  }, [dayKey]));
 
   const openWatch = useCallback(() => {
     if (!pick) return;

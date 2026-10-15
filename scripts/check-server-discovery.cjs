@@ -110,8 +110,8 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
   const domains = loadPure(path.join(root, 'lib/scraper/sourceDomains.ts'), { '@react-native-async-storage/async-storage': storage });
   const providers = loadPure(path.join(root, 'lib/videoProviders.ts'));
   const jobs = [];
-  const witHtml = '<a href="/anime/show"><img src="show.jpg"><h3>Show</h3></a>';
-  const up4Html = '<div class="anime-card-title"><h3><a href="/anime/show">Show</a></h3></div><a href="/episode/انمي-show-الحلقة-7-مترجمة/" title="الحلقة 7">7</a><ul id="episode-servers"><li data-watch="https://www.mp4upload.com/embed-show.html"><a>Mp4upload</a></li></ul>';
+  const witHtml = '<meta property="og:title" content="Show"><a href="/anime/show"><img src="show.jpg"><h3>Show</h3></a><a href="/watch/show/7">7</a>';
+  const up4Html = '<link rel="canonical" href="https://w1.anime4up.rest/anime/show"><div class="anime-card-title"><h3><a href="/anime/show">Show</a></h3></div><a href="/episode/انمي-show-الحلقة-7-مترجمة/" title="الحلقة 7">7</a><ul id="episode-servers"><li data-watch="https://www.mp4upload.com/embed-show.html"><a>Mp4upload</a></li></ul>';
   let blocked = true;
   const direct = loadPure(path.join(root, 'lib/scraper/direct.ts'), {
     '@react-native-async-storage/async-storage': storage,

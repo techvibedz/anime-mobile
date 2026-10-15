@@ -14,9 +14,11 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { normAnimeKey, animeTitleKey, getCompletedSets, type CompletedSets } from "./history";
-import { matchingRecords } from "./completionMatch";
+import { normAnimeKey, animeTitleKey, getCompletedSets, subscribeHistory } from "./history";
+import { matchingRecords, sameSource } from "./completionMatch";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
+import { createRequestCache, withTimeout } from "./requestCache";
+import { pruneCacheStorage } from "./storageMaintenance";
 
 const KEY = "anime_completion_v2";
 
@@ -51,23 +53,34 @@ function uniq(arr: (string | null | undefined)[]): string[] {
 // whole map from AsyncStorage (and the provider's refresh re-parsed it again on
 // every change event). All writes go through saveCompletionMap.
 let completionCache: Record<string, AnimeCompletion> | null = null;
+let completionLoading: Promise<Record<string, AnimeCompletion>> | null = null;
 
 export async function getCompletionMap(): Promise<Record<string, AnimeCompletion>> {
   if (completionCache) return completionCache;
-  let loaded: Record<string, AnimeCompletion>;
-  try {
-    const raw = await AsyncStorage.getItem(KEY);
-    loaded = raw ? JSON.parse(raw) : {};
-  } catch {
-    loaded = {};
-  }
-  completionCache = loaded;
-  return loaded;
+  if (!completionLoading) completionLoading = (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(KEY);
+      completionCache = raw ? JSON.parse(raw) : {};
+    } catch {
+      completionCache = {};
+    }
+    return completionCache!;
+  })().finally(() => { completionLoading = null; });
+  return completionLoading;
 }
 
+let completionWrites: Promise<void> = Promise.resolve();
 async function saveCompletionMap(map: Record<string, AnimeCompletion>) {
   completionCache = map;
-  try { await AsyncStorage.setItem(KEY, JSON.stringify(map)); } catch {}
+  const payload = JSON.stringify(map);
+  completionWrites = completionWrites.then(async () => {
+    try { await AsyncStorage.setItem(KEY, payload); }
+    catch {
+      await pruneCacheStorage();
+      await AsyncStorage.setItem(KEY, payload).catch((error) => console.warn("[completion] local write failed:", error));
+    }
+  });
+  await completionWrites;
 }
 
 // Lightweight change notifier so the provider re-loads after a record()/pull.
@@ -86,7 +99,7 @@ function matchCompletionRecords(
 ): AnimeCompletion[] {
   const hrefKeys = new Set((hrefs || []).filter(Boolean).map((h) => normAnimeKey(h!)));
   const titleKeys = new Set((titles || []).filter(Boolean).map((t) => animeTitleKey(t!)));
-  return matchingRecords(Object.values(map), hrefKeys, titleKeys);
+  return matchingRecords(Object.values(map), hrefKeys, titleKeys, normAnimeKey, animeTitleKey);
 }
 
 /** Push one record to Supabase (fire-and-forget; logs on failure). */
@@ -118,7 +131,7 @@ export async function recordAnimeCompletion(rec: {
   titles: (string | null | undefined)[];
   lastEpNum: number;
   caughtUp: boolean;
-  finished: boolean;
+  finished?: boolean;
 }): Promise<void> {
   const hrefs = uniq(rec.hrefs);
   const titles = uniq(rec.titles);
@@ -130,33 +143,43 @@ export async function recordAnimeCompletion(rec: {
   // Keying purely off the incoming href used to mint a second record (witanime
   // vs anime4up, "III" vs "Ⅲ") with its own caughtUp state — a card resolving
   // the stale copy then showed no badge although the finale was watched.
-  const existing = matchCompletionRecords(map, hrefs, titles)[0];
+  const matches = matchCompletionRecords(map, hrefs, titles);
+  const existing = matches.sort((a, b) => b.lastEpNum - a.lastEpNum || b.updatedAt - a.updatedAt)[0];
   const key = existing?.key ?? (normAnimeKey(hrefs[0]) || animeTitleKey(titles[0]));
   if (!key) return;
   const prev = existing ?? map[key];
   const next: AnimeCompletion = {
     key,
-    hrefs: uniq([...(prev?.hrefs || []), ...hrefs]),
-    titles: uniq([...(prev?.titles || []), ...titles]),
-    lastEpNum: Math.max(rec.lastEpNum || 0, prev?.lastEpNum || 0),
+    // The detail page's own href goes FIRST: hrefs[0] is the anchor source whose
+    // feed items may move lastEpNum (reconcileCompletionFromEpisodes).
+    hrefs: uniq([...hrefs, ...matches.flatMap((r) => r.hrefs)]),
+    titles: uniq([...matches.flatMap((r) => r.titles), ...titles]),
+    // The detail page is authoritative: it records the episode list the user
+    // actually sees. Keeping a higher stored number (a feed item from another
+    // source, a different numbering) made the badge impossible to ever earn —
+    // reopening the page could never fix it. A real newer episode re-raises it
+    // through the anchor-source feed reconcile.
+    lastEpNum: rec.lastEpNum,
     caughtUp: rec.caughtUp,
-    finished: rec.finished,
+    finished: rec.caughtUp && (rec.finished ?? (prev?.lastEpNum === rec.lastEpNum && !!prev.finished)),
     updatedAt: Date.now(),
   };
-  if (
-    prev &&
-    prev.caughtUp === next.caughtUp &&
-    prev.finished === next.finished &&
-    prev.lastEpNum === next.lastEpNum &&
-    prev.hrefs.length === next.hrefs.length &&
-    prev.titles.length === next.titles.length
-  ) {
+  if (matches.length && matches.every((r) =>
+    r.caughtUp === next.caughtUp && r.finished === next.finished && r.lastEpNum === next.lastEpNum &&
+    r.hrefs[0] === next.hrefs[0] &&
+    r.hrefs.length === next.hrefs.length && r.titles.length === next.titles.length)) {
+    if (rec.finished === undefined && next.caughtUp && !next.finished)
+      void confirmFinished(map, matches, titles[0] || next.titles[0], next.lastEpNum);
     return;
   }
+  for (const match of matches) map[match.key] = { ...next, key: match.key };
   map[key] = next;
   await saveCompletionMap(map);
   notify();
-  pushToCloud(next).catch(() => {});
+  const updated = matches.length ? matches.map((r) => map[r.key]) : [next];
+  for (const changed of updated) pushToCloud(changed).catch(() => {});
+  if (rec.finished === undefined && next.caughtUp && !next.finished)
+    void confirmFinished(map, updated, titles[0] || next.titles[0], next.lastEpNum);
 }
 
 /** Hydrate the local cache from Supabase (called after sign-in). */
@@ -182,7 +205,7 @@ export async function pullCompletionFromCloud(): Promise<void> {
     };
     const local = map[cloud.key];
     // Newest write wins, but keep the union of known hrefs/titles either way.
-    if (!local || cloud.updatedAt >= local.updatedAt) {
+    if (!local || (cloud.updatedAt >= local.updatedAt && cloud.lastEpNum >= local.lastEpNum)) {
       map[cloud.key] = {
         ...cloud,
         hrefs: uniq([...(local?.hrefs || []), ...cloud.hrefs]),
@@ -203,7 +226,8 @@ export async function pullCompletionFromCloud(): Promise<void> {
 /** Count of anime whose final episode the user has watched (profile stat). */
 export async function countCompletedAnime(): Promise<number> {
   const map = await getCompletionMap();
-  return Object.values(map).filter((r) => r.finished).length;
+  return new Set(Object.values(map).filter((r) => r.finished)
+    .map((r) => animeTitleKey(r.titles[0]) || normAnimeKey(r.hrefs[0]) || r.key)).size;
 }
 
 /** Recompute home badges from available episodes and local history, even when
@@ -212,63 +236,92 @@ export async function reconcileCompletionFromEpisodes(
   items: { animeHref?: string | null; animeTitle?: string | null; epNum: number | null }[],
 ): Promise<void> {
   if (!items || items.length === 0) return;
-  const map = await getCompletionMap();
+  const [map, sets] = await Promise.all([getCompletionMap(), getCompletedSets()]);
+  // Index once: reconciling N records must not scan all N for each item.
+  const byHref = new Map<string, Set<string>>();
+  const byTitle = new Map<string, Set<string>>();
+  const index = (rec: AnimeCompletion) => {
+    for (const [values, lookup, normalize] of [
+      [rec.hrefs, byHref, normAnimeKey], [rec.titles, byTitle, animeTitleKey],
+    ] as const) {
+      for (const value of values) {
+        const key = normalize(value);
+        if (!key) continue;
+        let keys = lookup.get(key);
+        if (!keys) { keys = new Set(); lookup.set(key, keys); }
+        keys.add(rec.key);
+      }
+    }
+  };
+  for (const rec of Object.values(map)) index(rec);
 
   // Highest episode number now available per matched record (by record key).
   const newestByKey = new Map<string, number>();
+  let changed = false;
   for (const it of items) {
     if (it.epNum == null || it.epNum <= 0) continue;
-    let recs = matchCompletionRecords(map, [it.animeHref], [it.animeTitle]);
+    const keys = new Set([
+      ...(byHref.get(normAnimeKey(it.animeHref || "")) || []),
+      ...(byTitle.get(animeTitleKey(it.animeTitle)) || []),
+    ]);
+    let recs = [...keys].map((key) => map[key]);
     if (recs.length === 0) {
       const key = normAnimeKey(it.animeHref || "") || animeTitleKey(it.animeTitle);
       if (!key) continue;
       const rec = map[key] ?? { key, hrefs: uniq([it.animeHref]), titles: uniq([it.animeTitle]), lastEpNum: 0, caughtUp: false, finished: false, updatedAt: 0 };
       map[key] = rec;
+      index(rec);
       recs = [rec];
     }
+    // Only a feed item from the anchor source (hrefs[0] — the detail page's own
+    // source) may move the episode number; another source's numbering inflated
+    // lastEpNum past the list the detail page shows. See sameSource.
+    const itemKey = normAnimeKey(it.animeHref || "");
+    const canRaise = recs.some((rec) => sameSource(itemKey, normAnimeKey(rec.hrefs[0] || "")));
     // Update EVERY copy, not just the first — duplicate records otherwise keep
     // a stale state, and a card resolving the stale copy never shows the badge.
     for (const rec of recs) {
+      const hrefs = uniq([...rec.hrefs, it.animeHref]);
+      const titles = uniq([...rec.titles, it.animeTitle]);
+      if (hrefs.length !== rec.hrefs.length || titles.length !== rec.titles.length) {
+        map[rec.key] = { ...rec, hrefs, titles };
+        index(map[rec.key]);
+        changed = true;
+      }
+      if (!canRaise) continue;
       const cur = newestByKey.get(rec.key) || 0;
       if (it.epNum > cur) newestByKey.set(rec.key, it.epNum);
     }
   }
   if (newestByKey.size === 0) return;
 
-  let changed = false;
-  let sets: CompletedSets | null = null; // history loaded lazily, only if needed
   for (const [key, newest] of newestByKey) {
     const rec = map[key];
-    if (!rec || newest < rec.lastEpNum) continue;
-
-    if (!sets) sets = await getCompletedSets();
+    if (!rec) continue;
+    const latest = Math.max(newest, rec.lastEpNum);
     let watchedNewest = false;
-    let tracked = false; // history exists for this anime under one of its known titles
+    let tracked = false;
     for (const tt of rec.titles) {
       const tk = animeTitleKey(tt);
       if (!tk) continue;
-      if (sets.knownTitles.has(tk)) tracked = true;
+      if (sets.knownNumbersByTitle.get(tk)?.has(latest)) tracked = true;
       const nums = sets.numbersByTitle.get(tk);
-      if (nums && nums.has(newest)) { watchedNewest = true; break; }
+      if (nums && nums.has(latest)) { watchedNewest = true; break; }
     }
-    // Absence of evidence is not evidence of absence: when NO known title has
-    // any tracked history (title drift between sources, or the watched entry
-    // aged out of the history cap), keep the existing badge state instead of
-    // clearing it. This reconciliation runs on every home focus, so a spurious
-    // clear here is what made badges "sometimes disappear". A title that IS
-    // tracked but lacks the number still clears (explicit unmark / new episode).
-    const caughtUp = watchedNewest || (tracked ? false : rec.caughtUp);
-    const finished = rec.finished && caughtUp && newest === rec.lastEpNum;
-    if (rec.lastEpNum === newest && rec.caughtUp === caughtUp && rec.finished === finished) continue;
+    // Keep a durable mark if its episode aged out of history. Clear it for
+    // an explicit unmark or a newly available, unwatched episode.
+    const caughtUp = watchedNewest || (!tracked && latest === rec.lastEpNum && rec.caughtUp);
+    const finished = rec.finished && caughtUp && latest === rec.lastEpNum;
+    if (rec.lastEpNum === latest && rec.caughtUp === caughtUp && rec.finished === finished) continue;
     map[key] = {
       ...rec,
-      lastEpNum: newest,
+      lastEpNum: latest,
       caughtUp,
       finished,
       updatedAt: Date.now(),
     };
     changed = true;
-    pushToCloud(map[key]).catch(() => {});
+    if (rec.caughtUp || rec.finished || caughtUp) pushToCloud(map[key]).catch(() => {});
   }
 
   if (changed) {
@@ -318,34 +371,52 @@ export async function recordEpisodeWatched(opts: {
     matches = [created];
   }
 
-  // Airing status is a property of the anime, not of one record — resolve it
-  // once and share the verdict across every matching record.
-  let finished = false;
-  try {
-    const { fetchSeriesFinished } = await import("./airing");
-    finished = await fetchSeriesFinished(opts.animeTitle || matches[0].titles[0] || "", opts.epNum);
-  } catch {}
-
   let changed = false;
+  const marked: AnimeCompletion[] = [];
   for (const rec of matches) {
     if (opts.epNum < rec.lastEpNum) continue; // not the latest available episode
-    if (rec.caughtUp && rec.finished) continue; // already fully marked
+    if (rec.caughtUp && rec.finished && opts.epNum === rec.lastEpNum) continue;
     const next: AnimeCompletion = {
       ...rec,
       lastEpNum: Math.max(rec.lastEpNum, opts.epNum),
       caughtUp: true,
-      finished,
+      finished: rec.finished && opts.epNum === rec.lastEpNum,
       updatedAt: Date.now(),
     };
-    if (next.caughtUp === rec.caughtUp && next.finished === rec.finished && next.lastEpNum === rec.lastEpNum) continue;
+    if (next.caughtUp === rec.caughtUp && next.finished === rec.finished && next.lastEpNum === rec.lastEpNum) {
+      marked.push(rec);
+      continue;
+    }
     map[next.key] = next;
     changed = true;
+    marked.push(next);
     pushToCloud(next).catch(() => {});
   }
   if (changed) {
     await saveCompletionMap(map);
     notify();
   }
+  if (!marked.length) return;
+  await confirmFinished(map, marked, opts.animeTitle || matches[0].titles[0] || "", opts.epNum);
+}
+
+const finishedRequests = createRequestCache<boolean>(60_000);
+async function confirmFinished(map: Record<string, AnimeCompletion>, marked: AnimeCompletion[], title: string, epNum: number) {
+  // The network may only upgrade the exact snapshot that requested it. Local
+  // unmarks and newer episodes invalidate it, even after leaving the detail page.
+  try {
+    const finished = await finishedRequests.run(`${animeTitleKey(title)}:${epNum}`, () =>
+      withTimeout(import("./airing").then(({ fetchSeriesFinished }) => fetchSeriesFinished(title, epNum)), 6000, false));
+    if (!finished) return;
+    let upgraded = false;
+    for (const rec of marked) {
+      if (map[rec.key] !== rec || !rec.caughtUp || rec.lastEpNum !== epNum) continue;
+      map[rec.key] = { ...rec, finished: true, updatedAt: Date.now() };
+      upgraded = true;
+      pushToCloud(map[rec.key]).catch(() => {});
+    }
+    if (upgraded) { await saveCompletionMap(map); notify(); }
+  } catch {}
 }
 
 /* ── Lookup + context ───────────────────────────────── */
@@ -366,9 +437,9 @@ function buildLookup(map: Record<string, AnimeCompletion>): CompletionLookup {
   // Index by the TLD-stable anime key + decoration-folded title so a badge
   // resolves regardless of which rotating witanime TLD (.life/.you) or which
   // source's decorated title a card carries vs. what was recorded.
-  for (const rec of Object.values(map)) {
-    for (const h of rec.hrefs) byHref.set(normAnimeKey(h), rec);
-    for (const tt of rec.titles) byTitle.set(animeTitleKey(tt), rec);
+  for (const rec of Object.values(map).sort((a, b) => a.lastEpNum - b.lastEpNum || a.updatedAt - b.updatedAt)) {
+    for (const h of rec.hrefs) { const key = normAnimeKey(h); if (key) byHref.set(key, rec); }
+    for (const tt of rec.titles) { const key = animeTitleKey(tt); if (key) byTitle.set(key, rec); }
   }
   return {
     byHref,
@@ -396,7 +467,20 @@ export function CompletionProvider({ children }: { children: React.ReactNode }) 
   useEffect(() => {
     refresh();
     listeners.add(refresh);
-    return () => { listeners.delete(refresh); };
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const reconcile = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      void getCompletionMap().then((map) => reconcileCompletionFromEpisodes(Object.values(map).map((rec) => ({
+        animeHref: rec.hrefs[0], animeTitle: rec.titles[0], epNum: rec.lastEpNum,
+      })))).catch(() => {});
+    };
+    // The initial reconcile re-parses the whole completion map and history on
+    // the JS thread; defer it out of the launch window (refresh() above already
+    // built the badges — this only corrects caught-up state). An earlier
+    // history change reconciles right away instead.
+    timer = setTimeout(reconcile, 3500);
+    const unsubscribe = subscribeHistory(reconcile);
+    return () => { if (timer) clearTimeout(timer); listeners.delete(refresh); unsubscribe(); };
   }, [refresh]);
   return <CompletionContext.Provider value={lookup}>{children}</CompletionContext.Provider>;
 }

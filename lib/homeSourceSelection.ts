@@ -1,10 +1,29 @@
 import { normFuzzy } from "./fuzzy";
+import { withTimeout } from "./requestCache";
+
+const FALLBACK_STAGGER_MS = 1200;
 
 export async function loadWitanimeHome<T>(
   direct: () => Promise<T | null>,
   webView: () => Promise<T | null>,
+  fallbacks: (() => Promise<T | null>)[] = [],
 ): Promise<T | null> {
-  return await direct().catch(() => null) || await webView().catch(() => null);
+  const primary = (async () => await direct().catch(() => null) || await webView().catch(() => null))();
+  if (!fallbacks.length) return primary;
+  const secondary = Promise.any(fallbacks.map(async (load) => {
+    // Stagger the fallbacks behind the primary direct fetch: three full-page
+    // parses landing on the JS thread together is what makes the first taps lag.
+    await new Promise((resolve) => setTimeout(resolve, FALLBACK_STAGGER_MS));
+    const home = await withTimeout(load(), 40_000, null);
+    if (!home) throw new Error("source home unavailable");
+    return home;
+  })).catch(() => null);
+  return Promise.race([
+    primary.then((home) => home || secondary),
+    // Prefer the canonical feed when it answers promptly; a blocked primary
+    // must not hold a reachable source behind its full browser timeout.
+    secondary.then(async (home) => home ? await withTimeout(primary, 3000, null) || home : primary),
+  ]);
 }
 
 type RecentEpisodeLike = { href?: string | null; animeHref?: string | null; animeTitle?: string | null };

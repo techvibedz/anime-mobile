@@ -350,8 +350,7 @@ export const mangawySource: MangaSource = {
     const q = query.trim();
     if (!q || (options?.page ?? 1) > 1) return [];
     try {
-      // JSON endpoint — direct only, short timeouts (a WebView render can't
-      // return raw JSON and the generic retry ladder is far too slow here).
+      // The shared fetcher also recovers JSON through browser verification.
       const body = await fetchMangaRawText(`${SITE}/api/series/search?q=${encodeURIComponent(q)}`);
       const cards = body ? parseMangawySearch(body) : [];
       if (!options?.genres?.length) return cards;

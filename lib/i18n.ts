@@ -172,6 +172,7 @@ export const ar = {
   noResults: "لا توجد نتائج",
   browseAll: "تصفّح كل الأنميات",
   searchResultsFor: (q: string) => `نتائج البحث عن "${q}"`,
+  searchSourcesIncomplete: "تعذّر الوصول لبعض المصادر. أعد المحاولة لعرض بقية النتائج.",
   showMore: (n: number) => `عرض المزيد (${n})`,
 
   // Watch / Player

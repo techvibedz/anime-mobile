@@ -79,7 +79,7 @@ export type RawDetail = {
   episodes: { title: string; number: number; type: string; screenshot: string; href: string | null }[];
 };
 
-export async function scrapeEpisodesPage(animeUrl: string) {
+export async function scrapeEpisodesPage(animeUrl: string, priority = false) {
   const is4up = /anime4up/i.test(animeUrl);
   const url = /witanime\./i.test(animeUrl)
     ? rewriteWitUrl(animeUrl, await getWitBase())
@@ -88,6 +88,7 @@ export async function scrapeEpisodesPage(animeUrl: string) {
     url,
     injectAfter: is4up ? EXTRACT_EPISODES_4UP : EXTRACT_EPISODES_WIT,
     timeoutMs: 35000,
+    priority,
   }) as Promise<RawDetail>;
 }
 

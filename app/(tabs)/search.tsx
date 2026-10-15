@@ -53,6 +53,7 @@ const GENRE_LABELS: Record<string, string> = {
   Seinen: "سينين",
 };
 const GENRES = Object.keys(GENRE_LABELS);
+const SOURCE_NAMES = { witanime: "WitAnime", anime4up: "Anime4up", anime3rb: "Anime3rb" };
 
 /* ── Skeleton card (pulsing placeholder while the grid loads) ── */
 function SkeletonGrid({ width, layout }: { width: number; layout: CardLayout }) {
@@ -97,6 +98,7 @@ const ResultCard = memo(function ResultCard({ item, width, layout }: { item: Sea
       recyclingKey={item.href}
       titleLines={2}
       topRight={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
+      topLeft={item.source ? <PosterPill><Text style={ss.typeBadgeText}>{SOURCE_NAMES[item.source]}</Text></PosterPill> : undefined}
       bottomLeft={
         layout !== "list" && item.type ? (
           <PosterPill>
@@ -118,6 +120,7 @@ export default function SearchScreen() {
   const [items, setItems] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
+  const [incompleteSearch, setIncompleteSearch] = useState(false);
   const [activeGenre, setActiveGenre] = useState("All");
   const [genrePage, setGenrePage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -227,6 +230,7 @@ export default function SearchScreen() {
     // Keep the current grid visible while searching — a slim progress bar
     // signals activity instead of blanking the whole screen.
     setSearching(true);
+    setIncompleteSearch(false);
     setHasMore(false);
     try {
       // Progressive: witanime results paint almost immediately; anime4up and
@@ -238,7 +242,10 @@ export default function SearchScreen() {
         setLoading(false);
       });
       if (seq !== reqSeq.current) return;
-      if (res.success) setItems(res.data.results);
+      if (res.success) {
+        setItems(res.data.results);
+        setIncompleteSearch(!!res.data.incompleteSources?.length);
+      }
       else setItems([]);
     } catch { if (seq === reqSeq.current) setItems([]); }
     finally {
@@ -247,16 +254,18 @@ export default function SearchScreen() {
   }, [loadBrowse]);
 
   const onChangeText = useCallback((text: string) => {
+    ++reqSeq.current;
     setQuery(text);
     if (text.trim() === "") setActiveGenre("All");
     if (debounceRef.current) clearTimeout(debounceRef.current);
     // Each keystroke costs a full WebView scrape, so wait until the user
     // pauses and has typed something meaningful (≥2 chars).
-    if (text.trim() !== "" && text.trim().length < 2) return;
+    if (text.trim() !== "" && text.trim().length < 2) { setSearching(false); return; }
     debounceRef.current = setTimeout(() => doSearch(text), 450);
   }, [doSearch]);
 
   const handleClear = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
     setQuery("");
     setActiveGenre("All");
     modeRef.current = "browse";
@@ -265,6 +274,7 @@ export default function SearchScreen() {
   };
 
   const handleGenre = useCallback((genre: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
     setActiveGenre(genre);
     setQuery("");
     if (genre === "All") {
@@ -427,6 +437,11 @@ export default function SearchScreen() {
       </View>
 
       {/* Content */}
+      {showingSearch && incompleteSearch && !searching && (
+        <Pressable accessibilityRole="button" onPress={() => doSearch(query)} style={{ paddingHorizontal: PAD, paddingVertical: 10 }}>
+          <Text style={ss.resultsLabel}>{t.searchSourcesIncomplete} {t.retry}</Text>
+        </Pressable>
+      )}
       {loading ? (
         <SkeletonGrid width={cards.cardWidth} layout={cards.layout} />
       ) : items.length > 0 ? (

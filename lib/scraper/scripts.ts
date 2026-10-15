@@ -695,15 +695,15 @@ _waitFor(
 // Cloudflare-challenged on-device: OkHttp (RN's fetch) receives the challenge
 // page instead of content, but the WebView solves the challenge like every
 // other source, so the real HTML (carrying video_url / video_sources) comes
-// back. Best-effort: returns whatever HTML exists even if the marker never
-// appears, so the caller can still try to parse it.
+// back. A timed-out challenge or missing content must stay a failure.
 // ──────────────────────────────────────────────────────────────
-export const EXTRACT_RENDERED_HTML = (marker: string) => `(function(){${HELPERS}
+export const EXTRACT_RENDERED_HTML = (marker: string, rawText = false, timeoutMs = 20000) => `(function(){${HELPERS}
 var MARKER = ${JSON.stringify(marker || "")};
+var RAW_TEXT = ${rawText};
 var _htmlTick = 0;
 _waitFor(
   function(){
-    if (!MARKER) return document.readyState === 'complete';
+    if (!MARKER) return document.readyState !== 'loading';
     // Cheap check first: textContent covers script text, where the markers
     // (video_url / video_sources) actually live. Only serialize the full DOM
     // every ~4th tick (the old predicate re-serialized a 1-2MB page every
@@ -714,11 +714,17 @@ _waitFor(
     var html = document.documentElement ? document.documentElement.innerHTML : '';
     return html.indexOf(MARKER) >= 0;
   },
-  function(){
-    try { _send('result', { data: { html: document.documentElement.outerHTML } }); }
+  function(ok, reason){
+    if (!ok) { _send('error', { message: reason === 'cf-still-active' ? 'source challenge did not finish verification' : 'source content verification timed out', marker: MARKER }); return; }
+    try {
+      // Chromium wraps JSON/plain responses in <pre>; return the original bytes.
+      var pre = RAW_TEXT && document.querySelector('body > pre');
+      var html = pre ? pre.textContent : document.documentElement.outerHTML;
+      _send('result', { data: { html: html } });
+    }
     catch (e) { _send('error', { message: String(e) }); }
   },
-  20000, 350
+  ${timeoutMs}, 350
 );
 })();true;`;
 

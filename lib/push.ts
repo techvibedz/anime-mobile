@@ -212,9 +212,11 @@ export async function syncDailyAnimeReminders(): Promise<void> {
 export async function registerPushTokenAsync(userId: string): Promise<void> {
   if (!Notifications || !isSupabaseConfigured || !userId) return;
   try {
-    let granted = await hasNotificationPermission();
-    if (!granted) granted = await requestNotificationPermission();
-    if (!granted) return;
+    // Register only while permission is already granted: the app's deliberate
+    // startup prompt owns the ask. Requesting here raised the system dialog the
+    // moment a restored session landed — before the home screen settled — and
+    // taps did nothing until it was answered.
+    if (!(await hasNotificationPermission())) return;
     await setupNotifications();
 
     const projectId =

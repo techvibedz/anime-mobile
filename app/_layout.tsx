@@ -46,7 +46,7 @@ import { initAds } from "../lib/ads";
 import { SidebarProvider } from "../components/Sidebar";
 import { CompletionProvider } from "../lib/completion";
 import { setupNotifications, requestNotificationPermission, addNotificationTapListener, addChatNotificationTapListener, syncDailyAnimeReminders, getLastNotificationTapData } from "../lib/push";
-import { reportRecentEpisodes } from "../lib/notifications";
+import { reportRecentEpisodes, syncEpisodeNotifications } from "../lib/notifications";
 import { startPresence, stopPresence, isAdmin } from "../lib/presence";
 import { startUsageSession, endUsageSession } from "../lib/usage";
 import { getNotificationsEnabled } from "../lib/settings";
@@ -87,7 +87,9 @@ function AuthGate() {
     if (!user) return;
     let cancelled = false;
     const key = `@cloud_pull_at:${user.id}`;
-    (async () => {
+    // Deferred past first paint: the three merges + storage writes cause
+    // notify() re-render waves that would otherwise land on the first taps.
+    const timer = setTimeout(() => { void (async () => {
       try {
         const last = Number(await AsyncStorage.getItem(key)) || 0;
         if (Date.now() - last < 5 * 60 * 1000) return;
@@ -97,8 +99,8 @@ function AuthGate() {
       pullFavoritesFromCloud().catch(() => {});
       // History emits the final badge refresh after cloud completion has settled.
       pullCompletionFromCloud().catch(() => {}).then(() => pullHistoryFromCloud()).catch(() => {});
-    })();
-    return () => { cancelled = true; };
+    })().catch(() => {}); }, 6000);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [user?.id]);
 
   // Advertise this device as "online" via Supabase Realtime presence while a
@@ -144,11 +146,17 @@ function AuthGate() {
   // The feed is global, so any one foregrounded device keeps push fresh for all.
   useEffect(() => {
     if (!user) return;
-    reportRecentEpisodes().catch(() => {});
+    const refresh = () => {
+      if (AppState.currentState !== "active") return;
+      void syncEpisodeNotifications().catch(() => {});
+      void reportRecentEpisodes().catch(() => {});
+    };
+    const timer = setTimeout(refresh, 15_000);
+    const poll = setInterval(refresh, 5 * 60_000);
     const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active") reportRecentEpisodes().catch(() => {});
+      if (s === "active") refresh();
     });
-    return () => sub.remove();
+    return () => { clearTimeout(timer); clearInterval(poll); sub.remove(); };
   }, [user?.id]);
 
   // Notifications: configure channel + request permission once at startup
@@ -219,11 +227,13 @@ function AuthGate() {
 
   useEffect(() => {
     if (!ready) return;
-    syncDownloads().catch(() => {});
+    // Mount-time reconcile walks every download item with per-item native
+    // calls; defer it past the first taps. Foreground re-syncs stay immediate.
+    const timer = setTimeout(() => { syncDownloads().catch(() => {}); }, 4000);
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") syncDownloads().catch(() => {});
     });
-    return () => sub.remove();
+    return () => { clearTimeout(timer); sub.remove(); };
   }, [ready]);
 
   // Update checks (APK first, then OTA)

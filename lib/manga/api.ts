@@ -96,7 +96,7 @@ export function searchManga(
   );
 }
 
-/** Genre listing page (1-based) with a 12s cap — a slow source degrades to []. */
+/** Give direct retries and browser verification the same budget as search. */
 export function browseMangaGenre(
   source: MangaSourceId,
   label: string,
@@ -106,8 +106,9 @@ export function browseMangaGenre(
   return withTimeout(
     browseCache.run(`${source}|${label}|${page}|${filterKey(options)}`, () =>
       MANGA_SOURCES[source].browseGenre(label, page, options),
+      { valid: cards => cards.length > 0 },
     ),
-    12_000,
+    45_000,
     [],
   );
 }
@@ -121,8 +122,9 @@ export function browseMangaAll(
   return withTimeout(
     browseCache.run(`${source}|*|${page}|${filterKey(options)}`, () =>
       MANGA_SOURCES[source].browseAll(page, options),
+      { valid: cards => cards.length > 0 },
     ),
-    12_000,
+    45_000,
     [],
   );
 }

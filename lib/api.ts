@@ -7,8 +7,6 @@ import { resolveWitanimeEpisode, matchWitanimeTitle, witRelatedCards, witRelatio
 import {
   scrapeWitanimeHome,
   scrapeEpisodesPage,
-  scrapeSearch,
-  scrapeSearchUp4,
   scrapeRecent,
   scrapeGenre,
   scrapeAllAnime,
@@ -33,7 +31,7 @@ import {
   findUp4EpisodeAcrossPages,
   searchAnime3rbDirect,
   searchAnime3rbCatalog,
-  searchAnime3rbCatalogFuzzy,
+  searchAnime3rbDirectList,
   searchAnime3rbFamily,
   scrapeAnime3rbEpisodeServers,
   scrapeAnime3rbTitlePage,
@@ -50,6 +48,8 @@ import {
   extractDoodstream,
   fetchAnime4upRecentPageDirect,
   fetchWitHomeDirect,
+  fetchAnime4upHomeDirect,
+  fetchAnime3rbHomeDirect,
   fetchWitNewEpisodesDirect,
   fetchWitanimeAnimeSections,
   type WitHome,
@@ -59,8 +59,9 @@ import {
 } from "./scraper/direct";
 import { getAltTitles, getAnimeYearType } from "./animeInfo";
 import { fuzzyScore, sourceSearchQueries } from "./fuzzy";
+import { identifySource, type SourceId } from "./scraper/sourceDomains";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
-import { writeCloudHome } from "./homeCloudCache";
+import { readCloudHome, writeCloudHome } from "./homeCloudCache";
 import { loadWitanimeHome, mergeRecentEpisodes } from "./homeSourceSelection";
 import { filterFinishedEpisodes } from "./airing";
 import { remoteLog } from "./remoteLog";
@@ -106,8 +107,8 @@ const HOME_SERVE_TTL = 24 * 60 * 60 * 1000; // 24 h
 const DETAIL_CACHE_PREFIX = "@detail_v3:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const UP4_CACHE_PREFIX = "@up4_eps_v2:";
-const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 h
-const SEARCH_CACHE_PREFIX = "@search_v3:";
+const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // stable source URLs; episode lists revalidate
+const SEARCH_CACHE_PREFIX = "@search_v4:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
 const LISTING_CACHE_PREFIX = "@listing_v1:";
 const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
@@ -149,35 +150,37 @@ async function writeCache(key: string, data: unknown) {
 // Stale-while-revalidate: cached payload renders instantly; a background
 // refresh keeps the cache fresh for the next visit. `valid` gates what gets
 // cached so transient empty scrapes aren't frozen for the whole TTL.
-const _swrInFlight = new Set<string>();
 const _swrMisses = new Map<string, Promise<unknown>>();
 async function swr<T>(
   key: string,
   ttlMs: number,
   fresh: () => Promise<T>,
   valid: (d: T) => boolean = () => true,
+  options: { forceRefresh?: boolean; onUpdated?: (data: T) => void; revalidateAfterMs?: number } = {},
 ): Promise<T> {
-  const cached = await readCache<T>(key, ttlMs);
-  if (cached) {
-    if (!_swrInFlight.has(key)) {
-      _swrInFlight.add(key);
-      void fresh()
-        .then((data) => { if (valid(data)) return writeCache(key, data); })
-        .catch(() => {})
-        .finally(() => _swrInFlight.delete(key));
-    }
+  const entry = await readCacheEntry<T>(key, ttlMs);
+  const cached = entry?.data ?? null;
+  if (cached && valid(cached) && !options.forceRefresh && options.revalidateAfterMs &&
+    Date.now() - entry!.ts < options.revalidateAfterMs) return cached;
+  let request = _swrMisses.get(key) as Promise<T> | undefined;
+  if (!request) {
+    request = fresh().then(async (data) => {
+      if (valid(data)) await writeCache(key, data);
+      return data;
+    }).finally(() => _swrMisses.delete(key));
+    _swrMisses.set(key, request);
+  }
+  if (cached && valid(cached) && !options.forceRefresh) {
+    void request.then((data) => { if (valid(data)) options.onUpdated?.(data); }).catch(() => {});
     return cached;
   }
-  const pending = _swrMisses.get(key) as Promise<T> | undefined;
-  if (pending) return pending;
-  const request = fresh()
-    .then((data) => {
-      if (valid(data)) void writeCache(key, data);
-      return data;
-    })
-    .finally(() => _swrMisses.delete(key));
-  _swrMisses.set(key, request);
-  return request;
+  try {
+    const data = await request;
+    return valid(data) ? data : cached && valid(cached) ? cached : data;
+  } catch (error) {
+    if (cached && valid(cached)) return cached;
+    throw error;
+  }
 }
 
 const UP4_BASE = "https://w1.anime4up.rest";
@@ -273,6 +276,7 @@ export interface SearchResult {
   type?: string;
   status?: string;
   synopsis?: string;
+  source?: SourceId;
 }
 
 /* ── Legacy compat ──────────────────────────── */
@@ -317,7 +321,6 @@ function cleanAnimeTitle(raw: string | null | undefined): string {
 
 type HomePayload = { success: boolean; data: { featured: FeaturedItem[]; sections: HomeSection[] } };
 
-let bgRefreshInFlight = false;
 let homeFreshInFlight: Promise<HomePayload> | null = null;
 
 // A home payload is only worth caching/showing if it actually carries content.
@@ -325,7 +328,8 @@ let homeFreshInFlight: Promise<HomePayload> | null = null;
 // scrape; freezing that for the 30-min TTL is exactly what made the app open to
 // "zero content". Gate both the cache write and the cache read on this.
 function homeHasContent(p: HomePayload | null | undefined): p is HomePayload {
-  return !!p && (p.data.featured.length > 0 || p.data.sections.length > 0);
+  return !!p?.data && Array.isArray(p.data.featured) && Array.isArray(p.data.sections) &&
+    (p.data.featured.length > 0 || p.data.sections.length > 0);
 }
 
 function sourceHomeHasContent(home: WitHome | null | undefined): home is WitHome {
@@ -372,7 +376,7 @@ function buildHomePayload(wit: {
 }
 
 async function fetchHomeFresh(): Promise<HomePayload> {
-  const [home, up4Episodes] = await Promise.all([loadWitanimeHome<WitHome>(
+  const home = await loadWitanimeHome<WitHome>(
     async () => {
       const direct = await fetchWitHomeDirect();
       return sourceHomeHasContent(direct) ? direct : null;
@@ -381,11 +385,14 @@ async function fetchHomeFresh(): Promise<HomePayload> {
       const viaWebView = await scrapeWitanimeHome();
       return sourceHomeHasContent(viaWebView) ? viaWebView : null;
     },
-  ), fetchAnime4upRecentPageDirect(1)
+    [fetchAnime4upHomeDirect, fetchAnime3rbHomeDirect],
+  );
+  // A ready home must not wait for optional archive/airing enrichment.
+  const up4Episodes = home ? [] : await fetchAnime4upRecentPageDirect(1)
     // anime4up backfills old episodes of finished shows into its archive;
     // they must not surface as "new episodes" (see filterFinishedEpisodes).
     .then((r) => (r ? filterFinishedEpisodes(r.episodes) : []))
-    .catch(() => [] as WitHomeEpisode[])]);
+    .catch(() => [] as WitHomeEpisode[]);
   if (!home && !up4Episodes.length) {
     void remoteLog("warn", "home", "Witanime home unavailable", { witanime: "empty" });
     return { success: true, data: { featured: [], sections: [] } };
@@ -442,19 +449,37 @@ export async function fetchHome(
   const cached = entry?.data ?? null;
   if (homeHasContent(cached)) {
     const stale = !entry || Date.now() - entry.ts > HOME_CACHE_TTL;
-    if ((stale || options.forceRefresh) && !bgRefreshInFlight) {
-      bgRefreshInFlight = true;
+    const revalidate = () => {
       void fetchHomeFreshShared()
         .then((fresh) => {
           if (onUpdated && homeHasContent(fresh) && homeSignature(fresh) !== homeSignature(cached))
             onUpdated(fresh);
         })
-        .catch(() => {})
-        .finally(() => { bgRefreshInFlight = false; });
+        .catch(() => {});
+    };
+    if (options.forceRefresh || homeFreshInFlight) {
+      revalidate();
+    } else if (stale) {
+      // The background revalidate's full-page parses run on the JS thread;
+      // content is already on screen, so the first seconds belong to the user's taps.
+      setTimeout(revalidate, 2500);
     }
     return cached;
   }
-  return fetchHomeFreshShared();
+  let liveReady = false;
+  const fresh = fetchHomeFreshShared().then((live) => { liveReady = homeHasContent(live); return live; });
+  const cloud = withTimeout(readCloudHome<HomePayload>(), 5000, null).catch(() => null);
+  return Promise.race([
+    fresh.then((live) => homeHasContent(live) ? live : cloud.then((shared) => homeHasContent(shared) ? shared : live)),
+    cloud.then(async (shared) => {
+      if (!homeHasContent(shared) || liveReady) return fresh;
+      void writeCache(HOME_CACHE_KEY, shared);
+      void fresh.then((updated) => {
+        if (onUpdated && homeHasContent(updated)) onUpdated(updated);
+      }).catch(() => {});
+      return shared;
+    }),
+  ]);
 }
 
 /* ── /episodes ──────────────────────────────── */
@@ -603,7 +628,7 @@ type EpisodesPayload = {
   data: AnimeDetail & { episodes4up?: Episode[]; merged?: { anime4up: string } | null };
 };
 
-async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
+async function fetchEpisodesFresh(animeUrl: string, priority = false): Promise<EpisodesPayload> {
   // anime3rb anime pages aren't witanime/anime4up shaped, so they're scraped
   // via the static title-page parser instead of the WebView episode scraper.
   // This lets anime that live ONLY on anime3rb (surfaced by search) open as a
@@ -628,7 +653,7 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
         merged: null,
       },
     };
-    if (a) {
+    if (payload.data.episodes.length > 0) {
       void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
       // Scout upload to the crowdsourced cloud cache so the next user of any
       // device renders this anime3rb page instantly. Only a payload with real
@@ -640,7 +665,7 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
   }
   // Fast path: primary source only. Cross-source enrichment is fetched in
   // the background via fetchEpisodesUp4 — see the detail screen.
-  const d = await scrapeEpisodesPage(animeUrl);
+  const d = await scrapeEpisodesPage(animeUrl, priority);
   const payload: EpisodesPayload = {
     success: true,
     data: {
@@ -659,12 +684,13 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
       merged: null,
     },
   };
-  void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
   // Scout upload to the crowdsourced cloud cache (only when the scrape actually
   // produced episodes — a zero-episode detail page is usually a failed scrape
   // and must not poison the shared cache).
-  if (payload.data.episodes.length > 0)
+  if (payload.data.episodes.length > 0) {
+    void writeCache(DETAIL_CACHE_PREFIX + animeUrl, payload);
     void writeCloudMetadata(animeUrl, payload, payload.data.episodes.length, payload.data.title);
+  }
   return payload;
 }
 
@@ -673,7 +699,7 @@ async function fetchEpisodesFresh(animeUrl: string): Promise<EpisodesPayload> {
 // update without deep-comparing the whole payload.
 function detailSignature(p: EpisodesPayload): string {
   const eps = p.data.episodes;
-  return `${p.data.totalEpisodes}:${eps.length}:${eps[0]?.href || ""}:${eps[eps.length - 1]?.href || ""}`;
+  return `${p.data.totalEpisodes}:${eps.map((e) => `${e.number}:${e.href || ""}`).join("|")}`;
 }
 
 // Dedupe concurrent scrapes of the SAME anime URL: the home For You rail
@@ -681,15 +707,15 @@ function detailSignature(p: EpisodesPayload): string {
 // screen opening that same card moments later must SHARE that one scrape
 // instead of queueing a second WebView job behind the serial scraper bus.
 const episodesFreshInflight = new Map<string, Promise<EpisodesPayload>>();
-function fetchEpisodesFreshOnce(animeUrl: string): Promise<EpisodesPayload> {
+function fetchEpisodesFreshOnce(animeUrl: string, priority = false): Promise<EpisodesPayload> {
   const existing = episodesFreshInflight.get(animeUrl);
   if (existing) return existing;
-  const p = fetchEpisodesFresh(animeUrl).finally(() => episodesFreshInflight.delete(animeUrl));
+  const p = fetchEpisodesFresh(animeUrl, priority).finally(() => episodesFreshInflight.delete(animeUrl));
   episodesFreshInflight.set(animeUrl, p);
   return p;
 }
 
-export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPayload) => void): Promise<EpisodesPayload> {
+export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPayload) => void, options: { forceRefresh?: boolean } = {}): Promise<EpisodesPayload> {
   // Re-clean the title AND synopsis on every return path so entries
   // cached/uploaded by an older build display cleanly too. Crucial for the
   // synopsis: older builds (and anime3rb's og:description fallback) cached SEO
@@ -705,38 +731,40 @@ export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPa
     }
     return p;
   };
+  const priority = !!onUpdated || !!options.forceRefresh;
+  if (options.forceRefresh) return clean(await fetchEpisodesFreshOnce(animeUrl, priority));
   // Read-through cache, fastest tier first:
   // 1) On-device cache — instant, offline-capable. Revalidate in the background
   //    and PUSH the fresh payload to the open screen when it visibly changed,
   //    so a newly-aired episode shows without a manual refresh.
-  const cached = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
-  if (cached) {
-    void fetchEpisodesFreshOnce(animeUrl)
+  const entry = await readCacheEntry<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
+  const cached = entry?.data ?? null;
+  if (cached?.success && cached.data.episodes.length > 0) {
+    if (Date.now() - entry!.ts < 60_000) return clean(cached);
+    void fetchEpisodesFreshOnce(animeUrl, priority)
       .then((fresh) => {
-        if (onUpdated && fresh?.data && detailSignature(fresh) !== detailSignature(cached))
+        if (onUpdated && fresh?.success && fresh.data.episodes.length > 0 && detailSignature(fresh) !== detailSignature(cached))
           onUpdated(clean(fresh));
       })
       .catch(() => {});
     return clean(cached);
   }
-  // 2) Crowdsourced cloud cache — another device already scouted this anime, so
-  //    render instantly with NO live scrape. Seed the on-device cache so the
-  //    next open is offline-instant. Only when the shared entry is stale do we
-  //    pay for a background re-scrape (which upserts and refreshes it for all).
-  const cloud = await readCloudMetadata<EpisodesPayload>(animeUrl).catch(() => null);
-  if (cloud?.payload?.data) {
+  // 2) Shared cache supplies the first paint; an open detail page still
+  //    revalidates, since new episodes can arrive within the cloud's 6h TTL.
+  const cloud = await withTimeout(readCloudMetadata<EpisodesPayload>(animeUrl), 2500, null).catch(() => null);
+  if (cloud?.payload?.success && cloud.payload.data.episodes.length > 0) {
     void writeCache(DETAIL_CACHE_PREFIX + animeUrl, cloud.payload);
-    if (cloud.stale)
-      void fetchEpisodesFreshOnce(animeUrl)
+    if (cloud.stale || onUpdated)
+      void fetchEpisodesFreshOnce(animeUrl, priority)
         .then((fresh) => {
-          if (onUpdated && fresh?.data && detailSignature(fresh) !== detailSignature(cloud.payload))
+          if (onUpdated && fresh?.success && fresh.data.episodes.length > 0 && detailSignature(fresh) !== detailSignature(cloud.payload))
             onUpdated(clean(fresh));
         })
         .catch(() => {});
     return clean(cloud.payload);
   }
   // 3) Cold path — live scrape on the residential IP, then scout-upload.
-  return clean(await fetchEpisodesFreshOnce(animeUrl));
+  return clean(await fetchEpisodesFreshOnce(animeUrl, priority));
 }
 
 /**
@@ -748,6 +776,7 @@ export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPa
 export async function fetchEpisodesUp4(
   animeUrl: string,
   title: string | null,
+  options: { forceRefresh?: boolean; onUpdated?: (data: { merged: { anime4up: string } | null; episodes4up: Episode[] }) => void } = {},
 ): Promise<{ merged: { anime4up: string } | null; episodes4up: Episode[] }> {
   const isAnime4up = /anime4up/i.test(animeUrl);
   if (isAnime4up) {
@@ -755,7 +784,7 @@ export async function fetchEpisodesUp4(
     // (written to the detail cache) instead of scraping the same page a second
     // time — two identical 35s WebView jobs per detail open.
     const detail = await readCache<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL);
-    if (detail?.data?.episodes?.length) {
+    if (!options.forceRefresh && detail?.data?.episodes?.length) {
       return { merged: { anime4up: animeUrl }, episodes4up: detail.data.episodes };
     }
     const d = await scrapeEpisodesPage(animeUrl).catch(() => null);
@@ -764,32 +793,14 @@ export async function fetchEpisodesUp4(
 
   // Check up4-episodes cache first
   const cacheKey = UP4_CACHE_PREFIX + animeUrl;
-  const cached = await readCache<{ merged: { anime4up: string } | null; episodes4up: Episode[] }>(cacheKey, UP4_CACHE_TTL);
-  if (cached) return cached;
-
-  const guessTitle = titleFromSlug(animeUrl);
-  const lookupTitle = title || guessTitle;
-  if (!lookupTitle) return { merged: null, episodes4up: [] };
-
-  const crossUrl = await getCrossSourceUrl(lookupTitle, "witanime").catch(() => null);
-  if (!crossUrl) {
-    // Don't persist the miss — a later attempt (better network, or a title
-    // that now resolves) should be free to retry instead of being stuck on a
-    // cached empty for 24h.
-    return { merged: null, episodes4up: [] };
-  }
-
-  let episodes4up: Episode[] = [];
-  try {
-    const up4 = await scrapeEpisodesPage(crossUrl);
-    episodes4up = up4.episodes;
-  } catch {}
-
-  const result = { merged: { anime4up: crossUrl }, episodes4up };
-  // Only cache a positive hit; an empty episode list is likely a transient
-  // scrape failure and shouldn't be frozen for the full TTL.
-  if (episodes4up.length > 0) void writeCache(cacheKey, result);
-  return result;
+  return swr(cacheKey, UP4_CACHE_TTL, async () => {
+    const lookupTitle = title || titleFromSlug(animeUrl);
+    if (!lookupTitle) return { merged: null, episodes4up: [] };
+    const crossUrl = await getCrossSourceUrl(lookupTitle, "witanime").catch(() => null);
+    if (!crossUrl) return { merged: null, episodes4up: [] };
+    const up4 = await scrapeEpisodesPage(crossUrl).catch(() => null);
+    return { merged: { anime4up: crossUrl }, episodes4up: up4?.episodes ?? [] };
+  }, (data) => data.episodes4up.length > 0, { ...options, revalidateAfterMs: 60_000 });
 }
 
 // ── Witanime anime-page recommendation widgets ──
@@ -1234,24 +1245,22 @@ export async function diagnoseAnime3rb(title: string, epNum: number): Promise<st
 // isn't cached so a flaky resolve can retry on the next visit.
 const A3RB_EPS_PREFIX = "@a3rb_eps_v3:"; // v3: discard episode lists keyed by pre-disambiguation (wrong-version) title URLs
 const A3RB_EPS_TTL = 6 * 60 * 60 * 1000;
-export async function fetchAnime3rbEpisodes(animeTitle: string): Promise<Episode[]> {
+export async function fetchAnime3rbEpisodes(animeTitle: string, options: { forceRefresh?: boolean; onUpdated?: (episodes: Episode[]) => void } = {}): Promise<Episode[]> {
   if (!animeTitle || !animeTitle.trim()) return [];
   const titleUrl = await resolveAnime3rbTitleUrl(animeTitle);
   if (!titleUrl) return [];
   const cacheKey = A3RB_EPS_PREFIX + titleUrl;
-  const cached = await readCache<Episode[]>(cacheKey, A3RB_EPS_TTL);
-  if (cached) return cached;
-  const detail = await scrapeAnime3rbTitlePage(titleUrl).catch(() => null);
-  const eps: Episode[] = (detail?.episodes || []).map((e) => ({
-    title: e.title, number: e.number, type: e.type, screenshot: e.screenshot, href: e.href,
-  }));
-  if (eps.length > 0) void writeCache(cacheKey, eps);
-  return eps;
+  return swr(cacheKey, A3RB_EPS_TTL, async () => {
+    const detail = await scrapeAnime3rbTitlePage(titleUrl).catch(() => null);
+    return (detail?.episodes || []).map((e) => ({
+      title: e.title, number: e.number, type: e.type, screenshot: e.screenshot, href: e.href,
+    }));
+  }, (episodes) => episodes.length > 0, { ...options, revalidateAfterMs: 60_000 });
 }
 
 /* ── /recent ────────────────────────────────── */
 
-export async function fetchRecent(page = 1): Promise<{
+export async function fetchRecent(page = 1, options: { forceRefresh?: boolean } = {}): Promise<{
   success: boolean;
   data: { page: number; episodes: EpisodeItem[]; hasNext: boolean };
 }> {
@@ -1307,6 +1316,7 @@ export async function fetchRecent(page = 1): Promise<{
       return { success: true, data: { page, episodes, hasNext: r.hasNext ?? episodes.length > 0 } };
     },
     (d) => d.data.episodes.length > 0,
+    options,
   );
 }
 
@@ -1768,183 +1778,97 @@ function toSearchResult(it: { title: string; href: string; image: string | null;
     type: it.type ?? undefined,
     status: it.status ?? undefined,
     synopsis: it.synopsis ?? undefined,
+    source: identifySource(it.href) ?? undefined,
   };
 }
 
 type SearchPayload = {
   success: boolean;
-  data: { query: string; totalResults: number; results: SearchResult[] };
+  data: { query: string; totalResults: number; results: SearchResult[]; incompleteSources?: SourceId[] };
 };
 
-// Cold-path search. ALL sources start at t=0 and stream into the same list as
-// each lands (mergeIn de-dupes by title, rank() floats the closest match), so
-// the grid paints with the FIRST source to answer — usually witanime's or
-// anime4up's direct GET in well under a second. Previously anime4up/anime3rb
-// were serialized BEHIND witanime, whose direct GET can burn ~30s in retries
-// (and its WebView fallback another ~15s cold) before failing over — a flaky
-// witanime held the entire first paint hostage.
+// Each source completes independently; one fast hit must not suppress its siblings.
 async function searchAnimeFresh(
   query: string,
   onPartial?: (results: SearchResult[]) => void,
+  cached: SearchResult[] = [],
 ): Promise<SearchPayload> {
-  const results: SearchResult[] = [];
-  const seen = new Set<string>();
-  // Re-rank by how close each result's title is to the query so the BEST match
-  // floats to the top — the source sites return matches in their own order
-  // (often burying the exact anime under loosely-related rows). Scores are
-  // computed once per pass and cached by href. A stable sort keeps same-score
-  // rows in source/arrival order.
+  const startedAt = Date.now();
+  const results: SearchResult[] = cached.map((item) => ({ ...item }));
+  const seen = new Set(results.map((item) => item.href.replace(/\/$/, "")));
+  const incomplete = new Set<SourceId>();
+  let active = true;
   const rank = () => {
-    const sc = new Map<string, number>();
-    for (const r of results) if (!sc.has(r.href)) sc.set(r.href, fuzzyScore(query, r.title));
-    results.sort((a, b) => (sc.get(b.href) ?? 0) - (sc.get(a.href) ?? 0));
+    const scores = new Map(results.map((item) => [item.href, fuzzyScore(query, item.title)]));
+    results.sort((a, b) => (scores.get(b.href) ?? 0) - (scores.get(a.href) ?? 0));
   };
   const emit = () => { rank(); onPartial?.(results.slice()); };
   const mergeIn = (arr: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis?: string | null }[]) => {
+    if (!active) return;
     let added = false;
-    for (const it of arr) {
-      const k = norm(it.title);
-      if (k && seen.has(k)) continue;
-      if (k) seen.add(k);
-      results.push(toSearchResult(it));
+    for (const item of arr) {
+      // Keep alternate source links and distinct parts, even when their titles match.
+      const key = item.href.replace(/\/$/, "");
+      if (!item.title || !key || seen.has(key)) continue;
+      seen.add(key);
+      results.push(toSearchResult(item));
       added = true;
     }
-    return added;
-  };
-
-  // Full text, normalized full text, and each meaningful word are queried at
-  // the SAME time. The previous implementation did the word searches only
-  // after a fixed 15-second wait; that made the feature technically present but
-  // practically invisible. Each direct request is capped, so one unhealthy
-  // source cannot keep the search spinner alive.
-  const FAST_SOURCE_MS = 3_000;
-  const plannedQueries = sourceSearchQueries(query);
-  let exactWitFailed = false;
-  let exactUp4Failed = false;
-  const directP = Promise.all(plannedQueries.map(async (sourceQuery) => {
-    const [wit, up4] = await Promise.all([
-      withTimeout(searchWitanimeDirectList(sourceQuery).catch(() => null), FAST_SOURCE_MS, null),
-      withTimeout(searchAnime4upDirectList(sourceQuery).catch(() => null), FAST_SOURCE_MS, null),
-    ]);
-    if (sourceQuery === query) {
-      exactWitFailed = wit === null;
-      exactUp4Failed = up4 === null;
-    }
-    if (wit?.results?.length && mergeIn(wit.results)) emit();
-    if (up4?.length && mergeIn(up4)) emit();
-  }));
-
-  // Start anime3rb in parallel too, but do not make ordinary Witanime/Anime4up
-  // hits wait for its large sitemap or detail page.
-  const fuzzyCatalogP = withTimeout(
-    searchAnime3rbCatalogFuzzy(query, 5).catch(() => [] as { slug: string; score: number }[]),
-    4_500,
-    [] as { slug: string; score: number }[],
-  );
-  const a3rbP = withTimeout((async () => {
-    const url =
-      (await searchAnime3rbCatalog(query).catch(() => null)) ||
-      (await searchAnime3rbDirect(query).catch(() => null));
-    if (!url) return null;
-    const detail = await scrapeAnime3rbTitlePage(url).catch(() => null);
-    return detail?.title ? { url, detail } : null;
-  })(), 4_500, null).then((hit) => {
-    if (hit && mergeIn([{
-      title: hit.detail.title, href: hit.url, image: hit.detail.poster || null,
-      type: null, status: null, synopsis: hit.detail.synopsis || null,
-    }])) emit();
-  }).catch(() => {});
-
-  await directP;
-  if (results.length === 0) await a3rbP;
-
-  // A single-word typo may produce no direct source rows. In that true miss
-  // case, fetch the closest anime3rb candidates in parallel (not serially).
-  if (results.length === 0) {
-    const top = await fuzzyCatalogP;
-    const details = await Promise.all(top.slice(0, 3).map(async ({ slug }) => {
-      const url = `https://anime3rb.com/titles/${slug}`;
-      const detail = await withTimeout(scrapeAnime3rbTitlePage(url).catch(() => null), 3_500, null);
-      return detail?.title ? { url, detail } : null;
-    }));
-    let added = false;
-    for (const hit of details) {
-      if (!hit) continue;
-      added = mergeIn([{
-        title: hit.detail.title, href: hit.url, image: hit.detail.poster || null,
-        type: null, status: null, synopsis: hit.detail.synopsis || null,
-      }]) || added;
-    }
     if (added) emit();
-  }
-
-  // WebView is now only a network-failure fallback. An empty direct response is
-  // a legitimate exact-search miss and should not repeat the same query through
-  // a much slower renderer.
-  if (results.length === 0 && (exactWitFailed || exactUp4Failed)) {
-    const [wit, up4] = await Promise.all([
-      exactWitFailed
-        ? withTimeout(scrapeSearch(query).catch(() => null), 6_000, null)
-        : Promise.resolve(null),
-      exactUp4Failed
-        ? withTimeout(scrapeSearchUp4(query).catch(() => null), 6_000, null)
-        : Promise.resolve(null),
+  };
+  const SOURCE_MS = 60_000;
+  const searchPair = async (sourceQuery: string) => {
+    await Promise.all([
+      withTimeout(searchWitanimeDirectList(sourceQuery).catch(() => null), SOURCE_MS, null)
+        .then((hit) => { if (hit) mergeIn(hit.results); else incomplete.add("witanime"); }),
+      withTimeout(searchAnime4upDirectList(sourceQuery).catch(() => null), SOURCE_MS, null)
+        .then((hit) => { if (hit) mergeIn(hit); else incomplete.add("anime4up"); }),
     ]);
-    if (wit?.results?.length && mergeIn(wit.results)) emit();
-    if (up4?.results?.length && mergeIn(up4.results)) emit();
-  }
+  };
+  await Promise.all([
+    ...sourceSearchQueries(query).map(searchPair),
+    withTimeout(searchAnime3rbDirectList(query, (card) => mergeIn([card])).catch(() => null), SOURCE_MS, null)
+      .then((hit) => { if (hit) mergeIn(hit); else incomplete.add("anime3rb"); }),
+  ]);
 
-  // Cross-language bridge: the source sites index each anime under a SINGLE
-  // language, so an English query never finds a romaji-only title (and vice
-  // versa). When everything above came up empty, ask Jikan for the title's
-  // other names and re-search with the Latin-script ones (sites don't index
-  // kanji).
+  // Alternate language names recover a true miss without delaying existing matches.
   if (results.length === 0) {
     const alts = await withTimeout(getAltTitles(query).catch(() => []), 5_000, [] as string[]);
     const tried = new Set<string>([norm(query)]);
-    const candidates = alts
-      .filter((a) => /[a-z]/i.test(a))
-      .filter((a) => {
-        const n = norm(a);
-        if (!n || tried.has(n)) return false;
-        tried.add(n);
-        return true;
-      })
-      .slice(0, 2);
-    await Promise.all(candidates.map(async (alt) => {
-      const [wit, up4] = await Promise.all([
-        withTimeout(searchWitanimeDirectList(alt).catch(() => null), FAST_SOURCE_MS, null),
-        withTimeout(searchAnime4upDirectList(alt).catch(() => null), FAST_SOURCE_MS, null),
-      ]);
-      if (wit?.results?.length && mergeIn(wit.results)) emit();
-      if (up4?.length && mergeIn(up4)) emit();
-    }));
+    const candidates = alts.filter((alt) => /[a-z]/i.test(alt)).filter((alt) => {
+      const key = norm(alt);
+      if (!key || tried.has(key)) return false;
+      tried.add(key);
+      return true;
+    }).slice(0, 2);
+    await Promise.all(candidates.map(searchPair));
   }
-
+  active = false;
   rank();
-  return { success: true, data: { query, totalResults: results.length, results } };
+  const sourceCounts = { witanime: 0, anime4up: 0, anime3rb: 0 };
+  for (const result of results) {
+    const source = identifySource(result.href);
+    if (source) sourceCounts[source]++;
+  }
+  remoteLog(incomplete.size ? "warn" : "info", "scraper", incomplete.size ? "anime search incomplete" : "anime search completed", {
+    query: query.slice(0, 200), sourceCounts, incompleteSources: [...incomplete],
+    cachedCount: cached.length, elapsedMs: Date.now() - startedAt,
+  });
+  return { success: true, data: { query, totalResults: results.length, results, incompleteSources: [...incomplete] } };
 }
 
+const searchRequests = createRequestCache<SearchPayload>(0);
 export async function searchAnime(
   query: string,
   onPartial?: (results: SearchResult[]) => void,
 ): Promise<SearchPayload> {
-  // Stale-while-revalidate by hand (so the cold path can stream partials).
-  // A cached hit returns instantly and revalidates in the background; a cold
-  // query streams witanime → anime4up → anime3rb into `onPartial`.
-  const key = SEARCH_CACHE_PREFIX + query.toLowerCase().trim();
+  query = query.trim();
+  if (!query) return { success: true, data: { query, totalResults: 0, results: [] } };
+  const key = SEARCH_CACHE_PREFIX + query.toLowerCase();
   const cached = await readCache<SearchPayload>(key, SEARCH_CACHE_TTL);
-  if (cached && cached.data.results.length > 0) {
-    if (!_swrInFlight.has(key)) {
-      _swrInFlight.add(key);
-      void searchAnimeFresh(query)
-        .then((d) => { if (d.data.results.length > 0) return writeCache(key, d); })
-        .catch(() => {})
-        .finally(() => _swrInFlight.delete(key));
-    }
-    return cached;
-  }
-  const data = await searchAnimeFresh(query, onPartial);
+  if (cached?.data.results.length) onPartial?.(cached.data.results);
+  // Cached partial searches must refresh this screen, not just tomorrow's disk cache.
+  const data = await searchRequests.run(key, () => searchAnimeFresh(query, onPartial, cached?.data.results));
   if (data.data.results.length > 0) void writeCache(key, data);
   return data;
 }

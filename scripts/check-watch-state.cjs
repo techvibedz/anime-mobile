@@ -5,7 +5,12 @@ const ts = require('typescript');
 // Run the real storage/reconciliation modules with in-memory platform adapters.
 const storage = new Map();
 const modules = {};
-const react = { createContext: () => ({}), useCallback: x => x, useEffect() {}, useState() {}, useContext() {} };
+let airingLookup = async () => false;
+let failCompletionWrite = false;
+let maxReadBatch = 0;
+const effects = [];
+const react = { createContext: () => ({}), createElement: () => ({}), useCallback: x => x,
+  useEffect: fn => effects.push(fn), useState: initial => [initial, () => {}], useContext() {} };
 function load(file) {
   if (modules[file]) return modules[file];
   const exports = {};
@@ -14,16 +19,24 @@ function load(file) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React }
   }).outputText;
   new Function('require', 'exports', code)((name) => {
-    if (name === 'react') return react;
+    if (name === 'react') return { __esModule: true, default: react, ...react };
     if (name === '@react-native-async-storage/async-storage') return { __esModule: true, default: {
       getItem: async key => storage.get(key) ?? null,
-      setItem: async (key, value) => { storage.set(key, value); },
+      setItem: async (key, value) => {
+        if (key === 'anime_completion_v2' && failCompletionWrite) { failCompletionWrite = false; throw Error('storage full'); }
+        storage.set(key, value);
+      },
       removeItem: async key => { storage.delete(key); },
+      getAllKeys: async () => [...storage.keys()],
+      multiGet: async keys => { maxReadBatch = Math.max(maxReadBatch, keys.length); return keys.map(key => [key, storage.get(key)]); },
+      multiRemove: async keys => { for (const key of keys) storage.delete(key); },
     } };
     if (name === './supabase') return { isSupabaseConfigured: false };
     if (name === './continueWatching') return load('lib/continueWatching.ts');
     if (name === './historyMerge') return load('lib/historyMerge.ts');
     if (name === './completionMatch') return load('lib/completionMatch.ts');
+    if (name === './requestCache') return load('lib/requestCache.ts');
+    if (name === './airing') return { fetchSeriesFinished: (...args) => airingLookup(...args) };
     if (name === './storageMaintenance') return load('lib/storageMaintenance.ts');
     if (name === './history') return load('lib/history.ts');
     throw Error(name);
@@ -33,7 +46,14 @@ function load(file) {
 
 (async () => {
   const h = load('lib/history.ts');
+  // Real raw storage values, not already-normalized test strings.
+  const copies = [
+    { key: 'old-wit-key', hrefs: ['https://witanime.life/anime/test/'], titles: ['Test Anime'] },
+    { key: 'old-up4-key', hrefs: ['https://anime4up.com/anime/test'], titles: ['أنمي Test Anime مترجم'] },
+  ].map(rec => ({ ...rec, lastEpNum: 12, caughtUp: true, finished: true, updatedAt: 1 }));
+  storage.set('anime_completion_v2', JSON.stringify(Object.fromEntries(copies.map(rec => [rec.key, rec]))));
   const c = load('lib/completion.tsx');
+  assert.equal(await c.countCompletedAnime(), 1, 'legacy source copies count as one completed anime');
   const meta = { episodeTitle: 'episode 12', animeTitle: 'Test Anime', animeHref: 'https://witanime.you/anime/test', epNum: 12 };
   const entry = { ...meta, episodeHref: 'https://anime3rb.com/episode/test/12', image: '', positionMs: 95000, durationMs: 100000, updatedAt: 1 };
   storage.set('watch_history', JSON.stringify([entry, { ...entry, episodeHref: 'https://anime4up.com/episode/test-12', completed: true }]));
@@ -56,7 +76,19 @@ function load(file) {
   await c.reconcileCompletionFromEpisodes([meta]);
   assert.equal(Object.values(await c.getCompletionMap())[0].caughtUp, true);
   await c.reconcileCompletionFromEpisodes([{ ...meta, epNum: 13 }]);
-  assert.equal(Object.values(await c.getCompletionMap())[0].caughtUp, false, 'new unwatched episode clears badge');
+  assert.ok(Object.values(await c.getCompletionMap()).every(rec => !rec.caughtUp && !rec.finished), 'new episode clears EVERY raw/source copy');
+  assert.equal(Object.keys(await c.getCompletionMap()).length, 2, 'normalized matching reuses existing records');
+  await c.recordAnimeCompletion({ hrefs: [meta.animeHref], titles: [meta.animeTitle], lastEpNum: 12, caughtUp: true, finished: true });
+  // The detail page is authoritative over the list it shows: a stored higher
+  // number must not make the badge impossible to earn (it never showed, even
+  // after reopening the page). A real newer episode re-raises it via the feed.
+  assert.ok(Object.values(await c.getCompletionMap()).every(rec => rec.lastEpNum === 12 && rec.caughtUp), 'detail page repairs an inflated episode number');
+  await c.reconcileCompletionFromEpisodes([{ ...meta, epNum: 13 }]);
+  assert.ok(Object.values(await c.getCompletionMap()).every(rec => rec.lastEpNum === 13 && !rec.caughtUp), 'anchor-source new episode clears it again');
+  await c.recordAnimeCompletion({ hrefs: [meta.animeHref, 'https://anime4up.com/anime/test'], titles: [meta.animeTitle], lastEpNum: 13, caughtUp: true, finished: true });
+  // anime4up numbers/uploads differently from the witanime list the detail page anchors on.
+  await c.reconcileCompletionFromEpisodes([{ animeHref: 'https://anime4up.com/anime/test', animeTitle: meta.animeTitle, epNum: 25 }]);
+  assert.ok(Object.values(await c.getCompletionMap()).every(rec => rec.lastEpNum === 13 && rec.caughtUp), 'another source\'s number cannot inflate lastEpNum');
 
   // Title-key folding: spellings that previously produced different keys must
   // now produce the same key (Latin diacritics, Arabic hamza/taa-marbuta/
@@ -80,6 +112,52 @@ function load(file) {
   await c.recordAnimeCompletion({ hrefs: ['https://witanime.you/anime/drifted'], titles: ['Drifted Title'], lastEpNum: 12, caughtUp: true, finished: false });
   await c.reconcileCompletionFromEpisodes([{ animeHref: 'https://witanime.you/anime/drifted', animeTitle: 'Drifted Title', epNum: 12 }]);
   assert.equal((await c.getCompletionMap())['witanime/anime/drifted']?.caughtUp, true, 'drifted title keeps the badge');
+  await c.reconcileCompletionFromEpisodes([{ animeHref: 'https://witanime.life/anime/drifted/', animeTitle: 'Drifted Title', epNum: 13 }]);
+  assert.equal((await c.getCompletionMap())['witanime/anime/drifted']?.caughtUp, false, 'new episode clears even when no title has tracked history');
+
+  await h.saveProgress({ ...entry, episodeHref: 'https://anime3rb.com/episode/evicted/11', animeTitle: 'Evicted Finale', epNum: 11, completed: false });
+  await c.recordAnimeCompletion({ hrefs: ['https://witanime.life/anime/evicted'], titles: ['Evicted Finale'], lastEpNum: 12, caughtUp: true, finished: true });
+  await c.reconcileCompletionFromEpisodes([{ animeTitle: 'Evicted Finale', epNum: 11 }]);
+  assert.equal((await c.getCompletionMap())['witanime/anime/evicted'].finished, true, 'older history cannot erase a durable evicted finale mark');
+
+  // A delayed AniList lookup must never delay caught-up or resurrect a badge.
+  let finishAiring;
+  airingLookup = () => new Promise(resolve => { finishAiring = resolve; });
+  const race = { animeHref: 'https://anime3rb.com/titles/race', animeTitle: 'Race Anime', epNum: 12, isLast: true };
+  const pending = c.recordEpisodeWatched(race);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal((await c.getCompletionMap())['anime3rb/titles/race'].caughtUp, true, 'badge saves before network lookup finishes');
+  await c.reconcileCompletionFromEpisodes([{ ...race, epNum: 13 }]);
+  finishAiring(true);
+  await pending;
+  assert.equal((await c.getCompletionMap())['anime3rb/titles/race'].finished, false, 'late airing lookup cannot overwrite the new episode');
+  airingLookup = async () => true;
+  await c.recordEpisodeWatched({ ...race, epNum: 13 });
+  assert.equal((await c.getCompletionMap())['anime3rb/titles/race'].finished, true, 'finale upgrades when airing status is confirmed');
+
+  // Provider reacts to history even when Home and detail are not mounted.
+  c.CompletionProvider({ children: null });
+  const cleanups = effects.splice(0).map(effect => effect());
+  await h.toggleWatched('https://anime3rb.com/episode/race/13', { ...meta, animeHref: race.animeHref, animeTitle: race.animeTitle, epNum: 13 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await h.toggleWatched('https://anime3rb.com/episode/race/13', { ...meta, animeHref: race.animeHref, animeTitle: race.animeTitle, epNum: 13 });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal((await c.getCompletionMap())['anime3rb/titles/race'].caughtUp, false, 'unmark propagates without visiting Home/detail');
+  for (const cleanup of cleanups) cleanup?.();
+
+  storage.set('@detail_old', 'refetchable cache');
+  failCompletionWrite = true;
+  await c.recordAnimeCompletion({ hrefs: [race.animeHref], titles: [race.animeTitle], lastEpNum: 13, caughtUp: false, finished: false });
+  // Force a meaningful change for the storage-full recovery.
+  await c.recordAnimeCompletion({ hrefs: [race.animeHref], titles: [race.animeTitle, 'Race Alias'], lastEpNum: 13, caughtUp: false, finished: false });
+  assert.equal(storage.has('@detail_old'), false, 'full completion storage prunes only refetchable cache');
+  assert.ok(storage.has('watch_history'), 'history survives cache recovery');
+  const persisted = JSON.parse(storage.get('anime_completion_v2'));
+  assert.ok(persisted['anime3rb/titles/race'].titles.includes('Race Alias'), 'completion retry persists');
+
+  for (let i = 0; i < 65; i++) storage.set(`@detail_batch${i}`, JSON.stringify({ ts: 1, data: 'large payload' }));
+  await load('lib/storageMaintenance.ts').pruneExpiredCaches();
+  assert.ok(maxReadBatch <= 20, 'housekeeping bounds each bridge payload');
 
   // Grouped watch history: one row per anime across sources, with the last
   // episode reached and a per-anime delete that removes every source alias.

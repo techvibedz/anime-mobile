@@ -14,19 +14,19 @@ import {
   Easing,
   Keyboard,
   TextInput,
+  AppState,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, findAnime3rbAnimeUrl, findWitanimeAnimeUrl, findAnime4upAnimeUrl, fetchWitanimeSections } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, fetchWitanimeSections } from "../../lib/api";
 import type { AnimeDetail, Episode, RelatedAnimeCard } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
-import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, type CompletedSets } from "../../lib/history";
+import { getCompletedSets, isEpisodeWatched, animeTitleKey, normHref, toggleWatched, subscribeHistory, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
-import { fetchSeriesFinished } from "../../lib/airing";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
 import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, peekMalRating } from "../../lib/animeInfo";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
@@ -83,7 +83,7 @@ export default function AnimeDetailScreen() {
   // Completed-episode index (across all anime). Carries both per-href matches
   // (same source) and per-anime episode-number matches (cross source), so a
   // "watched" badge shows regardless of which source the episode was played in.
-  const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map(), knownTitles: new Set() });
+  const [completed, setCompleted] = useState<CompletedSets>({ hrefs: new Set(), numbersByTitle: new Map(), knownTitles: new Set(), knownNumbersByTitle: new Map() });
   // True once the first getCompletedSets() has resolved. The completion-record
   // effect below must wait for it — running against the initial EMPTY set wrote
   // caughtUp:false over a good record whenever the episode payload landed first.
@@ -116,50 +116,71 @@ export default function AnimeDetailScreen() {
   const bookmarked = bookmarkList !== null;
   const animeHref = id ? decodeURIComponent(id) : "";
   const isMainSource = /witanime/i.test(animeHref);
+  const refreshDetailRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
   useEffect(() => {
-    if (!id) return;
-    const url = decodeURIComponent(id);
-    let cancelled = false;
-    let resolvedTitle: string | null = null;
-    (async () => {
-      try {
-        // Primary scrape — return as soon as witanime data is ready so the
-        // UI renders episodes within a few seconds. onUpdated fires when the
-        // background revalidation finds visibly newer data (a newly-aired
-        // episode), so the list refreshes itself without a manual reload.
-        const res = await fetchEpisodes(url, (fresh) => {
-          if (cancelled || !fresh?.success) return;
-          setData(fresh.data);
-          setEpisodes4up(fresh.data.episodes4up || []);
-          setMerged(fresh.data.merged || null);
-        });
-        if (cancelled) return;
-        if (res.success) {
-          resolvedTitle = res.data.title;
-          setData(res.data);
-          setEpisodes4up(res.data.episodes4up || []);
-          setMerged(res.data.merged || null);
-        } else {
-          setError(t.failedToLoad);
-        }
-      } catch (e: any) {
-        if (!cancelled) setError(e.message ?? t.failedToLoad);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-      // Background enrichment — find anime4up URL + scrape its episodes so
-      // the "both sources" badge appears and url4up flows to /watch.
-      // This runs after the UI is already showing, so the user doesn't wait.
-      try {
-        const enrich = await fetchEpisodesUp4(url, resolvedTitle);
-        if (cancelled) return;
-        if (enrich.merged) setMerged(enrich.merged);
-        if (enrich.episodes4up.length > 0) setEpisodes4up(enrich.episodes4up);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
+    setData(null);
+    setEpisodes4up([]);
+    setEpisodes3rb([]);
+    setMerged(null);
+    setError(null);
+    setLoading(true);
   }, [id]);
+
+  // Focus, resume and polling share one refresh; late callbacks from a page
+  // that lost focus cannot put cached episodes back over the active page.
+  useFocusEffect(useCallback(() => {
+    if (!animeHref) return;
+    let active = true;
+    let running: Promise<void> | null = null;
+    const refresh = (forceRefresh = false): Promise<void> => {
+      if (running) return running;
+      running = (async () => {
+        let updated = false;
+        const apply = (fresh: Awaited<ReturnType<typeof fetchEpisodes>>) => {
+          if (!active || !fresh?.success || !fresh.data.episodes.length) return;
+          setData(fresh.data);
+          if (fresh.data.episodes4up?.length) setEpisodes4up(fresh.data.episodes4up);
+          if (fresh.data.merged) setMerged(fresh.data.merged);
+          setError(null);
+          setLoading(false);
+        };
+        try {
+          const res = await fetchEpisodes(animeHref, (fresh) => { updated = true; apply(fresh); }, { forceRefresh });
+          if (!active) return;
+          if (!updated) apply(res);
+          const title = res.data.title;
+          const applyUp4 = (enrich: Awaited<ReturnType<typeof fetchEpisodesUp4>>) => {
+            if (!active) return;
+            if (enrich.merged) setMerged(enrich.merged);
+            if (enrich.episodes4up.length) setEpisodes4up(enrich.episodes4up);
+          };
+          const apply3rb = (episodes: Episode[]) => { if (active && episodes.length) setEpisodes3rb(episodes); };
+          let up4Updated = false;
+          let a3rbUpdated = false;
+          await Promise.all([
+            fetchEpisodesUp4(animeHref, title, { forceRefresh: forceRefresh && !/anime4up/i.test(animeHref), onUpdated: (fresh) => { up4Updated = true; applyUp4(fresh); } })
+              .then((cached) => { if (!up4Updated) applyUp4(cached); }).catch(() => {}),
+            /anime3rb\.com/i.test(animeHref) ? Promise.resolve() :
+              fetchAnime3rbEpisodes(title, { forceRefresh, onUpdated: (fresh) => { a3rbUpdated = true; apply3rb(fresh); } })
+                .then((cached) => { if (!a3rbUpdated) apply3rb(cached); }).catch(() => {}),
+          ]);
+        } catch (e: any) {
+          if (active && !dataRef.current) setError(e.message ?? t.failedToLoad);
+        } finally {
+          if (active) { setLoading(false); setRefreshing(false); }
+        }
+      })().finally(() => { running = null; });
+      return running;
+    };
+    refreshDetailRef.current = refresh;
+    void refresh();
+    const timer = setInterval(() => { if (AppState.currentState === "active") void refresh(); }, 60_000);
+    const sub = AppState.addEventListener("change", (state) => { if (state === "active") void refresh(); });
+    return () => { active = false; clearInterval(timer); sub.remove(); refreshDetailRef.current = async () => {}; };
+  }, [animeHref]));
 
   // Re-check on focus and whenever local/cloud favorites change. Cloud hydration
   // happens asynchronously after sign-in, so a one-time mount check can race it
@@ -215,24 +236,13 @@ export default function AnimeDetailScreen() {
     return () => { cancelled = true; };
   }, [data?.title, animeHref]);
 
-  // Background: pull anime3rb's full episode list (a third source for the
-  // cross-source union). witanime is often a week behind and anime4up paginates,
-  // so anime3rb frequently carries the newest episode the others are missing.
-  // Skip when the page itself is already an anime3rb page (its episodes are the
-  // primary list). Runs after the UI is showing, so it never blocks render.
-  useEffect(() => {
-    if (!data?.title) return;
-    if (/anime3rb\.com/i.test(animeHref)) return;
-    let cancelled = false;
-    fetchAnime3rbEpisodes(data.title)
-      .then((eps) => { if (!cancelled && eps.length > 0) setEpisodes3rb(eps); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [data?.title, animeHref]);
-
   // Refresh watched flags when the screen regains focus (e.g. after watching).
   useFocusEffect(useCallback(() => {
-    getCompletedSets().then((s) => { setCompleted(s); setSetsLoaded(true); });
+    let active = true;
+    const refresh = () => { void getCompletedSets().then((s) => { if (active) { setCompleted(s); setSetsLoaded(true); } }); };
+    refresh();
+    const unsubscribe = subscribeHistory(refresh);
+    return () => { active = false; unsubscribe(); };
   }, []));
 
   // The two cross-source lists (anime4up + anime3rb) are resolved by TITLE, so a
@@ -273,34 +283,7 @@ export default function AnimeDetailScreen() {
 
   useEffect(() => {
     if (!data || !animeHref || maxNum === 0 || !setsLoaded) return;
-    (async () => {
-      const finished = caughtUp ? await fetchSeriesFinished(data.title, maxNum) : false;
-      // Record EVERY known source href + title so a card from any source rail
-      // (e.g. the anime4up-sourced "this season" rail) resolves the badge — not
-      // just the URL the anime happened to be opened under. Any source whose URL
-      // isn't already known is resolved by title here (memoized — repeat records
-      // don't re-search), all three in parallel.
-      const hrefs: (string | null | undefined)[] = [animeHref, merged?.anime4up];
-      const has = (re: RegExp) => hrefs.some((h) => h && re.test(h));
-      const resolvers: Promise<void>[] = [];
-      if (!has(/witanime\./i))
-        resolvers.push(findWitanimeAnimeUrl(data.title).then((u) => { if (u) hrefs.push(u); }));
-      if (!has(/anime4up/i))
-        resolvers.push(findAnime4upAnimeUrl(data.title).then((u) => { if (u) hrefs.push(u); }));
-      if (!has(/anime3rb\.com/i))
-        resolvers.push(findAnime3rbAnimeUrl(data.title).then((u) => { if (u) hrefs.push(u); }));
-      await Promise.all(resolvers);
-      // Deliberately NOT cancelled on unmount: backing out mid-resolve used to
-      // drop the write entirely, so a finale watched then left immediately never
-      // produced the badge. The write is idempotent and merge-safe.
-      await recordAnimeCompletion({
-        hrefs,
-        titles: [data.title],
-        lastEpNum: maxNum,
-        caughtUp,
-        finished,
-      }).catch(() => {});
-    })();
+    void recordAnimeCompletion({ hrefs: [animeHref, merged?.anime4up], titles: [data.title], lastEpNum: maxNum, caughtUp }).catch(() => {});
   }, [data?.title, animeHref, merged?.anime4up, maxNum, caughtUp, setsLoaded]);
 
   const handleToggleWatched = useCallback(async (ep: GridEpisode) => {
@@ -357,24 +340,10 @@ export default function AnimeDetailScreen() {
   const reload = useCallback(async () => {
     if (!animeHref) return;
     setRefreshing(true);
-    try {
-      const res = await fetchEpisodes(animeHref);
-      if (res.success) {
-        setData(res.data);
-        setEpisodes4up(res.data.episodes4up || []);
-        setMerged(res.data.merged || null);
-        setError(null);
-        fetchAnimeMal(res.data.title).then((m) => setMalScore(m.score)).catch(() => {});
-      }
-      try {
-        const enrich = await fetchEpisodesUp4(animeHref, res.data.title);
-        if (enrich.merged) setMerged(enrich.merged);
-        if (enrich.episodes4up.length > 0) setEpisodes4up(enrich.episodes4up);
-      } catch {}
-    } catch {} finally {
-      setRefreshing(false);
-    }
-  }, [animeHref]);
+    try { await refreshDetailRef.current(true); }
+    finally { setRefreshing(false); }
+    if (data?.title) void fetchAnimeMal(data.title).then((m) => setMalScore(m.score)).catch(() => {});
+  }, [animeHref, data?.title]);
 
   if (loading) return <DetailSkeleton />;
 

@@ -5,9 +5,10 @@
 // browser that solves CF challenges naturally — then hand back the rendered
 // HTML. Callers never care which path won.
 
-import { fetchHtml } from "../scraper/direct";
+import { fetchHtml, looksLikeCfChallenge } from "../scraper/direct";
 import { enqueue } from "../scraper/bus";
 import { EXTRACT_RENDERED_HTML } from "../scraper/scripts";
+import { VIDEO_USER_AGENT } from "../videoProviders";
 
 // Manga sites answer fast or not at all when Cloudflare is in the way; fail
 // into the WebView quickly instead of burning a long retry ladder first.
@@ -17,25 +18,26 @@ const DIRECT_TIMEOUTS = [5000, 8000] as const;
 // the same page at the same moment; both wait on the same browser trip.
 const webViewInflight = new Map<string, Promise<string | null>>();
 
-async function fetchViaWebView(url: string, marker: string): Promise<string | null> {
-  const existing = webViewInflight.get(url);
+async function fetchViaWebView(url: string, marker: string, rawText = false): Promise<string | null> {
+  const key = `${rawText}|${marker}|${url}`;
+  const existing = webViewInflight.get(key);
   if (existing) return existing;
   const pending = (async () => {
     try {
       const result = (await enqueue({
         url,
-        injectAfter: EXTRACT_RENDERED_HTML(marker),
+        injectAfter: EXTRACT_RENDERED_HTML(marker, rawText, 27_000),
         timeoutMs: 28_000,
       })) as { html?: string } | null;
       const html = result?.html;
-      return typeof html === "string" && html.length > 0 ? html : null;
+      return typeof html === "string" && html.length > 0 && !looksLikeCfChallenge(html) && (!marker || html.includes(marker)) ? html : null;
     } catch {
       return null;
     } finally {
-      webViewInflight.delete(url);
+      webViewInflight.delete(key);
     }
   })();
-  webViewInflight.set(url, pending);
+  webViewInflight.set(key, pending);
   return pending;
 }
 
@@ -51,12 +53,11 @@ export async function fetchMangaHtml(
   marker = "",
 ): Promise<string | null> {
   const direct = await fetchHtml(url, referer, DIRECT_TIMEOUTS);
-  if (direct && (!marker || direct.includes(marker))) return direct;
+  if (direct && !looksLikeCfChallenge(direct) && (!marker || direct.includes(marker))) return direct;
   return fetchViaWebView(url, marker);
 }
 
-/** JSON endpoints (source APIs): direct only — a WebView render can't return
- * raw JSON. Retries twice with a browser UA, then gives up quietly. */
+/** JSON endpoints use the same browser verification fallback as HTML pages. */
 export async function fetchMangaJson<T>(url: string, referer?: string): Promise<T | null> {
   const text = await fetchMangaRawText(url, referer);
   if (text == null) return null;
@@ -77,6 +78,7 @@ export async function fetchMangaRawText(url: string, referer?: string): Promise<
       const res = await fetch(url, {
         signal: controller.signal,
         headers: {
+          "User-Agent": VIDEO_USER_AGENT,
           Accept: "application/json, text/plain, */*",
           "Accept-Language": "ar,en;q=0.9",
           ...(referer ? { Referer: referer } : {}),
@@ -86,14 +88,17 @@ export async function fetchMangaRawText(url: string, referer?: string): Promise<
         // Read the body BEFORE clearing the timer — a stalled body read is
         // bounded by the same abort window.
         const text = await res.text();
-        clearTimeout(timer);
-        return text;
+        if (text && !looksLikeCfChallenge(text)) return text;
+        break;
       }
-      clearTimeout(timer);
+      if (res.status === 404 || res.status === 410) return null;
+      if (res.status === 403 || res.status === 429 || res.status === 503) break;
     } catch {
+      // The next attempt/browser uses the source's existing encrypted DNS.
+    } finally {
       clearTimeout(timer);
     }
     if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  return null;
+  return fetchViaWebView(url, "", true);
 }

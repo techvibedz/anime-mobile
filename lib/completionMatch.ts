@@ -21,12 +21,27 @@ export function matchingRecords<T extends CompletionLike>(
   records: readonly T[],
   hrefKeys: ReadonlySet<string>,
   titleKeys: ReadonlySet<string>,
+  normalizeHref: (value: string) => string = (value) => value,
+  normalizeTitle: (value: string) => string = (value) => value,
 ): T[] {
   const out: T[] = [];
   for (const rec of records) {
-    const hrefHit = hrefKeys.size > 0 && rec.hrefs.some((h) => hrefKeys.has(h));
-    const titleHit = titleKeys.size > 0 && rec.titles.some((t) => titleKeys.has(t));
+    const hrefHit = hrefKeys.size > 0 && rec.hrefs.some((h) => hrefKeys.has(normalizeHref(h)));
+    const titleHit = titleKeys.size > 0 && rec.titles.some((t) => titleKeys.has(normalizeTitle(t)));
     if (hrefHit || titleHit) out.push(rec);
   }
   return out;
+}
+
+/**
+ * Whether two normalized anime keys ("witanime/anime/x") come from the same
+ * source. Episode numbers are only comparable within ONE source: anime4up runs
+ * ahead of / numbers differently from the list the detail page shows, so a feed
+ * item from another source must not raise a record's lastEpNum — that inflated
+ * number made the finale-watched badge impossible to ever show. Unknown → true.
+ */
+export function sameSource(a: string, b: string): boolean {
+  const sa = a.split("/")[0];
+  const sb = b.split("/")[0];
+  return !sa || !sb || sa === sb;
 }

@@ -1,5 +1,5 @@
 // Overlay the tested app source onto a detached worktree of the native build.
-// Keep that build's dependency lock, Babel config and native app config intact.
+// Keep that build's dependencies, Reanimated plugin and native config intact.
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
@@ -24,6 +24,11 @@ for (const relative of new Set(tracked)) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.copyFileSync(source, destination);
 }
+// JSX is OTA code. Inline-style screens need React's runtime; className files
+// opt into NativeWind explicitly. Keep the SDK 54 Reanimated compiler plugin.
+const babelPath = path.join(target, "babel.config.js");
+const babel = fs.readFileSync(babelPath, "utf8");
+fs.writeFileSync(babelPath, babel.replace('[["babel-preset-expo", { jsxImportSource: "nativewind" }]]', '["babel-preset-expo"]'));
 // Test commands changed since the APK build; use the current checks against the
 // native-compatible dependencies without changing any locked dependency.
 native.scripts = current.scripts;

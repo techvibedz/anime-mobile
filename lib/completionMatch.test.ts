@@ -2,7 +2,7 @@
 // shows no badge" path. Run:  npx tsx lib/completionMatch.test.ts
 
 import assert from "node:assert";
-import { matchingRecords } from "./completionMatch";
+import { matchingRecords, sameSource } from "./completionMatch";
 
 const rec = (name: string, hrefs: string[], titles: string[]) => ({ name, hrefs, titles });
 const names = (records: { name: string }[]) => records.map((r) => r.name);
@@ -39,5 +39,10 @@ assert.deepEqual(
 
 // Unrelated records are never swept in.
 assert.deepEqual(matchingRecords([rec("other", ["h9"], ["t9"])], keys("h1"), keys("title a")), []);
+
+// Feed items may only raise lastEpNum from the record's own (anchor) source.
+assert.equal(sameSource("witanime/anime/x", "witanime/anime/y"), true);
+assert.equal(sameSource("anime4up/anime/x", "witanime/anime/x"), false);
+assert.equal(sameSource("", "witanime/anime/x"), true);
 
 console.log("completionMatch.test.ts — all assertions passed");

@@ -182,7 +182,7 @@ function animeUrlFor(ep: RawEpisode): string {
  * loading them here made two background notification jobs saturate startup. */
 async function fetchRecentFeed(): Promise<RawEpisode[]> {
   try {
-    const result = await fetchRecent(1);
+    const result = await fetchRecent(1, { forceRefresh: true });
     return result.success ? result.data.episodes : [];
   } catch { return []; }
 }

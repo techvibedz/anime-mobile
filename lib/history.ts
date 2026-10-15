@@ -18,6 +18,7 @@ export function subscribeHistory(cb: () => void): () => void {
 // getProgress, getCompletedSets, etc. all paid that repeatedly. All writes go
 // through saveHistory, so the cache is always current within this module.
 let historyCache: WatchEntry[] | null = null;
+let historyLoading: Promise<WatchEntry[]> | null = null;
 
 let localWriteFailureLogged = false;
 async function saveHistory(list: WatchEntry[]) {
@@ -164,6 +165,11 @@ export async function pullHistoryFromCloud() {
 
 export async function getHistory(): Promise<WatchEntry[]> {
   if (historyCache) return historyCache.slice();
+  if (!historyLoading) historyLoading = loadHistory().finally(() => { historyLoading = null; });
+  return (await historyLoading).slice();
+}
+
+async function loadHistory(): Promise<WatchEntry[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) { historyCache = []; return []; }
   try {
@@ -567,6 +573,8 @@ export interface CompletedSets {
    *  tell "explicitly unwatched" apart from "no tracked history under this
    *  title" (title drift between sources) — see reconcileCompletionFromEpisodes. */
   knownTitles: Set<string>;
+  /** Includes unwatched entries, so an explicit unmark differs from eviction. */
+  knownNumbersByTitle: Map<string, Set<number>>;
 }
 
 export async function getCompletedSets(): Promise<CompletedSets> {
@@ -574,12 +582,19 @@ export async function getCompletedSets(): Promise<CompletedSets> {
   const hrefs = new Set<string>();
   const numbersByTitle = new Map<string, Set<number>>();
   const knownTitles = new Set<string>();
+  const knownNumbersByTitle = new Map<string, Set<number>>();
   for (const e of list) {
     const tkAll = animeTitleKey(e.animeTitle);
+    const n = deriveEpNum(e);
     if (tkAll) knownTitles.add(tkAll);
+    if (tkAll && n != null) {
+      let known = knownNumbersByTitle.get(tkAll);
+      if (!known) { known = new Set(); knownNumbersByTitle.set(tkAll, known); }
+      known.add(n);
+    }
     if (!isCompleted(e)) continue;
     hrefs.add(normHref(e.episodeHref));
-    const n = deriveEpNum(e);
+    hrefs.add(normAnimeKey(e.episodeHref));
     const tk = animeTitleKey(e.animeTitle);
     if (n != null && tk) {
       let set = numbersByTitle.get(tk);
@@ -587,7 +602,7 @@ export async function getCompletedSets(): Promise<CompletedSets> {
       set.add(n);
     }
   }
-  return { hrefs, numbersByTitle, knownTitles };
+  return { hrefs, numbersByTitle, knownTitles, knownNumbersByTitle };
 }
 
 /** True if an episode is watched by EITHER a same-source href match OR a
@@ -596,7 +611,7 @@ export function isEpisodeWatched(
   sets: CompletedSets,
   opts: { hrefs: (string | null | undefined)[]; epNum?: number | null; animeTitle?: string | null },
 ): boolean {
-  if (opts.hrefs.some((h) => h && sets.hrefs.has(normHref(h)))) return true;
+  if (opts.hrefs.some((h) => h && (sets.hrefs.has(normHref(h)) || sets.hrefs.has(normAnimeKey(h))))) return true;
   if (opts.epNum != null && opts.animeTitle) {
     const set = sets.numbersByTitle.get(animeTitleKey(opts.animeTitle));
     if (set && set.has(opts.epNum)) return true;

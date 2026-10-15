@@ -60,28 +60,33 @@ export async function pruneExpiredCaches(maxAgeMs = 7 * 24 * 60 * 60 * 1000): Pr
   try {
     const keys = (await AsyncStorage.getAllKeys()).filter(isCacheKey);
     if (keys.length === 0) return 0;
-    const pairs = await AsyncStorage.multiGet(keys);
     const now = Date.now();
     const victims: string[] = [];
-    for (const [key, raw] of pairs) {
-      if (!raw) continue;
-      // Every cache payload is written as `{"ts":<millis>,...` — read the
-      // timestamp from the head instead of JSON.parse-ing the whole value
-      // (home/detail payloads are 100 KB+, and this pass used to parse every
-      // cache entry in one burst right as the first home render was happening).
-      const m = /"ts"\s*:\s*(\d+)/.exec(raw.length > 64 ? raw.slice(0, 64) : raw);
-      if (!m) {
-        // Unknown shape: try a full parse for a ts; if it's garbage, drop it.
-        try {
-          const parsed = JSON.parse(raw) as { ts?: number };
-          if (!parsed?.ts || now - parsed.ts > maxAgeMs) victims.push(key);
-        } catch {
-          victims.push(key);
+    // Bound bridge payloads and yield between batches so housekeeping cannot
+    // monopolize the first seconds of taps/scrolling on a large cache.
+    for (let offset = 0; offset < keys.length; offset += 20) {
+      const pairs = await AsyncStorage.multiGet(keys.slice(offset, offset + 20));
+      for (const [key, raw] of pairs) {
+        if (!raw) continue;
+        // Every cache payload is written as `{"ts":<millis>,...` — read the
+        // timestamp from the head instead of JSON.parse-ing the whole value
+        // (home/detail payloads are 100 KB+, and this pass used to parse every
+        // cache entry in one burst right as the first home render was happening).
+        const m = /"ts"\s*:\s*(\d+)/.exec(raw.length > 64 ? raw.slice(0, 64) : raw);
+        if (!m) {
+          // Unknown shape: try a full parse for a ts; if it's garbage, drop it.
+          try {
+            const parsed = JSON.parse(raw) as { ts?: number };
+            if (!parsed?.ts || now - parsed.ts > maxAgeMs) victims.push(key);
+          } catch {
+            victims.push(key);
+          }
+          continue;
         }
-        continue;
+        const ts = Number(m[1]);
+        if (!ts || now - ts > maxAgeMs) victims.push(key);
       }
-      const ts = Number(m[1]);
-      if (!ts || now - ts > maxAgeMs) victims.push(key);
+      if (offset + 20 < keys.length) await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     if (victims.length > 0) await AsyncStorage.multiRemove(victims);
     return victims.length;

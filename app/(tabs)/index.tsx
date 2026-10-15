@@ -3,6 +3,7 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
   Pressable,
   useWindowDimensions,
   RefreshControl,
@@ -19,7 +20,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchHome, fetchEpisodes } from "../../lib/api";
+import { fetchHome } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
 import { episodeNumberFromUrl } from "../../lib/videoProviders";
 import { isEpisodeUrl, toAnimeUrl } from "../../lib/favorites";
@@ -31,7 +32,6 @@ import { fetchAnimeRecommendations } from "../../lib/animeInfo";
 import type { RecItem } from "../../lib/animeInfo";
 import { pickSeeds, rankRecommendations, type RankedRec } from "../../lib/recommend";
 import { AniListPosterCard } from "../../components/AniListPosterCard";
-import { resolveEntryToSource } from "../../lib/anilistResolve";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebarActions } from "../../components/Sidebar";
 import { PantoufaWordmark } from "../../components/PantoufaWordmark";
@@ -39,7 +39,6 @@ import { Shimmer } from "../../components/Shimmer";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
 import { reconcileCompletionFromEpisodes } from "../../lib/completion";
-import { subscribeHistory } from "../../lib/history";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { PosterCard } from "../../components/PosterCard";
 import { StateView } from "../../components/StateView";
@@ -248,6 +247,7 @@ export default function HomeScreen() {
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasContent = useRef(false);
   const coldStartDeadline = useRef(0);
+  const lastLoadAt = useRef(0);
   const MAX_EMPTY_RETRIES = 5;
   const COLD_START_DEADLINE_MS = 25000;
 
@@ -268,6 +268,7 @@ export default function HomeScreen() {
   }, []);
 
   const load = useCallback(async (forceRefresh = false) => {
+    lastLoadAt.current = Date.now();
     // Start (or reuse) an absolute cold-start deadline so the skeleton can't
     // exceed ~25s TOTAL across retries regardless of per-scrape latency.
     if (coldStartDeadline.current === 0) coldStartDeadline.current = Date.now() + COLD_START_DEADLINE_MS;
@@ -284,6 +285,8 @@ export default function HomeScreen() {
           if (feat.length > 0 || secs.length > 0) {
             setFeatured(feat);
             setSections(secs);
+            hasContent.current = true;
+            setLoading(false);
           }
         }, { forceRefresh }),
         getContinueWatching(),
@@ -361,7 +364,9 @@ export default function HomeScreen() {
   // Detect new episodes → in-app notification center + report newly-available
   // episodes to the server for closed-app push (with image). Both run in the
   // background so they never block the home feed.
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    if (loading) return;
+    if (Date.now() - lastLoadAt.current > 60_000) void load();
     const run = () => {
       // Carries reconcileCompletionFromEpisodes — re-running on foreground (not
       // just mount) is what clears a stale "caught up" badge after a new episode
@@ -372,12 +377,13 @@ export default function HomeScreen() {
         .catch(() => {});
       reportRecentEpisodes().catch(() => {});
     };
-    run();
+    const timer = setTimeout(run, 15_000);
+    const poll = setInterval(() => { if (AppState.currentState === "active") { void load(true); run(); } }, 5 * 60_000);
     const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active") run();
+      if (s === "active") { void load(true); run(); }
     });
-    return () => sub.remove();
-  }, []);
+    return () => { clearTimeout(timer); clearInterval(poll); sub.remove(); };
+  }, [loading, load]));
 
   // Reconcile directly from the visible feed, including cache and cloud hydration.
   useFocusEffect(useCallback(() => {
@@ -389,7 +395,6 @@ export default function HomeScreen() {
       }))).catch(() => {});
     };
     refreshBadges();
-    return subscribeHistory(refreshBadges);
   }, [sections]));
 
   // Refresh history + unread badge when the tab regains focus
@@ -524,27 +529,27 @@ export default function HomeScreen() {
                   <Ionicons name="chevron-back" size={12} color={C.textSecondary} />
                 </Pressable>
               </View>
-              <ScrollView
+              <FlatList<AnimeItem | EpisodeItem>
                 horizontal
                 showsHorizontalScrollIndicator={false}
+                initialNumToRender={3}
+                maxToRenderPerBatch={3}
+                windowSize={3}
+                data={previewItems}
+                keyExtractor={(item, i) => item.href || String(i)}
                 contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
-              >
-                {section.type === "anime"
-                  ? (previewItems as AnimeItem[]).map((item, i) => (
-                      <AnimeCardView key={item.href || i} item={item} index={i} />
-                    ))
-                  : (previewItems as EpisodeItem[]).map((item, i) => (
-                      <EpisodeCardView key={item.href || i} item={item} onPress={openEpisodePopup} />
-                    ))}
-                {hasMore && (
+                renderItem={({ item, index }) => section.type === "anime"
+                  ? <AnimeCardView item={item as AnimeItem} index={index} />
+                  : <EpisodeCardView item={item as EpisodeItem} onPress={openEpisodePopup} />}
+                ListFooterComponent={hasMore ? (
                   <Pressable style={ss.seeAllCard} onPress={openAll}>
                     <View style={ss.seeAllCircle}>
                       <Ionicons name="arrow-back" size={20} color={C.accent} />
                     </View>
                     <Text style={ss.seeAllCardText}>{t.seeAllShort}</Text>
                   </Pressable>
-                )}
-              </ScrollView>
+                ) : null}
+              />
             </Rise>
           );
         })}
@@ -707,15 +712,16 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
     [history],
   );
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     const seeds = pickSeeds(historyRef.current, seedKeyOf, 3);
     if (seeds.length === 0) { setItems([]); return; }
     let alive = true;
-    void (async () => {
+    const timer = setTimeout(() => { void (async () => {
       const [batches, favorites] = await Promise.all([
         Promise.all(seeds.map((s) => fetchAnimeRecommendations(s.animeTitle, s.animeHref).catch(() => [] as RecItem[]))),
         getFavorites().catch(() => []),
       ]);
+      if (!alive) return;
       // Nothing the user already watched / bookmarked may come back as a rec.
       const keys = new Set<string>();
       const canons = new Set<string>();
@@ -734,31 +740,9 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
         });
       const ranked = rankRecommendations(batches, { excluded, cap: 15 });
       if (alive) setItems(ranked);
-    })();
-    return () => { alive = false; };
-  }, [seedKey]);
-
-  // Warm the first cards in the background so the likeliest tap opens instantly:
-  // resolve the source URL AND preload the detail payload, so the tapped page
-  // renders from cache instead of paying a cold scrape under the tap. Delayed
-  // so it never competes with the home feed's own scrapes.
-  // ponytail: capped at 2 cards — more would hammer the sources for guesses
-  // the user may never tap.
-  useEffect(() => {
-    if (items.length === 0) return;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (async () => {
-        for (const item of items.slice(0, 2)) {
-          if (cancelled) return;
-          const href = await resolveEntryToSource(item).catch(() => null);
-          if (!href || cancelled) continue;
-          await fetchEpisodes(href).catch(() => null);
-        }
-      })();
-    }, 4000);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [items]);
+    })().catch(() => {}); }, 5000);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [seedKey]));
 
   if (items.length === 0) return null;
   return (
@@ -769,20 +753,24 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
           <Text style={ss.sectionTitle}>{t.recsForYou}</Text>
         </View>
       </View>
-      <ScrollView
+      <FlatList
         horizontal
         showsHorizontalScrollIndicator={false}
+        initialNumToRender={3}
+        maxToRenderPerBatch={3}
+        windowSize={3}
+        data={items}
+        keyExtractor={(item) => String(item.anilistId)}
         contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
-      >
-        {items.map((item) => (
+        renderItem={({ item }) => (
           <AniListPosterCard
             key={item.anilistId}
             entry={item}
             width={width}
             topRight={<MalCardBadge title={item.title} />}
           />
-        ))}
-      </ScrollView>
+        )}
+      />
     </View>
   );
 });
@@ -904,7 +892,7 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
     >
       <View style={ss.epCard}>
         {entry.image ? (
-          <Image source={{ uri: entry.image }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={entry.episodeHref} transition={200} />
+          <Image source={{ uri: posterUrl(entry.image, EP_W) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={entry.episodeHref} transition={200} />
         ) : (
           <LinearGradient
             colors={[C.surface, C.surfaceLight]}

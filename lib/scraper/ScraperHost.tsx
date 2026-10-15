@@ -12,6 +12,7 @@ import {
   identifySource,
   isRetryableSourceStatus,
   isTopLevelWebViewError,
+  isVerificationSourceUrl,
   markSourceHealthy,
   nextCandidateIndex,
 } from "./sourceDomains";
@@ -105,10 +106,12 @@ function ScraperSlot({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webRef = useRef<WebView | null>(null);
   const [everMounted, setEverMounted] = useState(false);
+  const [browserGeneration, setBrowserGeneration] = useState(0);
   const [attemptIndex, setAttemptIndex] = useState(0);
   const attemptIndexRef = useRef(0);
   const changingUrlRef = useRef(false);
   const topLevelUrlRef = useRef("");
+  const lastHttpStatusRef = useRef<number | null>(null);
   const activeJobIdRef = useRef(job?.id);
   activeJobIdRef.current = job?.id;
   // URL the after-load script was last early-injected into. Reset on every
@@ -117,8 +120,7 @@ function ScraperSlot({
 
   const currentUrl = job?.urls[attemptIndex] || job?.url || "";
   const source = identifySource(currentUrl);
-  const sourceBrowser = source === "witanime" || source === "anime4up";
-  const verificationBrowser = sourceBrowser || /^https:\/\/(?:[^/]+\.)?(?:vik(?:i|1)ngfile\.(?:com|site)|3asq\.online|mangalik\.net|mangawy\.org)\//i.test(currentUrl);
+  const verificationBrowser = isVerificationSourceUrl(currentUrl);
 
   useEffect(() => {
     attemptIndexRef.current = 0;
@@ -132,6 +134,7 @@ function ScraperSlot({
     if (!job) return;
     attemptIndexRef.current = attemptIndex;
     lastInjectedUrlRef.current = null;
+    lastHttpStatusRef.current = null;
     timerRef.current = setTimeout(() => {
       failAttempt(`scrape timeout after ${job.timeoutMs}ms`);
     }, job.timeoutMs);
@@ -156,10 +159,14 @@ function ScraperSlot({
     if (timerRef.current) clearTimeout(timerRef.current);
     const source = identifySource(currentUrl);
     let hostname = "unknown";
-    try { hostname = new URL(currentUrl).hostname; } catch {}
+    let path = "";
+    try { const url = new URL(currentUrl); hostname = url.hostname; path = url.pathname; } catch {}
     void remoteLog("warn", "scraper", "source WebView failed", {
       source,
       hostname,
+      path,
+      jobId: job.id,
+      lastHttpStatus: lastHttpStatusRef.current,
       failure: classifySourceFailure(message, statusCode),
       error: message.slice(0, 300),
       statusCode: statusCode || null,
@@ -229,6 +236,7 @@ function ScraperSlot({
   if (!job && !everMounted) return null;
   return (
     <WebView
+      key={browserGeneration}
       ref={webRef}
       source={job ? { uri: currentUrl } : BLANK_SOURCE}
       // Source manifests and verification require the WebView's real identity.
@@ -279,8 +287,17 @@ function ScraperSlot({
         // timeout decide instead. 429 is likewise transient.
         if (!isTopLevelWebViewError(e.nativeEvent.url, topLevelUrlRef.current)) return;
         const sc = e.nativeEvent.statusCode;
+        lastHttpStatusRef.current = sc;
         if (sc === 403 || sc === 503 || sc === 429) return;
         failAttempt(`HTTP ${sc}`, sc, isRetryableSourceStatus(sc));
+      }}
+      onContentProcessDidTerminate={() => {
+        // iOS may reclaim a hidden browser while the app is in the background.
+        webRef.current?.reload();
+      }}
+      onRenderProcessGone={() => {
+        setBrowserGeneration((generation) => generation + 1);
+        failAttempt("WebView render process terminated");
       }}
       style={{ position: "absolute", width: 360, height: 640 }}
     />
@@ -311,12 +328,8 @@ export function ScraperHost() {
     let bg = next.filter((j) => j && !j.priority).length;
     for (let i = 0; i < next.length; i++) {
       if (next[i] !== null || !_hasPending()) continue;
-      // Reserve one slot for user-facing (priority) video jobs. Background
-      // pre-resolves may hold at most SLOT_COUNT-1 slots — otherwise, on a
-      // slow connection, four in-flight background jobs (each up to a full
-      // timeout) make a tapped server queue ~40s before it even starts,
-      // which read as "servers keep loading forever". Priority only ordered
-      // the QUEUE; it never freed an in-flight slot.
+      // Reserve capacity for user selections without serializing the three
+      // catalog sources behind each other's verification timeouts.
       const peeked = _peek();
       if (!peeked) break;
       if (!peeked.priority && bg >= SLOT_COUNT - 1) break;

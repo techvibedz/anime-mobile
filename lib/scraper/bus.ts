@@ -122,7 +122,9 @@ export async function enqueue(job: Omit<ScrapeJob, "id" | "urls">): Promise<any>
   // host only reserves one slot, so 3 long background scrapes could still delay
   // playback by their full timeouts. Background callers already treat rejection
   // as a soft miss.
-  if (job.priority) _cancelBackground();
+  // Discovery also uses the reserved slot. Only the playback collector
+  // (allFrames) interrupts work already loading in the other source browsers.
+  if (job.priority && job.allFrames) _cancelBackground();
   const id = `s${++_seq}`;
   const urls = await getSourceCandidates(job.url);
   return new Promise((resolve, reject) => {

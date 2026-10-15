@@ -103,9 +103,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Register this device's Expo push token whenever a user is signed in, so the
-  // server can deliver new-episode push even when the app is closed.
+  // server can deliver new-episode push even when the app is closed. Deferred
+  // a few seconds so the native token fetch + upsert land after the startup
+  // notification prompt (which owns the permission ask), not on the first taps.
   useEffect(() => {
-    if (user?.id) void registerPushTokenAsync(user.id);
+    const id = user?.id;
+    if (!id) return;
+    const timer = setTimeout(() => { void registerPushTokenAsync(id); }, 4000);
+    return () => clearTimeout(timer);
   }, [user?.id]);
 
   const signInWithEmail = useCallback(async (email: string, password: string) => {

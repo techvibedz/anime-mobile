@@ -76,8 +76,12 @@ function tokenMatch(qt: string, titleTokens: string[]): number {
 // spacing differences and whole-string typos. The max of these wins so any one
 // strong signal is enough.
 export function fuzzyScore(query: string, title: string): number {
-  const q = normFuzzy(query);
-  const t = normFuzzy(title);
+  return fuzzyScoreNormalized(normFuzzy(query), normFuzzy(title));
+}
+
+/** fuzzyScore for inputs already passed through normFuzzy — lets catalog scans
+ * normalize each title once instead of on every comparison. */
+export function fuzzyScoreNormalized(q: string, t: string): number {
   if (!q || !t) return 0;
   if (q === t) return 1;
 

@@ -9,7 +9,7 @@
 // the exact float is an implementation detail, the relative ordering is not.
 
 import assert from "node:assert";
-import { normFuzzy, levenshtein, fuzzyScore, sourceSearchQueries, wordSearchFallbacks } from "./fuzzy";
+import { normFuzzy, levenshtein, fuzzyScore, fuzzyScoreNormalized, sourceSearchQueries, wordSearchFallbacks } from "./fuzzy";
 
 let passed = 0;
 let failed = 0;
@@ -114,6 +114,16 @@ test("sourceSearchQueries searches full text and separate words together", () =>
     sourceSearchQueries("Naruto: Shuppudin"),
     ["Naruto: Shuppudin", "naruto shuppudin", "naruto", "shuppudin"],
   );
+});
+
+test("pre-normalized scoring matches fuzzyScore (catalog scans rely on it)", () => {
+  const titles = ["Naruto Shippuden", "Re:Zero kara Hajimeru", "هجوم العمالقة", "Café Terrace", "One Piece Film: Red"];
+  for (const q of ["naruto", "rezero", "هجوم", "cafe", "one piece red"]) {
+    for (const t of titles) {
+      assert.equal(normFuzzy(normFuzzy(t)), normFuzzy(t));
+      assert.equal(fuzzyScoreNormalized(normFuzzy(q), normFuzzy(t)), fuzzyScore(q, t));
+    }
+  }
 });
 
 /* ── summary ── */

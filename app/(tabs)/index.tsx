@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, useMemo, memo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, memo, startTransition } from "react";
 import {
   View,
   Text,
@@ -298,10 +298,14 @@ export default function HomeScreen() {
           const feat = fresh.data.featured ?? [];
           const secs = fresh.data.sections ?? [];
           if (feat.length > 0 || secs.length > 0) {
-            setFeatured(feat);
-            setSections(secs);
             hasContent.current = true;
-            setLoading(false);
+            // Transition: the full feed mount (~40 cards) is time-sliced so it
+            // can't freeze the first taps; the skeleton stays up meanwhile.
+            startTransition(() => {
+              setFeatured(feat);
+              setSections(secs);
+              setLoading(false);
+            });
           }
         }, { forceRefresh }),
         getContinueWatching(),
@@ -311,8 +315,10 @@ export default function HomeScreen() {
       const secs = res?.success ? (res.data.sections ?? []) : [];
       const gotContent = feat.length > 0 || secs.length > 0;
       if (gotContent) {
-        setFeatured(feat);
-        setSections(secs);
+        startTransition(() => {
+          setFeatured(feat);
+          setSections(secs);
+        });
         hasContent.current = true;
         emptyRetry.current = 0;
         setOffline(false);
@@ -358,7 +364,9 @@ export default function HomeScreen() {
         online: await checkOnline().catch(() => null),
       });
     }
-    setLoading(false);
+    // Same transition lane as the feed setters above: an urgent loading=false
+    // would render once with the not-yet-committed (empty) feed.
+    startTransition(() => setLoading(false));
     setRefreshing(false);
   }, []);
 

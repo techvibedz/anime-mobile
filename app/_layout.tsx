@@ -1,3 +1,6 @@
+// Global URL polyfill before anything else: with inline requires (metro.config.js)
+// lib/supabase — which used to install it at boot — now loads on first use.
+import "react-native-url-polyfill/auto";
 import { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";

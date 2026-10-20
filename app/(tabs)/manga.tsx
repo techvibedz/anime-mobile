@@ -63,6 +63,15 @@ const MAX_GENRES = 3;
 
 const EMPTY_FILTERS: MangaFilters = { type: null, status: null, sort: "default" };
 
+function FocusedDarkStatusBar() {
+  const [focused, setFocused] = useState(false);
+  useFocusEffect(useCallback(() => {
+    setFocused(true);
+    return () => setFocused(false);
+  }, []));
+  return focused ? <StatusBar style="dark" /> : null;
+}
+
 export default function MangaHubScreen() {
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
@@ -96,13 +105,11 @@ export default function MangaHubScreen() {
 
   // Defer the first fetch until the tab is actually opened — the tab navigator
   // pre-mounts every tab, and the hub has no business fetching at app start.
-  const [focused, setFocused] = useState(false);
-  useFocusEffect(
-    useCallback(() => {
-      setFocused(true);
-      return () => setFocused(false);
-    }, []),
-  );
+  // One-way flag: toggling screen state on every focus/blur re-rendered the
+  // whole hub (~1s JS freeze per tab switch). The status bar follows focus
+  // on its own in <FocusedDarkStatusBar>.
+  const [opened, setOpened] = useState(false);
+  useFocusEffect(useCallback(() => { setOpened(true); }, []));
 
   const loadHome = useCallback(async (force: boolean) => {
     if (!force && homeRef.current) return;
@@ -137,8 +144,8 @@ export default function MangaHubScreen() {
   }, []);
 
   useEffect(() => {
-    if (focused) void loadHome(false);
-  }, [focused, loadHome]);
+    if (opened) void loadHome(false);
+  }, [opened, loadHome]);
 
   const runSearch = useCallback(async (q: string, selectedGenres: string[], active: MangaFilters, page = 1) => {
     const seq = page === 1 ? ++searchSeqRef.current : searchSeqRef.current;
@@ -262,7 +269,7 @@ export default function MangaHubScreen() {
 
   return (
     <View style={s.root}>
-      {focused && <StatusBar style="dark" />}
+      <FocusedDarkStatusBar />
       {searchOpen ? (
         <>
           <View style={[s.searchHeader, { paddingTop: insets.top + 10 }]}>

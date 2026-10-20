@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, memo } from "react";
+import { useState, useCallback, useRef, useEffect, memo, startTransition } from "react";
 import {
   View,
   Text,
@@ -279,9 +279,13 @@ export default function SearchScreen() {
       paintTimer = null;
       if (seq !== reqSeq.current) return;
       lastPaint = Date.now();
-      setItems(latest);
-      setLoading(false);
-      setStale(false);
+      // Transition: re-sorting the grid yields to keystrokes instead of
+      // freezing them while results stream in.
+      startTransition(() => {
+        setItems(latest);
+        setLoading(false);
+        setStale(false);
+      });
     };
     try {
       const res = await searchAnime(q.trim(), (partial) => {
@@ -294,15 +298,19 @@ export default function SearchScreen() {
       });
       if (paintTimer) { clearTimeout(paintTimer); paintTimer = null; }
       if (seq !== reqSeq.current) return;
-      if (res.success) {
-        setItems(res.data.results);
-        setIncompleteSearch(!!res.data.incompleteSources?.length);
-      }
-      else setItems([]);
-    } catch { if (seq === reqSeq.current) setItems([]); }
+      startTransition(() => {
+        if (res.success) {
+          setItems(res.data.results);
+          setIncompleteSearch(!!res.data.incompleteSources?.length);
+        }
+        else setItems([]);
+      });
+    } catch { if (seq === reqSeq.current) startTransition(() => setItems([])); }
     finally {
       if (paintTimer) clearTimeout(paintTimer);
-      if (seq === reqSeq.current) { setLoading(false); setSearching(false); setStale(false); }
+      // Same lane as the result paints so the stale dimming can't lift before
+      // the new grid commits.
+      if (seq === reqSeq.current) startTransition(() => { setLoading(false); setSearching(false); setStale(false); });
     }
   }, [loadBrowse]);
 

@@ -14,7 +14,7 @@ import type { RawServer } from "./index";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
-import { fuzzyScore, normFuzzy, sourceSearchQueries } from "../fuzzy";
+import { fuzzyScore, fuzzyScoreNormalized, normFuzzy, sourceSearchQueries } from "../fuzzy";
 import { remoteLog } from "../remoteLog";
 import { classifyProvider, classifyProviderWithName, probeMediaUrl, videoPlaybackHeaders, VIDEO_USER_AGENT as BROWSER_UA } from "../videoProviders";
 import {
@@ -2176,6 +2176,21 @@ function a3rbSeasonOf(label: string): number {
   return 1;
 }
 
+// Per-slug derived forms, computed once: catalog scans touch all ~5.5k slugs
+// per lookup, and re-normalizing every label each time froze the JS thread
+// for hundreds of ms on phones.
+type A3rbSlugInfo = { norm: string; toks: string[]; season: number };
+const a3rbSlugInfo = new Map<string, A3rbSlugInfo>();
+function a3rbInfo(slug: string): A3rbSlugInfo {
+  let info = a3rbSlugInfo.get(slug);
+  if (!info) {
+    const label = slug.replace(/[-_]+/g, " ");
+    info = { norm: normFuzzy(label), toks: tm_toks(tm_normLatin(label)), season: a3rbSeasonOf(label) };
+    a3rbSlugInfo.set(slug, info);
+  }
+  return info;
+}
+
 // Conservative matcher: a wrong match plays the WRONG anime's episodes, so it
 // requires near-total coverage of the wanted title's tokens, an exact season
 // match, and (for short titles) near-total coverage of the slug's tokens too.
@@ -2200,10 +2215,8 @@ function a3rbCatalogMatch(title: string, slugs: string[]): string | null {
   if (!wants.length) return null;
   let best: { slug: string | null; score: number } = { slug: null, score: 0 };
   for (const slug of slugs) {
-    const label = slug.replace(/[-_]+/g, " ");
-    const gotToks = tm_toks(tm_normLatin(label));
+    const { toks: gotToks, season: gotSeason } = a3rbInfo(slug);
     if (!gotToks.length) continue;
-    const gotSeason = a3rbSeasonOf(label);
     for (const w of wants) {
       // Wrong season page = wrong episode numbering. Hard reject.
       if (gotSeason !== w.season) continue;
@@ -2292,12 +2305,13 @@ export async function searchAnime3rbCatalogFuzzy(
   const slugs = await fetchA3rbCatalog();
   if (!slugs.length) return [];
   const wantSeason = a3rbSeasonOf(title.toLowerCase());
+  const want = normFuzzy(title);
   const scored: { slug: string; score: number }[] = [];
   for (const slug of slugs) {
-    const label = slug.replace(/[-_]+/g, " ");
-    const score = fuzzyScore(title, label);
+    const info = a3rbInfo(slug);
+    const score = fuzzyScoreNormalized(want, info.norm);
     if (score < 0.62) continue;
-    const adj = a3rbSeasonOf(label) === wantSeason ? 0.04 : -0.08;
+    const adj = info.season === wantSeason ? 0.04 : -0.08;
     scored.push({ slug, score: score + adj });
   }
   scored.sort((a, b) => b.score - a.score);

@@ -60,7 +60,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
   const component = ast.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'HomeScreen');
   const load = component.body.statements.find(n => ts.isVariableStatement(n) && n.declarationList.declarations.some(d => d.name.getText(ast) === 'load'));
   const loading = [];
-  const screenContext = { useCallback: fn => fn, lastLoadAt: { current: 0 }, coldStartDeadline: { current: 0 }, COLD_START_DEADLINE_MS: 25000,
+  const screenContext = { useCallback: fn => fn, startTransition: fn => fn(), lastLoadAt: { current: 0 }, coldStartDeadline: { current: 0 }, COLD_START_DEADLINE_MS: 25000,
     hasContent: { current: false }, emptyRetry: { current: 0 },
     fetchHome: updated => { callback = updated; return new Promise(() => {}); }, getContinueWatching: () => new Promise(() => {}),
     setFeatured() {}, setSections() {}, setLoading: value => loading.push(value),

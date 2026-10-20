@@ -1,4 +1,5 @@
 import { Tabs } from "expo-router";
+import { useEffect } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,6 +13,9 @@ const TABS = [
   { name: "mylist", icon: "heart" as const, label: "قائمتي" },
 ];
 
+const PRELOAD_START_MS = 4000;
+const PRELOAD_GAP_MS = 1500;
+
 export default function TabLayout() {
   return (
     <Tabs
@@ -23,8 +27,10 @@ export default function TabLayout() {
         // switch briefly flashes white before the screen's root View paints.
         // Lock it to the app's ink bg so transitions stay dark.
         sceneStyle: { backgroundColor: C.bg },
-        // Pre-mount every tab so the first visit to each doesn't mount-and-flash.
-        lazy: false,
+        // Other tabs are preloaded by FloatingNav once home has painted —
+        // mounting all four at launch competed with the home feed and froze
+        // the first taps for ~1s.
+        lazy: true,
       }}
       tabBar={(props) => <FloatingNav {...props} />}
     >
@@ -38,6 +44,13 @@ export default function TabLayout() {
 function FloatingNav({ state, navigation }: any) {
   const insets = useSafeAreaInsets();
   const manga = state.routes[state.index]?.name === "manga";
+  // Pre-mount the other tabs one at a time after launch, so the first visit to
+  // each doesn't mount-and-flash, without blocking home's first frames.
+  useEffect(() => {
+    const timers = TABS.slice(1).map((tab, i) =>
+      setTimeout(() => navigation.preload?.(tab.name), PRELOAD_START_MS + i * PRELOAD_GAP_MS));
+    return () => timers.forEach(clearTimeout);
+  }, [navigation]);
   // A floating capsule above the system bars. row-reverse puts the first tab
   // (home) on the right, where an Arabic reader starts.
   return (

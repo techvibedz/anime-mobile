@@ -15,6 +15,8 @@ import {
   Keyboard,
   TextInput,
   AppState,
+  type NativeSyntheticEvent,
+  type NativeScrollEvent,
 } from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
@@ -54,7 +56,8 @@ import { shouldShowSynopsis, synopsisForDisplay } from "../../lib/animeDetail";
 const Clipboard = require("react-native/Libraries/Components/Clipboard/Clipboard")
   .default as { setString(s: string): void };
 
-const BANNER_H = 360;
+const BANNER_H = 380;
+const POSTER_W = 150;
 const PAD = S.paddingContent;
 
 type TabKey = "episodes" | "related" | "maylike" | "info";
@@ -67,7 +70,7 @@ type RelatedTabItem =
 
 export default function AnimeDetailScreen() {
   const { width: SW } = useWindowDimensions();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, play } = useLocalSearchParams<{ id: string; play?: string }>();
   const insets = useSafeAreaInsets();
   const { openSidebar } = useSidebarActions();
   const [loading, setLoading] = useState(true);
@@ -106,6 +109,15 @@ export default function AnimeDetailScreen() {
   const [shareCardOpen, setShareCardOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const detailScrollRef = useRef<ScrollView>(null);
+  // Header scrim: animate only when crossing the threshold, never per frame.
+  const headerScrim = useRef(new Animated.Value(0)).current;
+  const scrimShown = useRef(false);
+  const onDetailScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const show = e.nativeEvent.contentOffset.y > 24; // the centred poster starts just under the buttons
+    if (show === scrimShown.current) return;
+    scrimShown.current = show;
+    Animated.timing(headerScrim, { toValue: show ? 1 : 0, duration: 180, useNativeDriver: true }).start();
+  }, [headerScrim]);
   const tabContentYRef = useRef(0);
   const scrollToEpisodeOffset = useCallback((offset: number) => {
     detailScrollRef.current?.scrollTo({
@@ -348,6 +360,19 @@ export default function AnimeDetailScreen() {
     if (data?.title) void fetchAnimeMal(data.title).then((m) => setMalScore(m.score)).catch(() => {});
   }, [animeHref, data?.title]);
 
+  // Home hero "Watch now" opens this page with play=1: start the first playable
+  // episode as soon as the list is in, exactly like the bottom play button.
+  // Fires once; Back from the player returns here instead of replaying.
+  const autoPlayed = useRef(false);
+  useEffect(() => {
+    if (play !== "1" || autoPlayed.current) return;
+    const href = data?.episodes.find((e) => e.href)?.href;
+    if (!href) return;
+    autoPlayed.current = true;
+    router.setParams({ play: undefined });
+    router.push(`/watch/${encodeURIComponent(href)}`);
+  }, [play, data]);
+
   if (loading) return <DetailSkeleton />;
 
   if (error || !data) {
@@ -378,6 +403,8 @@ export default function AnimeDetailScreen() {
       <ScrollView
         ref={detailScrollRef}
         showsVerticalScrollIndicator={false}
+        onScroll={onDetailScroll}
+        scrollEventThrottle={32}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -388,27 +415,29 @@ export default function AnimeDetailScreen() {
           />
         }
       >
-        {/* ── Banner ─────────────────────────── */}
+        {/* ── Backdrop — a blurred wash of the art behind a centred poster ── */}
         <View style={ss.banner}>
           {(data.banner || data.poster) ? (
             <Image
-              source={{ uri: posterUrl(data.banner || data.poster, SW) }}
-              style={{ width: SW, height: BANNER_H }}
+              // Tiny source: it is blurred anyway, so decode cost stays trivial.
+              source={{ uri: posterUrl(data.banner || data.poster, 180) }}
+              style={ABSOLUTE_FILL}
               contentFit="cover"
               cachePolicy="memory-disk"
+              blurRadius={14}
               transition={200}
             />
           ) : null}
           <LinearGradient
-            colors={["rgba(10,10,11,0.35)", "transparent", "rgba(10,10,11,0.6)", C.bg]}
-            locations={[0, 0.28, 0.62, 1]}
+            colors={["rgba(8,9,12,0.35)", "rgba(8,9,12,0.05)", "rgba(8,9,12,0.7)", C.bg]}
+            locations={[0, 0.4, 0.8, 1]}
             style={ABSOLUTE_FILL}
           />
         </View>
 
-        {/* ── Hero — poster punches through the banner ──────── */}
-        <Rise style={ss.hero}>
-          <View style={ss.heroRow}>
+        {/* ── Hero — big centred poster, title and meta beneath ──────── */}
+        <Rise style={[ss.hero, { marginTop: -(BANNER_H - insets.top - 72) }]}>
+          <View style={ss.heroCenter}>
             {data.poster ? (
               <Pressable
                 onPress={() => setPosterOpen(true)}
@@ -417,7 +446,7 @@ export default function AnimeDetailScreen() {
                 accessibilityLabel={t.viewPoster}
               >
                 <Image
-                  source={{ uri: posterUrl(data.poster, 240) }}
+                  source={{ uri: posterUrl(data.poster, POSTER_W) }}
                   style={ss.heroPoster}
                   contentFit="cover"
                   cachePolicy="memory-disk"
@@ -432,27 +461,29 @@ export default function AnimeDetailScreen() {
                 <Ionicons name="image-outline" size={26} color={C.textMuted} />
               </View>
             )}
-            <View style={ss.heroText}>
-              <Pressable onLongPress={copyTitle} delayLongPress={350}>
-                <Text style={ss.title}>{data.title}</Text>
-              </Pressable>
-              {titleCopied && (
-                <View style={ss.copiedPill}>
-                  <Ionicons name="checkmark-circle" size={13} color={C.accent} />
-                  <Text style={ss.copiedText}>{t.titleCopied}</Text>
+            <Pressable onLongPress={copyTitle} delayLongPress={350} style={ss.titleWrap}>
+              <Text style={ss.title}>{data.title}</Text>
+            </Pressable>
+            {titleCopied && (
+              <View style={ss.copiedPill}>
+                <Ionicons name="checkmark-circle" size={13} color={C.accent} />
+                <Text style={ss.copiedText}>{t.titleCopied}</Text>
+              </View>
+            )}
+
+            {/* Quick meta — MAL score · site rating · episode count */}
+            <View style={ss.quickMeta}>
+              <MalBadge score={malScore} />
+              {data.rating && (
+                <View style={ss.ratingPill}>
+                  <Ionicons name="star" size={12} color={C.gold} />
+                  <Text style={ss.ratingText}>{data.rating}</Text>
                 </View>
               )}
-
-              {/* Quick meta — MAL rating badge; full genre list lives below the synopsis */}
-              {(malScore != null || data.rating) && (
-                <View style={ss.quickMeta}>
-                  <MalBadge score={malScore} />
-                  {data.rating && (
-                    <View style={ss.ratingPill}>
-                      <Ionicons name="star" size={12} color={C.gold} />
-                      <Text style={ss.ratingText}>{data.rating}</Text>
-                    </View>
-                  )}
+              {data.totalEpisodes > 0 && (
+                <View style={ss.metaPill}>
+                  <Ionicons name="film-outline" size={12} color={C.textSecondary} />
+                  <Text style={ss.metaPillText}>{data.totalEpisodes} {t.episodesShort}</Text>
                 </View>
               )}
             </View>
@@ -530,10 +561,16 @@ export default function AnimeDetailScreen() {
         </View>
       </ScrollView>
 
+      {/* Header scrim — fades in once the banner scrolls away so the status bar
+          and the floating buttons never sit on top of posters/text. */}
+      <Animated.View pointerEvents="none" style={[ss.headerScrim, { height: insets.top + 64, opacity: headerScrim }]}>
+        <LinearGradient colors={[C.bg, C.bg, "rgba(8,9,12,0)"]} locations={[0, 0.62, 1]} style={ABSOLUTE_FILL} />
+      </Animated.View>
+
       {/* ── Floating top bar — back + menu ──── */}
       <View style={[ss.topBar, { top: insets.top + 8 }]}>
-        <GlassCircleBtn icon="chevron-back" onPress={() => router.back()} />
         <GlassCircleBtn icon="menu" onPress={openSidebar} />
+        <GlassCircleBtn icon="chevron-forward" onPress={() => router.back()} />
       </View>
 
       {/* ── Floating action bar — playback is always one tap away ── */}
@@ -693,7 +730,7 @@ function ListPickerSheet({ title, onPick, onClose }: { title: string; onPick: (l
 
 function GlassCircleBtn({ icon, color = C.text, onPress }: { icon: string; color?: string; onPress?: () => void }) {
   return (
-    <Pressable onPress={onPress}>
+    <Pressable onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={icon === "menu" ? t.menu : t.back}>
       <View style={ss.glassCircle}>
         <GlassFill intensity={16} />
         <Ionicons name={icon as any} size={20} color={color} />
@@ -1155,9 +1192,9 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
     >
       <View style={[ss.epCardThumb, watched && ss.epCardThumbWatched]}>
         {ep.screenshot ? (
-          <Image source={{ uri: ep.screenshot }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+          <Image source={{ uri: posterUrl(ep.screenshot, (width - PAD * 2 - 10) / 2) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
         ) : poster ? (
-          <Image source={{ uri: poster }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+          <Image source={{ uri: posterUrl(poster, (width - PAD * 2 - 10) / 2) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
         ) : null}
         {watched && <View style={ss.watchedDim} />}
         <LinearGradient
@@ -1422,10 +1459,10 @@ const ss = StyleSheet.create({
   meshBg: { ...ABSOLUTE_FILL },
 
   // Hero — poster overlaps the banner base, title/meta beside it (RTL).
-  hero: { marginTop: -64, paddingHorizontal: PAD },
-  heroRow: { flexDirection: "row-reverse", alignItems: "flex-end" },
+  hero: { paddingHorizontal: PAD },
+  heroCenter: { alignItems: "center" },
   heroPoster: {
-    width: 104, aspectRatio: 2 / 3, borderRadius: R.md,
+    width: POSTER_W, aspectRatio: 2 / 3, borderRadius: R.lg,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderLight,
     ...ELEVATION_CARD,
   },
@@ -1459,22 +1496,28 @@ const ss = StyleSheet.create({
   },
   // marginRight (physical) spaces the text from the poster in the row-reverse
   // layout using margins between the fixed poster and flexible text.
-  heroText: { flex: 1, marginRight: 14, alignItems: "flex-end", paddingBottom: 4 },
+  titleWrap: { marginTop: 18, alignSelf: "stretch" },
   title: {
-    ...TAr.h1,
-    color: C.bone, textAlign: "right", writingDirection: "rtl",
+    ...TAr.h1, fontSize: 26, lineHeight: 38,
+    color: C.bone, textAlign: "center", writingDirection: "rtl",
   },
   copiedPill: {
     flexDirection: "row", alignItems: "center", gap: 5,
-    alignSelf: "flex-end", marginTop: 8,
+    alignSelf: "center", marginTop: 8,
     paddingHorizontal: 10, paddingVertical: 4, borderRadius: R.pill,
     backgroundColor: C.accent + "1F",
   },
   copiedText: { color: C.accent, fontSize: 11, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   quickMeta: {
-    flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end",
-    gap: 6, marginTop: 14,
+    flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center",
+    gap: 8, marginTop: 12,
   },
+  metaPill: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    backgroundColor: C.surfaceLight, borderRadius: R.pill,
+    paddingHorizontal: 12, paddingVertical: 5,
+  },
+  metaPillText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontFamily: "Cairo_600SemiBold" },
   ratingPill: {
     flexDirection: "row", alignItems: "center", gap: 4,
     backgroundColor: C.goldSoft, borderRadius: R.pill,
@@ -1513,7 +1556,7 @@ const ss = StyleSheet.create({
   readMore: { color: C.accent, fontSize: 12, fontWeight: "600", marginTop: 8, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
 
   // Chips
-  chipRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8, marginTop: 20 },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 20 },
   chip: {
     paddingHorizontal: 11, paddingVertical: 5, borderRadius: R.sm, overflow: "hidden",
     backgroundColor: C.surface,
@@ -1528,24 +1571,26 @@ const ss = StyleSheet.create({
 
   // Tabs
   // Editorial underline tabs — an ember stroke marks the active tab, no filled pill.
+  // Segmented pill tabs — first tab on the right (RTL), active = filled accent.
   tabBar: {
-    flexDirection: "row", marginTop: 18, marginHorizontal: PAD, gap: 0,
-    borderBottomWidth: 1, borderBottomColor: C.line,
+    flexDirection: "row-reverse", marginTop: 22, marginHorizontal: PAD,
+    padding: 4, borderRadius: R.pill, backgroundColor: C.surface,
+    borderWidth: 1, borderColor: C.borderSoft,
   },
   tabItem: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-     minHeight: 56, flexWrap: "wrap", paddingVertical: 13, borderBottomWidth: 2, borderBottomColor: "transparent", marginBottom: -1,
+    flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
+    minHeight: 44, paddingHorizontal: 4, borderRadius: R.pill,
   },
-  tabItemActive: { borderBottomColor: C.ember },
-  tabText: { color: C.textMuted, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
-  tabTextActive: { color: C.bone, fontFamily: "Cairo_700Bold" },
+  tabItemActive: { backgroundColor: C.accent },
+  tabText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  tabTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
   tabCount: {
-    backgroundColor: C.glass, borderRadius: R.pill,
-    paddingHorizontal: 8, paddingVertical: 2,
+    backgroundColor: C.glass, borderRadius: R.pill, marginRight: 5,
+    paddingHorizontal: 6, paddingVertical: 1,
   },
-  tabCountActive: { backgroundColor: C.accentSoft },
-  tabCountText: { color: C.textMuted, fontSize: 10, fontWeight: "500" },
-  tabCountTextActive: { color: C.ember },
+  tabCountActive: { backgroundColor: "rgba(10,11,18,0.16)" },
+  tabCountText: { color: C.textMuted, fontSize: 10, fontWeight: "600" },
+  tabCountTextActive: { color: C.textOnAccent },
 
   // Tab content — extra bottom pad clears the floating action bar.
   tabContent: { paddingHorizontal: PAD, paddingTop: 16, paddingBottom: 132 },
@@ -1596,7 +1641,7 @@ const ss = StyleSheet.create({
   },
 
   // Episodes — grid (2 columns)
-  epGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  epGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 10 },
   epCard: { borderRadius: R.lg },
   epCardHighlighted: {
     backgroundColor: C.accentSoft, shadowColor: C.accent,
@@ -1667,7 +1712,7 @@ const ss = StyleSheet.create({
   },
 
   // Related — 2 columns, relaxed gap.
-  relatedGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  relatedGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 12 },
   cardToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
   // Grid: sits just above the overlaid poster title; list renders it inline.
   relationBadge: {
@@ -1691,12 +1736,13 @@ const ss = StyleSheet.create({
   emptyTabText: { color: C.textMuted, fontSize: 14, fontFamily: "Cairo_500Medium" },
 
   // Top bar
+  headerScrim: { position: "absolute", top: 0, left: 0, right: 0 },
   topBar: {
     position: "absolute", left: PAD, right: PAD,
     flexDirection: "row", justifyContent: "space-between",
   },
   glassCircle: {
-    width: 48, height: 48, borderRadius: R.md, overflow: "hidden",
+    width: 46, height: 46, borderRadius: R.circle, overflow: "hidden",
     alignItems: "center", justifyContent: "center",
     borderWidth: 1, borderColor: C.glassBorder,
   },

@@ -23,6 +23,7 @@ import { toAnimeUrl } from "../lib/favorites";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, GlassIconButton } from "../components/ScreenChrome";
+import { StateView } from "../components/StateView";
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -93,13 +94,7 @@ export default function NotificationsScreen() {
       />
 
       {items.length === 0 ? (
-        <View style={s.empty}>
-          <View style={s.emptyIcon}>
-            <Ionicons name="notifications-off-outline" size={34} color={C.textMuted} />
-          </View>
-          <Text style={s.emptyTitle}>{t.notifEmpty}</Text>
-          <Text style={s.emptySub}>{t.notifEmptySub}</Text>
-        </View>
+        <StateView icon="notifications-off-outline" variant="empty" title={t.notifEmpty} message={t.notifEmptySub} />
       ) : (
         <FlatList
           data={items}
@@ -191,16 +186,4 @@ const s = StyleSheet.create({
   },
   cardTime: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 4 },
 
-  // Empty
-  empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 12 },
-  emptyIcon: {
-    width: 88, height: 88, borderRadius: R.xl,
-    backgroundColor: C.surfaceContainer,
-    alignItems: "center", justifyContent: "center", marginBottom: 4,
-  },
-  emptyTitle: { color: C.text, fontSize: 17, fontWeight: "700", fontFamily: "Cairo_700Bold" },
-  emptySub: {
-    color: C.textSecondary, fontSize: 13, lineHeight: 20, textAlign: "center", maxWidth: 260,
-    fontFamily: "Cairo_500Medium", writingDirection: "rtl",
-  },
 });

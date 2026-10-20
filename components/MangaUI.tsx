@@ -7,6 +7,7 @@ import { CARD_LAYOUTS, type CardLayout } from "../lib/cardLayout";
 import { t } from "../lib/i18n";
 import { useReducedMotion } from "../lib/motion";
 import { Shimmer } from "./Shimmer";
+import { posterUrl } from "../lib/img";
 
 export function MangaSkeleton({ style, borderRadius = 4, dark = false }: { style?: ViewStyle; borderRadius?: number; dark?: boolean }) {
   return <Shimmer borderRadius={borderRadius} style={{ ...style, backgroundColor: dark ? M.nightLine : M.line }} />;
@@ -25,12 +26,19 @@ export function MangaLayoutControl({ layout, onChange }: { layout: CardLayout; o
 }
 
 /** A real cover with a visible fallback, never a wallpaper crop. */
-export function MangaCover({ uri, style, label }: { uri?: string | null; style?: ViewStyle; label: string }) {
-  const [failedUri, setFailedUri] = useState<string | null>(null);
+// Covers are upgraded to the full originals (up to 6.5 MB, 1326x2048), so they
+// are re-served at display size through Photon where the host allows it. A
+// screenful of full-size covers used to saturate the image loader and stall
+// every other image in the app for ~50s. `displayWidth` is the cover's dp width.
+export function MangaCover({ uri, style, label, displayWidth = 280 }: { uri?: string | null; style?: ViewStyle; label: string; displayWidth?: number }) {
+  const [failed, setFailed] = useState<string[]>([]);
   const reducedMotion = useReducedMotion();
+  const sized = posterUrl(uri, displayWidth);
+  // Sized first, raw original if Photon errors, fallback tile if both fail.
+  const src = [sized, uri ?? undefined].find((u) => u && !failed.includes(u));
   return <View style={[s.cover, style]}>
-    {uri && failedUri !== uri ? <Image source={{ uri }} style={MANGA_FILL} contentFit="cover" cachePolicy="memory-disk"
-      recyclingKey={uri} transition={reducedMotion ? 0 : 120} accessibilityLabel={label} onError={() => setFailedUri(uri)} />
+    {src ? <Image source={{ uri: src }} style={MANGA_FILL} contentFit="cover" cachePolicy="memory-disk"
+      recyclingKey={uri} transition={reducedMotion ? 0 : 120} accessibilityLabel={label} onError={() => setFailed((f) => [...f, src])} />
       : <View style={s.coverFallback}><Ionicons name="book-outline" size={28} color={M.muted} /><Text style={s.coverFallbackText} numberOfLines={3}>{label}</Text></View>}
   </View>;
 }
@@ -44,7 +52,7 @@ export function MangaCardTile({ image, title, width, layout = "comfortable", sub
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={[title, subtitle].filter(Boolean).join("، ")}
       style={({ pressed }) => [list ? s.listCard : s.card, pressed && s.pressed]}>
       <View style={list ? s.listCoverWrap : undefined}>
-        <MangaCover uri={image} label={title} style={list ? s.listCover : s.cardCover} />
+        <MangaCover uri={image} label={title} style={list ? s.listCover : s.cardCover} displayWidth={list ? 88 : width} />
         {rank != null && <View style={s.rank}><Text style={s.rankText}>{String(rank).padStart(2, "0")}</Text></View>}
       </View>
       <View style={list ? s.listInfo : s.cardInfo}>
@@ -79,7 +87,7 @@ const s = StyleSheet.create({
   layouts: { flexDirection: "row", borderWidth: 1, borderColor: M.line, borderRadius: 6, padding: 3, gap: 2, backgroundColor: M.sheet },
   layout: { width: 44, minHeight: 44, justifyContent: "center", alignItems: "center", borderRadius: 3 },
   layoutActive: { backgroundColor: M.ink },
-  cover: { backgroundColor: M.wash, borderRadius: 4, overflow: "hidden" },
+  cover: { backgroundColor: M.wash, borderRadius: 6, overflow: "hidden" },
   coverFallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: 10, gap: 8 },
   coverFallbackText: { ...MT.caption, color: M.muted, textAlign: "center" },
   card: { width: "100%" },

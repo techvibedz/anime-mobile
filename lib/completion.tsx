@@ -14,8 +14,8 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { normAnimeKey, animeTitleKey, getCompletedSets, subscribeHistory } from "./history";
-import { matchingRecords, sameSource, isBlobRecord } from "./completionMatch";
+import { normAnimeKey, animeTitleKey, getCompletedSets, subscribeHistory, getHistoryByAnime } from "./history";
+import { matchingRecords, sameSource, isBlobRecord, buildCompletedList, type CompletedEntry } from "./completionMatch";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
 import { createRequestCache, withTimeout } from "./requestCache";
 import { pruneCacheStorage } from "./storageMaintenance";
@@ -281,6 +281,19 @@ export async function countCompletedAnime(): Promise<number> {
   const map = await getCompletionMap();
   return new Set(Object.values(map).filter((r) => r.finished)
     .map((r) => animeTitleKey(r.titles[0]) || normAnimeKey(r.hrefs[0]) || r.key)).size;
+}
+
+/** Anime whose finale the user watched (My List "completed" shelf), with
+ *  posters from watch history, then the caller's extra sources (My List). */
+export async function getCompletedAnime(
+  extraPosters: readonly { title: string; href: string; image?: string | null }[] = [],
+): Promise<CompletedEntry[]> {
+  const [map, groups] = await Promise.all([getCompletionMap(), getHistoryByAnime().catch(() => [])]);
+  const posters = [
+    ...groups.map((g) => ({ title: g.animeTitle, href: g.animeHref, image: g.image })),
+    ...extraPosters,
+  ];
+  return buildCompletedList(Object.values(map), posters, normAnimeKey, animeTitleKey);
 }
 
 /** Recompute home badges from available episodes and local history, even when

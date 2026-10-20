@@ -276,8 +276,9 @@ export function AnimeOfTheDay() {
     <Rise style={s.section}>
       <View style={s.header}>
         <View style={s.titleRow}>
-          <Ionicons name="sunny-outline" size={14} color={C.accent} />
+          <Ionicons name="sunny" size={15} color={C.gold} />
           <Text style={s.title}>{t.dailyTitle}</Text>
+          <View style={s.tick} />
         </View>
         <Text style={s.sub}>{t.dailySub}</Text>
       </View>
@@ -350,12 +351,13 @@ export function AnimeOfTheDay() {
 const s = StyleSheet.create({
   section: { marginTop: 36 },
   header: { paddingHorizontal: 20, marginBottom: 14 },
-  titleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 10 },
+  tick: { width: 4, height: 20, borderRadius: 2, backgroundColor: C.accent },
   title: { ...TAr.h2, color: C.bone, textAlign: "right" },
   sub: { ...TAr.caption, color: C.textMuted, textAlign: "right", marginTop: 2 },
 
   card: {
-    flexDirection: "row", gap: 12,
+    flexDirection: "row-reverse", gap: 14, // poster on the right (RTL)
     marginHorizontal: 20, padding: 12,
     borderRadius: R.lg, backgroundColor: C.surface,
     borderWidth: 1, borderColor: C.borderSoft,

@@ -5,7 +5,6 @@ import {
   Pressable,
   FlatList,
   RefreshControl,
-  ScrollView,
   StyleSheet,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
@@ -15,17 +14,22 @@ import { getFavorites, removeFavorite } from "../../lib/favorites";
 import type { FavoriteAnime, FavoriteList } from "../../lib/favorites";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
+import { getCompletedAnime } from "../../lib/completion";
+import type { CompletedEntry } from "../../lib/completionMatch";
 import { PosterCard, PosterPill, PosterCornerBtn, INLINE_POSTER_BADGE } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";
 import { useCardLayout, type CardLayout } from "../../lib/cardLayout";
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
+import { RtlRow } from "../../components/RtlRow";
 import { useAuth } from "../../lib/auth";
 import { useSidebarActions } from "../../components/Sidebar";
 import { C, S, R, TAr } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 
-type ListFilter = "all" | FavoriteList;
+// "completed" is automatic — anime whose finale was watched — not a list the
+// user files things into, so it lives beside the saved lists, not inside them.
+type ListFilter = "all" | FavoriteList | "completed";
 
 const PAD = S.paddingContent;
 const GAP = S.gapRelaxed;
@@ -36,23 +40,28 @@ export default function MyListScreen() {
   const { user } = useAuth();
   const { openSidebar } = useSidebarActions();
   const [favorites, setFavorites] = useState<FavoriteAnime[]>([]);
+  const [completed, setCompleted] = useState<CompletedEntry[]>([]);
   const [filter, setFilter] = useState<ListFilter>("all");
   const [refreshing, setRefreshing] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      getFavorites().then(setFavorites);
-    }, []),
-  );
+  // Favorites first (instant), then the completed shelf, which borrows My List
+  // posters for finished anime that fell out of the local watch history.
+  const load = useCallback(async () => {
+    const favs = await getFavorites();
+    setFavorites(favs);
+    setCompleted(await getCompletedAnime(favs).catch(() => []));
+  }, []);
+
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      setFavorites(await getFavorites());
+      await load();
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [load]);
 
   const handleRemove = useCallback(async (href: string) => {
     await removeFavorite(href);
@@ -62,11 +71,16 @@ export default function MyListScreen() {
   const watchingCount = favorites.filter((f) => f.list === "watching").length;
   const plannedCount = favorites.filter((f) => f.list === "planned").length;
   const visible = filter === "all" ? favorites : favorites.filter((f) => f.list === filter);
+  const showingCompleted = filter === "completed";
+  const data: (FavoriteAnime | CompletedEntry)[] = showingCompleted ? completed : visible;
+  // The status pill only earns its place when it tells cards apart.
+  const showStatus = filter === "all" && watchingCount > 0 && plannedCount > 0;
 
   const filters: { key: ListFilter; label: string; count: number }[] = [
     { key: "all", label: "الكل", count: favorites.length },
     { key: "watching", label: t.currentlyWatching, count: watchingCount },
     { key: "planned", label: t.planToWatch, count: plannedCount },
+    { key: "completed", label: t.completedShelf, count: completed.length },
   ];
 
   return (
@@ -82,14 +96,12 @@ export default function MyListScreen() {
           </View>
           <View style={ss.headerTitleWrap}>
             <Text style={ss.heading}>{t.myListTitle}</Text>
-            <Text style={ss.userEmail}>{t.currentlyWatching} · {watchingCount}     {t.planToWatch} · {plannedCount}</Text>
+            <Text style={ss.userEmail}>{t.currentlyWatching} · {watchingCount}     {t.planToWatch} · {plannedCount}     {t.completedShelf} · {completed.length}</Text>
           </View>
         </Rise>
 
         {/* Filter pills — horizontally scrollable so long labels never clip */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
+        <RtlRow
           style={ss.filterScroll}
           contentContainerStyle={ss.filterRow}
         >
@@ -108,26 +120,30 @@ export default function MyListScreen() {
               </View>
             </Pressable>
           ))}
-        </ScrollView>
+        </RtlRow>
 
         {/* Surface bottom edge — separates the header from the scrolling grid */}
         <View style={ss.headerEdge} />
       </View>
 
-      {visible.length === 0 ? (
-        <StateView
-          icon="heart-outline"
-          variant="empty"
-          title={t.emptyList}
-          message={t.emptyListSub}
-          primary={{ label: t.discover, icon: "search", onPress: () => router.push("/(tabs)/search") }}
-        />
+      {data.length === 0 ? (
+        showingCompleted ? (
+          <StateView icon="checkmark-done-outline" variant="empty" title={t.completedEmpty} message={t.completedEmptySub} />
+        ) : (
+          <StateView
+            icon="heart-outline"
+            variant="empty"
+            title={t.emptyList}
+            message={t.emptyListSub}
+            primary={{ label: t.discover, icon: "search", onPress: () => router.push("/(tabs)/search") }}
+          />
+        )
       ) : (
-        <FlatList
-          key={`${cards.layout}-${cards.columns}`}
-          data={visible}
+        <FlatList<FavoriteAnime | CompletedEntry>
+          key={`${cards.layout}-${cards.columns}-${showingCompleted ? "done" : "list"}`}
+          data={data}
           numColumns={cards.columns}
-          keyExtractor={(item) => item.href}
+          keyExtractor={(item) => ("key" in item ? `done:${item.key}` : item.href)}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews
           initialNumToRender={8}
@@ -135,7 +151,7 @@ export default function MyListScreen() {
           windowSize={7}
           updateCellsBatchingPeriod={50}
           contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100, rowGap: GAP }}
-          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
+          columnWrapperStyle={cards.columnWrapperStyle}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -145,7 +161,9 @@ export default function MyListScreen() {
               progressBackgroundColor={C.surface}
             />
           }
-          renderItem={({ item }) => <MyListCard item={item} onRemove={handleRemove} width={cards.cardWidth} layout={cards.layout} />}
+          renderItem={({ item }) => ("key" in item
+            ? <CompletedCard item={item} width={cards.cardWidth} layout={cards.layout} />
+            : <MyListCard item={item} onRemove={handleRemove} width={cards.cardWidth} layout={cards.layout} showStatus={showStatus} />)}
         />
       )}
     </View>
@@ -158,11 +176,13 @@ const MyListCard = memo(function MyListCard({
   onRemove,
   width,
   layout,
+  showStatus,
 }: {
   item: FavoriteAnime;
   onRemove: (href: string) => void;
   width: number;
   layout: CardLayout;
+  showStatus: boolean;
 }) {
   const watching = item.list === "watching";
   return (
@@ -176,15 +196,15 @@ const MyListCard = memo(function MyListCard({
 
       recyclingKey={item.href}
       titleLines={2}
-      topLeft={(
+      topLeft={showStatus ? (
         <PosterPill>
           <Ionicons name={watching ? "play-circle" : "bookmark"} size={11} color={watching ? C.mint : C.accent} />
           {layout !== "compact" ? <Text style={ss.statusBadgeText}>
             {watching ? t.currentlyWatching : t.planToWatch}
           </Text> : null}
         </PosterPill>
-       )}
-      topRight={<PosterCornerBtn icon="close" onPress={() => onRemove(item.href)} />}
+      ) : undefined}
+      topRight={<PosterCornerBtn icon="close" size={13} style={ss.removeBtn} label={t.remove} onPress={() => onRemove(item.href)} />}
       bottomLeft={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
       bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} style={INLINE_POSTER_BADGE} />}
       centerOverlay={layout !== "compact" ? (
@@ -192,6 +212,25 @@ const MyListCard = memo(function MyListCard({
           <Ionicons name="play" size={14} color={C.textOnAccent} />
         </View>
       ) : null}
+    />
+  );
+});
+
+/* Completed shelf card — no remove control (it's derived from what you watched). */
+const CompletedCard = memo(function CompletedCard({ item, width, layout }: {
+  item: CompletedEntry; width: number; layout: CardLayout;
+}) {
+  return (
+    <PosterCard
+      image={item.image}
+      title={item.title}
+      onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+      width={width}
+      layout={layout}
+      recyclingKey={`done:${item.key}`}
+      titleLines={2}
+      bottomLeft={<MalCardBadge title={item.title} style={INLINE_POSTER_BADGE} />}
+      bottomRight={<CompletionBadge hrefs={[item.href]} titles={[item.title]} style={INLINE_POSTER_BADGE} />}
     />
   );
 });
@@ -212,13 +251,13 @@ const ss = StyleSheet.create({
   headerTitleWrap: { flex: 1, marginLeft: 12, alignItems: "flex-end" },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   heading: {
-    ...TAr.h1, color: C.bone,
+    ...TAr.display, fontSize: 30, lineHeight: 44, color: C.bone,
   },
   userEmail: { color: C.textMuted, fontSize: 12, lineHeight: 22, marginTop: 4, fontFamily: "Cairo_500Medium", textAlign: "right" },
   // 44px touch target (PRODUCT.md ≥44px floor).
   menuBtn: {
-    width: 48, height: 48, borderRadius: R.md,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
+    width: 48, height: 48, borderRadius: R.circle,
+    backgroundColor: "rgba(255,255,255,0.07)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)",
     alignItems: "center", justifyContent: "center",
   },
 
@@ -230,22 +269,25 @@ const ss = StyleSheet.create({
   },
   filterPill: {
     flexDirection: "row", alignItems: "center", flexShrink: 0,
-    marginHorizontal: 3, height: 48,
-    paddingHorizontal: 14, borderRadius: R.sm,
+    marginHorizontal: 3, height: 42,
+    paddingHorizontal: 16, borderRadius: R.pill,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
-  filterPillActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
+  filterPillActive: { backgroundColor: C.accent, borderColor: C.accent },
   filterText: { color: C.textSecondary, fontSize: 12, lineHeight: 21, fontWeight: "600", fontFamily: "Cairo_600SemiBold", flexShrink: 0, includeFontPadding: false, textAlignVertical: "center" },
-  filterTextActive: { color: C.ember },
+  filterTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
   filterCount: {
     backgroundColor: C.glass, borderRadius: R.circle,
     minWidth: 20, alignItems: "center",
     paddingHorizontal: 6, paddingVertical: 1,
     marginStart: 8,
   },
-  filterCountActive: { backgroundColor: C.accentSoft },
+  filterCountActive: { backgroundColor: "rgba(10,11,18,0.16)" },
   filterCountText: { color: C.textMuted, fontSize: 10, fontWeight: "500" },
-  filterCountTextActive: { color: C.ember },
+  filterCountTextActive: { color: C.textOnAccent },
+
+  // Lighter remove control — hitSlop on PosterCornerBtn keeps a ~44dp target.
+  removeBtn: { width: 28, height: 28, borderRadius: R.circle, backgroundColor: "rgba(0,0,0,0.5)" },
 
   // Play hint (used as centerOverlay on PosterCard)
   playHint: {

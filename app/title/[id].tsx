@@ -13,7 +13,7 @@ import { useLocalSearchParams, router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchAniListDetail, type AniListDetail } from "../../lib/seasons";
+import { fetchAniListDetail, formatStartDate, type AniListDetail } from "../../lib/seasons";
 import { translateToArabic } from "../../lib/translate";
 import { arGenre, arFormat } from "../../lib/anilistLabels";
 import { GlassFill } from "../../components/GlassFill";
@@ -26,6 +26,8 @@ import { useCardLayout } from "../../lib/cardLayout";
 
 const BANNER_H = 300;
 const PAD = S.paddingContent;
+/** Below this, a synopsis is an announcement one-liner, not a story. */
+const SHORT_SYNOPSIS = 160;
 
 const STATUS_AR: Record<string, string> = {
   RELEASING: t.statusReleasing,
@@ -35,11 +37,6 @@ const STATUS_AR: Record<string, string> = {
   HIATUS: t.statusHiatus,
 };
 
-function fmtDate(startAt: number | null): string | null {
-  if (!startAt) return null;
-  const d = new Date(startAt * 1000);
-  return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
-}
 
 export default function TitleDetailScreen() {
   const cards = useCardLayout("title");
@@ -50,6 +47,7 @@ export default function TitleDetailScreen() {
   const [data, setData] = useState<AniListDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [synopsisOpen, setSynopsisOpen] = useState(false);
+  const [seriesOpen, setSeriesOpen] = useState(false);
   // AniList synopses are English; translate to Arabic so the page is fully
   // Arabic. `null` = not translated yet (show a "translating" hint).
   const [synopsisAr, setSynopsisAr] = useState<string | null>(null);
@@ -82,6 +80,32 @@ export default function TitleDetailScreen() {
     return () => { cancelled = true; };
   }, [data?.description]);
 
+  // Upcoming sequels usually carry a one-liner ("The third season of X."). Walk
+  // up the prequel/parent chain (max 3 hops — season 2 is often just as terse)
+  // to the first entry with a real synopsis and show that story too, in Arabic.
+  // "" = nothing to show.
+  const [seriesAr, setSeriesAr] = useState<string | null>("");
+  useEffect(() => {
+    if (!data || (data.description || "").length >= SHORT_SYNOPSIS) { setSeriesAr(""); return; }
+    let cancelled = false;
+    setSeriesAr(null);
+    void (async () => {
+      let node: AniListDetail | null = data;
+      for (let hop = 0; hop < 3 && node; hop++) {
+        const up: AniListDetail["relations"][number] | undefined = node.relations.find((r) => (r.relation === "PREQUEL" || r.relation === "PARENT") && r.id > 0);
+        if (!up) break;
+        node = await fetchAniListDetail(up.id).catch(() => null);
+        if (node && node.description.length >= SHORT_SYNOPSIS) {
+          const ar = await translateToArabic(node.description).catch(() => node!.description);
+          if (!cancelled) setSeriesAr(ar);
+          return;
+        }
+      }
+      if (!cancelled) setSeriesAr("");
+    })();
+    return () => { cancelled = true; };
+  }, [data]);
+
   const openTrailer = useCallback(() => {
     if (data?.trailerYoutube) Linking.openURL(`https://www.youtube.com/watch?v=${data.trailerYoutube}`).catch(() => {});
   }, [data?.trailerYoutube]);
@@ -95,7 +119,7 @@ export default function TitleDetailScreen() {
   const malScore = useMalRating(title);
   const banner = data?.banner || data?.cover || fallbackBanner || fallbackImg;
   const status = data?.status ? STATUS_AR[data.status] || data.status : null;
-  const airDate = fmtDate(data?.startAt ?? null);
+  const airDate = formatStartDate(data?.startAt ?? null, data?.startPrecision);
 
   const infoRows: { label: string; value: string }[] = [];
   if (data) {
@@ -181,13 +205,33 @@ export default function TitleDetailScreen() {
                   <Text style={ss.translatingText}>{t.translating}</Text>
                 </View>
               ) : (
-                <Pressable onPress={() => setSynopsisOpen((v) => !v)}>
+                <Pressable onPress={() => setSynopsisOpen((v) => !v)} disabled={(data.description || "").length < SHORT_SYNOPSIS}>
                   <Text style={ss.synopsis} numberOfLines={synopsisOpen ? undefined : 4}>{synopsisAr}</Text>
-                  <Text style={ss.readMore}>{synopsisOpen ? t.showLess : t.readMore}</Text>
+                  {(data.description || "").length >= SHORT_SYNOPSIS
+                    ? <Text style={ss.readMore}>{synopsisOpen ? t.showLess : t.readMore}</Text>
+                    : null}
                 </Pressable>
               )}
             </View>
           ) : null}
+
+          {/* The original series' story, for terse sequel announcements */}
+          {seriesAr !== "" && (
+            <View style={ss.section}>
+              <Text style={ss.sectionTitle}>{t.titleSeriesStory}</Text>
+              {seriesAr === null ? (
+                <View style={ss.translating}>
+                  <ActivityIndicator size="small" color={C.accent} />
+                  <Text style={ss.translatingText}>{t.translating}</Text>
+                </View>
+              ) : (
+                <Pressable onPress={() => setSeriesOpen((v) => !v)}>
+                  <Text style={ss.synopsis} numberOfLines={seriesOpen ? undefined : 5}>{seriesAr}</Text>
+                  <Text style={ss.readMore}>{seriesOpen ? t.showLess : t.readMore}</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
 
           {/* Genres */}
           {data && data.genres.length > 0 && (
@@ -253,12 +297,15 @@ export default function TitleDetailScreen() {
         </View>
       </ScrollView>
 
+      {/* Status-bar scrim so scrolled text never sits under the clock / back button */}
+      <LinearGradient pointerEvents="none" colors={[C.bg, "rgba(8,9,12,0.75)", "rgba(8,9,12,0)"]} locations={[0, 0.55, 1]} style={[ss.topScrim, { height: insets.top + 72 }]} />
+
       {/* Floating back button */}
       <View style={[ss.topBar, { top: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()}>
+        <Pressable onPress={() => router.back()} hitSlop={6} accessibilityRole="button" accessibilityLabel={t.back}>
           <View style={ss.glassCircle}>
             <GlassFill intensity={16} />
-            <Ionicons name="chevron-back" size={20} color={C.text} />
+            <Ionicons name="chevron-forward" size={20} color={C.text} />
           </View>
         </Pressable>
       </View>
@@ -317,12 +364,14 @@ const ss = StyleSheet.create({
   infoLabel: { color: C.textMuted, fontSize: 13, width: 110, fontFamily: "Cairo_500Medium", textAlign: "right" },
   infoValue: { color: C.textSecondary, fontSize: 13, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "left", writingDirection: "rtl" },
 
-  relGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  relGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 12 },
   cardToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 },
 
-  topBar: { position: "absolute", left: PAD, right: PAD, flexDirection: "row", justifyContent: "space-between" },
+  topScrim: { position: "absolute", top: 0, left: 0, right: 0 },
+  // RTL: back sits on the right edge.
+  topBar: { position: "absolute", left: PAD, right: PAD, flexDirection: "row-reverse", justifyContent: "space-between" },
   glassCircle: {
-    width: 48, height: 48, borderRadius: R.md, overflow: "hidden",
+    width: 46, height: 46, borderRadius: R.circle, overflow: "hidden",
     alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: C.glassBorder,
   },
 });

@@ -182,7 +182,6 @@ function Sidebar() {
                   const active = !!item.match && (pathname === item.match || (item.match !== "/" && pathname.startsWith(item.match + "/")));
                   return <Pressable key={item.label} onPress={() => item.path ? go(item.path) : share()} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }}
                     style={({ pressed }) => [st.navItem, active && st.navActive, pressed && st.pressed]}>
-                    <Ionicons name={active ? "chevron-back" : "remove-outline"} size={active ? 15 : 10} color={active ? C.accent : C.textFaint} />
                     <Text style={[st.navLabel, active && st.activeLabel]}>{item.label}</Text>
                     <View style={[st.navIcon, active && st.activeIcon]}><Ionicons name={item.icon} size={20} color={active ? C.accent : C.textSecondary} /></View>
                   </Pressable>;

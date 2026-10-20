@@ -24,13 +24,13 @@ import { fetchHome } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
 import { episodeNumberFromUrl } from "../../lib/videoProviders";
 import { isEpisodeUrl, toAnimeUrl } from "../../lib/favorites";
-import { getContinueWatching, progressPercent, dismissFromContinue, animeTitleKey, normAnimeKey } from "../../lib/history";
-import type { WatchEntry } from "../../lib/history";
+import { getContinueWatching, getHistoryByAnime, progressPercent, dismissFromContinue, animeTitleKey, normAnimeKey } from "../../lib/history";
+import type { WatchEntry, AnimeHistoryGroup } from "../../lib/history";
 import { getFavorites } from "../../lib/favorites";
 import { canonTitle } from "../../lib/relations";
 import { fetchAnimeRecommendations } from "../../lib/animeInfo";
 import type { RecItem } from "../../lib/animeInfo";
-import { pickSeeds, rankRecommendations, type RankedRec } from "../../lib/recommend";
+import { pickTasteSeeds, rankRecommendations, type RankedRec } from "../../lib/recommend";
 import { AniListPosterCard } from "../../components/AniListPosterCard";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebarActions } from "../../components/Sidebar";
@@ -49,13 +49,17 @@ import { remoteLog, errText } from "../../lib/remoteLog";
 import { useReducedMotion } from "../../lib/motion";
 import { posterUrl } from "../../lib/img";
 import { Rise } from "../../components/Rise";
+import { RtlRow } from "../../components/RtlRow";
 import { AnimeOfTheDay } from "../../components/AnimeOfTheDay";
 
-const HERO_H = 440;
+const HERO_H = 520;
 const CARD_W = 140;
 const CARD_H = 200;
-const EP_W = 200;
-const EP_H = 112;
+const EP_W = 232;
+const EP_H = 130;
+// Space reserved to the right of a ranked poster for its numeral (1 / 2 digits).
+const RANK_W1 = 46;
+const RANK_W2 = 92;
 const PAD = S.paddingContent;
 
 const SECTION_LABELS: Record<string, string> = {
@@ -73,28 +77,22 @@ const HOME_SECTION_IDS = ["recently_updated", "latest_movies", "top_animes", "to
 
 /* ── Hero Carousel (isolated) ──────────────────────────────────
    Owns its OWN paging index + 5s auto-advance timer, so a hero tick or swipe
-   re-renders only the carousel — not the entire home feed (every rail +
-   categories). Previously heroIndex lived on HomeScreen, so each 5s auto-advance
-   reconciled the whole tree on the JS thread and stuttered an in-progress
-   vertical scroll. Memoized: re-renders only when `featured` changes. */
-const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: FeaturedItem[] }) {
+   re-renders only the carousel — not the entire home feed. Full-bleed: the art
+   runs under the status bar and the floating top bar. */
+const HeroCarousel = memo(function HeroCarousel({ featured, topInset }: { featured: FeaturedItem[]; topInset: number }) {
   const { width: SW } = useWindowDimensions();
   const heroRef = useRef<ScrollView>(null);
   const [heroIndex, setHeroIndex] = useState(0);
   const heroTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Accessibility: honor the OS "Reduce Motion" switch. When on, the hero does
-  // NOT auto-advance (self-moving carousels are a classic reduced-motion
-  // offender) — the user pages it manually. Content is never gated on motion,
-  // so every slide stays reachable.
+  // Reduce Motion: no auto-advance and no slow zoom; every slide stays reachable.
   const reduced = useReducedMotion();
+  const heroH = HERO_H + topInset;
 
   const startAuto = useCallback(() => {
     if (heroTimer.current) clearInterval(heroTimer.current);
     if (featured.length <= 1) return;
     if (reduced) return;
-    // Don't run the auto-advance while the app is backgrounded — a 5s timer that
-    // keeps firing in the user's pocket wakes the JS thread and animates an
-    // off-screen ScrollView for nothing. It restarts on foreground (below).
+    // Paused while backgrounded; restarts on foreground (below).
     if (AppState.currentState !== "active") return;
     heroTimer.current = setInterval(() => {
       setHeroIndex((prev) => {
@@ -102,7 +100,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
         heroRef.current?.scrollTo({ x: next * SW, animated: true });
         return next;
       });
-    }, 5000);
+    }, 6000);
   }, [featured.length, reduced, SW]);
 
   useEffect(() => {
@@ -134,81 +132,9 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
         scrollEventThrottle={16}
       >
         {featured.map((item, i) => (
-          <View key={item.href || i} style={[ss.heroSlide, { width: SW }]}>
-            {/* Mesh gradient background */}
-            <View style={ss.meshBg}>
-              <LinearGradient
-                colors={[C.meshViolet, "transparent"]}
-                start={{ x: 0.2, y: 0.5 }}
-                end={{ x: 0.8, y: 0.5 }}
-                style={[ABSOLUTE_FILL, { opacity: 0.8 }]}
-              />
-              <LinearGradient
-                colors={[C.meshPink, "transparent"]}
-                start={{ x: 0.8, y: 0.2 }}
-                end={{ x: 0.2, y: 0.8 }}
-                style={[ABSOLUTE_FILL, { opacity: 0.6 }]}
-              />
-            </View>
-            {item.image && (
-              <Image source={{ uri: posterUrl(item.image, SW * 1.5, 1200) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={200} />
-            )}
-            {/* Protection scrim — deepened so the title / synopsis / CTAs always
-                clear WCAG AA against the darkened plate, never against raw art. */}
-            <LinearGradient
-              colors={["transparent", "rgba(10,10,11,0.5)", "rgba(10,10,11,0.93)", C.bg]}
-              locations={[0, 0.35, 0.72, 1]}
-              style={ABSOLUTE_FILL}
-            />
-            {/* Hero content */}
-            <View style={ss.heroContent}>
-              {/* Genre chips */}
-              <View style={ss.chipRow}>
-                {item.genres.slice(0, 3).map((g, gi) => (
-                  <View key={gi} style={ss.chip}>
-                    <Text style={ss.chipText}>{g}</Text>
-                  </View>
-                ))}
-              </View>
-              <Text style={ss.heroTitle} numberOfLines={2}>{item.title}</Text>
-              {item.description && (
-                <Text style={ss.heroDesc} numberOfLines={2}>{item.description}</Text>
-              )}
-              <View style={ss.heroButtons}>
-                <Pressable
-                  style={ss.btnPrimaryWrap}
-                  onPress={() => {
-                    if (!item.href) return;
-                    if (isEpisodeUrl(item.href)) {
-                      const animeUrl = toAnimeUrl(item.href);
-                      // Defer a frame so the press feedback paints before
-                      // the heavy watch-screen mount blocks the thread.
-                      requestAnimationFrame(() => router.push({
-                        pathname: `/watch/${encodeURIComponent(item.href)}`,
-                        params: {
-                          ...(animeUrl ? { anime: animeUrl } : {}),
-                          animeTitle: item.title,
-                          ...(episodeNumberFromUrl(item.href) != null ? { epNum: String(episodeNumberFromUrl(item.href)) } : {}),
-                        },
-                      }));
-                    } else {
-                      router.push(`/anime/${encodeURIComponent(item.href)}`);
-                    }
-                  }}
-                >
-                  <LinearGradient colors={[C.accent, C.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={ss.btnPrimaryGrad}>
-                    <Ionicons name="play" size={16} color={C.textOnAccent} />
-                    <Text style={ss.btnPrimaryText}>{t.watchNow}</Text>
-                  </LinearGradient>
-                </Pressable>
-              </View>
-            </View>
-          </View>
+          <HeroSlide key={item.href || i} item={item} width={SW} height={heroH} active={i === heroIndex} reduced={reduced} />
         ))}
       </ScrollView>
-      {/* Segmented position indicator — pinned bottom-center of the hero (the
-          conventional carousel-indicator spot). Single source of truth is
-          heroIndex; sits in the hero's lower padding, clear of the CTAs. */}
       {featured.length > 1 && (
         <View style={ss.heroTrack} pointerEvents="none">
           {featured.map((_, si) => (
@@ -216,6 +142,95 @@ const HeroCarousel = memo(function HeroCarousel({ featured }: { featured: Featur
           ))}
         </View>
       )}
+    </View>
+  );
+});
+
+function openHeroItem(item: FeaturedItem, details: boolean) {
+  if (!item.href) return;
+  if (isEpisodeUrl(item.href)) {
+    const animeUrl = toAnimeUrl(item.href);
+    if (details) {
+      if (animeUrl) router.push(`/anime/${encodeURIComponent(animeUrl)}`);
+      return;
+    }
+    const epNum = episodeNumberFromUrl(item.href);
+    // Defer a frame so the press feedback paints before the heavy watch mount.
+    requestAnimationFrame(() => router.push({
+      pathname: `/watch/${encodeURIComponent(item.href)}`,
+      params: {
+        ...(animeUrl ? { anime: animeUrl } : {}),
+        animeTitle: item.title,
+        ...(epNum != null ? { epNum: String(epNum) } : {}),
+      },
+    }));
+  } else {
+    // Anime-page slides: Details opens the page; Watch now opens it and starts
+    // the first episode (the page resolves the episode list).
+    router.push(details
+      ? `/anime/${encodeURIComponent(item.href)}`
+      : { pathname: `/anime/${encodeURIComponent(item.href)}`, params: { play: "1" } });
+  }
+}
+
+const HeroSlide = memo(function HeroSlide({ item, width, height, active, reduced }: {
+  item: FeaturedItem; width: number; height: number; active: boolean; reduced: boolean;
+}) {
+  // Slow "Ken Burns" push-in on the visible slide only; native driver, one value.
+  const scale = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    scale.setValue(1);
+    if (!active || reduced) return;
+    const anim = Animated.timing(scale, { toValue: 1.08, duration: 7000, easing: Easing.out(Easing.quad), useNativeDriver: true, isInteraction: false });
+    anim.start();
+    return () => anim.stop();
+  }, [active, reduced, scale]);
+  // Episode-only slides have no separate details page target besides the anime.
+  const canDetail = !isEpisodeUrl(item.href) || !!toAnimeUrl(item.href);
+  return (
+    <View style={[ss.heroSlide, { width, height }]}>
+      {item.image ? (
+        <Animated.View style={[ABSOLUTE_FILL, { transform: [{ scale }] }]}>
+          <Image source={{ uri: posterUrl(item.image, width * 1.5, 1200) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={250} />
+        </Animated.View>
+      ) : null}
+      {/* Top scrim keeps the status bar + floating top bar legible over bright art. */}
+      <LinearGradient colors={["rgba(8,9,12,0.78)", "rgba(8,9,12,0)"]} style={ss.heroTopScrim} />
+      {/* Bottom scrim — title, synopsis and CTAs always sit on a dark plate (AA). */}
+      <LinearGradient
+        colors={["rgba(8,9,12,0)", "rgba(8,9,12,0.6)", "rgba(8,9,12,0.94)", C.bg]}
+        locations={[0, 0.38, 0.74, 1]}
+        style={[ss.heroBottomScrim, { height: height * 0.72 }]}
+      />
+      <View style={ss.heroContent}>
+        {item.genres.length > 0 && (
+          <Text style={ss.heroGenres} numberOfLines={1}>{item.genres.slice(0, 3).join("  ·  ")}</Text>
+        )}
+        <Text style={ss.heroTitle} numberOfLines={2}>{item.title}</Text>
+        {item.description ? <Text style={ss.heroDesc} numberOfLines={2}>{item.description}</Text> : null}
+        <View style={ss.heroButtons}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t.watchNow}
+            onPress={() => openHeroItem(item, false)}
+            style={({ pressed }) => [ss.heroPrimary, pressed && ss.pressedSoft]}
+          >
+            <Ionicons name="play" size={18} color={C.textOnAccent} />
+            <Text style={ss.heroPrimaryText}>{t.watchNow}</Text>
+          </Pressable>
+          {canDetail ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.openAnimePage}
+              onPress={() => openHeroItem(item, true)}
+              style={({ pressed }) => [ss.heroSecondary, pressed && ss.pressedSoft]}
+            >
+              <Ionicons name="information-circle-outline" size={19} color={C.text} />
+              <Text style={ss.heroSecondaryText}>{t.heroDetails}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
     </View>
   );
 });
@@ -403,6 +418,17 @@ export default function HomeScreen() {
     getUnreadCount().then(setUnread).catch(() => {});
   }, []));
 
+  // Top bar: transparent over the hero, solid once the hero scrolls away.
+  // Animates only when crossing the threshold, never per frame.
+  const topBarSolid = useRef(new Animated.Value(0)).current;
+  const topBarShown = useRef(false);
+  const onFeedScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const show = e.nativeEvent.contentOffset.y > HERO_H - 320; // before the hero title reaches the bar
+    if (show === topBarShown.current) return;
+    topBarShown.current = show;
+    Animated.timing(topBarSolid, { toValue: show ? 1 : 0, duration: 180, useNativeDriver: true }).start();
+  }, [topBarSolid]);
+
   // Show only the known witanime rails, in the payload's (display) order.
   const visibleSections = useMemo(
     () => sections.filter((s) => HOME_SECTION_IDS.includes(s.id)),
@@ -428,12 +454,9 @@ export default function HomeScreen() {
 
   return (
     <View style={ss.root}>
-      {/* ── Top Bar (floating glass) ────────── */}
-      <View style={[ss.topBar, { paddingTop: insets.top + 8 }]}>
-        <LinearGradient
-          colors={[C.bg, "rgba(10,10,11,0.85)", "transparent"]}
-          style={ABSOLUTE_FILL}
-        />
+      {/* ── Top Bar — floats over the full-bleed hero, turns solid past it ── */}
+      <View style={[ss.topBar, ss.topBarFloating, { paddingTop: insets.top + 8 }]}>
+        <Animated.View pointerEvents="none" style={[ABSOLUTE_FILL, ss.topBarSolid, { opacity: topBarSolid }]} />
         <View style={ss.topBarInner}>
           <PantoufaWordmark />
           {/* Actions consolidated into one frosted segmented cluster — a single
@@ -463,6 +486,8 @@ export default function HomeScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         removeClippedSubviews
+        onScroll={onFeedScroll}
+        scrollEventThrottle={32}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -474,7 +499,9 @@ export default function HomeScreen() {
         }
       >
         {/* ── Hero Carousel (state isolated — see HeroCarousel) ─────── */}
-        {featured.length > 0 && <HeroCarousel featured={featured} />}
+        {featured.length > 0
+          ? <HeroCarousel featured={featured} topInset={insets.top} />
+          : <View style={{ height: insets.top + 76 }} />}
 
         <AnimeOfTheDay />
 
@@ -487,13 +514,10 @@ export default function HomeScreen() {
             <View style={ss.shelfHeader}>
               <View style={ss.sectionTitleRow}>
                 <Text style={ss.sectionTitle}>{t.continueWatching}</Text>
+                <View style={ss.sectionTick} />
               </View>
             </View>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: PAD, gap: 14, paddingBottom: 2 }}
-            >
+            <RtlRow contentContainerStyle={{ paddingHorizontal: PAD, gap: 14, paddingBottom: 2 }}>
               {history.slice(0, 10).map((entry) => (
                 <ContinueCard
                   key={entry.episodeHref}
@@ -501,7 +525,7 @@ export default function HomeScreen() {
                   onRemove={handleRemoveContinue}
                 />
               ))}
-            </ScrollView>
+            </RtlRow>
           </View>
         )}
 
@@ -523,14 +547,16 @@ export default function HomeScreen() {
               <View style={ss.sectionHeader}>
                 <View style={ss.sectionTitleRow}>
                   <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
+                  <View style={ss.sectionTick} />
                 </View>
-                <Pressable style={ss.seeAllBtn} onPress={openAll}>
-                  <Text style={ss.seeAllText}>{t.seeAll(section.items.length)}</Text>
-                  <Ionicons name="chevron-back" size={12} color={C.textSecondary} />
+                <Pressable style={({ pressed }) => [ss.seeAllBtn, pressed && ss.pressedSoft]} onPress={openAll} accessibilityRole="button" hitSlop={6}>
+                  <Ionicons name="chevron-back" size={13} color={C.accent} />
+                  <Text style={ss.seeAllText}>{t.seeAllShort}</Text>
                 </Pressable>
               </View>
               <FlatList<AnimeItem | EpisodeItem>
                 horizontal
+                inverted
                 showsHorizontalScrollIndicator={false}
                 initialNumToRender={3}
                 maxToRenderPerBatch={3}
@@ -539,7 +565,8 @@ export default function HomeScreen() {
                 keyExtractor={(item, i) => item.href || String(i)}
                 contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
                 renderItem={({ item, index }) => section.type === "anime"
-                  ? <AnimeCardView item={item as AnimeItem} index={index} />
+                  // Rank numerals only mean something on the "most watched" rails.
+                  ? <AnimeCardView item={item as AnimeItem} rank={section.id.startsWith("top_") ? index + 1 : undefined} />
                   : <EpisodeCardView item={item as EpisodeItem} onPress={openEpisodePopup} />}
                 ListFooterComponent={hasMore ? (
                   <Pressable style={ss.seeAllCard} onPress={openAll}>
@@ -674,14 +701,13 @@ function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClos
 
 /* ── Anime Card (cinematic) ──────────────────── */
 
-const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: AnimeItem; index: number }) {
-  return (
+const AnimeCardView = memo(function AnimeCardView({ item, rank }: { item: AnimeItem; rank?: number }) {
+  const card = (
     <PosterCard
       image={item.image}
       title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
       width={CARD_W}
-      rank={index + 1}
       newBadge={item.isNew}
       recyclingKey={item.href}
       titleLines={1}
@@ -689,36 +715,58 @@ const AnimeCardView = memo(function AnimeCardView({ item, index }: { item: Anime
       bottomRight={<CompletionBadge hrefs={[item.href, ...Object.values(item.sourceHrefs || {})]} titles={[item.title]} />}
     />
   );
+  if (rank == null) return card;
+  // "Most watched" rails: a big chart numeral tucked behind the poster's right
+  // edge (the leading edge in Arabic), so the rank reads before the art.
+  return (
+    <View style={{ width: CARD_W + (rank >= 10 ? RANK_W2 : RANK_W1), height: CARD_W * 1.5 }}>
+      <Text style={ss.rankNum} accessibilityElementsHidden importantForAccessibility="no">{rank}</Text>
+      <View style={ss.rankPoster}>{card}</View>
+    </View>
+  );
 });
 
 /* ── For You (recommendations) ──
-   Personalised rail seeded by watch history: the 3 most recent distinct anime
-   are resolved against AniList and their community recommendations merged +
-   ranked (lib/recommend). Tapping a card resolves it to a source page via the
-   shared AniListPosterCard. Hidden entirely when there's nothing to show — a
-   secondary rail must never render as an empty hole. */
+   Personalised rail seeded by the WHOLE watch history: every distinct anime is
+   weighted by episodes watched + recency (lib/recommend pickTasteSeeds), the
+   top 6 are resolved against AniList, and their community recommendations are
+   merged with per-seed normalisation so no single anime owns the rail.
+   Tapping a card resolves it to a source page via the shared
+   AniListPosterCard. Hidden entirely when there's nothing to show. */
 const seedKeyOf = (e: { animeTitle: string; animeHref: string }) =>
   normAnimeKey(e.animeHref) || animeTitleKey(e.animeTitle);
+const FOR_YOU_SEEDS = 6;
 
 const ForYouRail = memo(function ForYouRail({ history, width }: { history: WatchEntry[]; width: number }) {
   const [items, setItems] = useState<RankedRec[]>([]);
-  const historyRef = useRef(history);
-  historyRef.current = history;
+  // Full per-anime history (not just Continue Watching, which hides finished
+  // and dismissed anime). Re-read when the continue list changes — that is
+  // the signal something new was watched.
+  const [groups, setGroups] = useState<AnimeHistoryGroup[]>([]);
+  useEffect(() => {
+    let alive = true;
+    getHistoryByAnime().then((g) => { if (alive) setGroups(g); }).catch(() => {});
+    return () => { alive = false; };
+  }, [history]);
 
-  // Refetch only when the seed SET changes (a newly watched anime, or one
-  // drops out) — not on every progress tick / focus refresh.
-  const seedKey = useMemo(
-    () => pickSeeds(history, seedKeyOf, 3).map((s) => s.animeTitle).join("|"),
-    [history],
+  const seeds = useMemo(
+    () => pickTasteSeeds(groups.map((g) => ({ animeTitle: g.animeTitle, animeHref: g.animeHref, watched: g.watched, updatedAt: g.updatedAt })), seedKeyOf, FOR_YOU_SEEDS),
+    [groups],
   );
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+  // Refetch only when the seed SET changes — not on every progress tick.
+  const seedKey = seeds.map((s) => s.animeTitle).join("|");
+  const seedsRef = useRef(seeds);
+  seedsRef.current = seeds;
 
   useFocusEffect(useCallback(() => {
-    const seeds = pickSeeds(historyRef.current, seedKeyOf, 3);
-    if (seeds.length === 0) { setItems([]); return; }
+    const picked = seedsRef.current;
+    if (picked.length === 0) { setItems([]); return; }
     let alive = true;
     const timer = setTimeout(() => { void (async () => {
       const [batches, favorites] = await Promise.all([
-        Promise.all(seeds.map((s) => fetchAnimeRecommendations(s.animeTitle, s.animeHref).catch(() => [] as RecItem[]))),
+        Promise.all(picked.map((s) => fetchAnimeRecommendations(s.animeTitle, s.animeHref).catch(() => [] as RecItem[]))),
         getFavorites().catch(() => []),
       ]);
       if (!alive) return;
@@ -731,14 +779,14 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
         if (k) keys.add(k);
         canons.add(canonTitle(title));
       };
-      for (const e of historyRef.current) remember(e.animeTitle);
+      for (const g of groupsRef.current) remember(g.animeTitle);
       for (const f of favorites) remember(f.title);
       const excluded = (item: RecItem) =>
         [item.title, item.titleEnglish].some((title) => {
           if (!title) return false;
           return keys.has(animeTitleKey(title)) || canons.has(canonTitle(title));
         });
-      const ranked = rankRecommendations(batches, { excluded, cap: 15 });
+      const ranked = rankRecommendations(batches, { excluded, cap: 15, weights: picked.map((s) => s.weight) });
       if (alive) setItems(ranked);
     })().catch(() => {}); }, 5000);
     return () => { alive = false; clearTimeout(timer); };
@@ -749,12 +797,14 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
     <View style={ss.section}>
       <View style={ss.sectionHeader}>
         <View style={ss.sectionTitleRow}>
-          <Ionicons name="sparkles-outline" size={13} color={C.accent} />
+          <Ionicons name="sparkles" size={14} color={C.mint} />
           <Text style={ss.sectionTitle}>{t.recsForYou}</Text>
+          <View style={ss.sectionTick} />
         </View>
       </View>
       <FlatList
         horizontal
+        inverted
         showsHorizontalScrollIndicator={false}
         initialNumToRender={3}
         maxToRenderPerBatch={3}
@@ -781,6 +831,7 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
   const [failedUri, setFailedUri] = useState<string | null>(null);
   const sized = posterUrl(item.image, EP_W);
   const uri = failedUri === sized ? item.image : sized;
+  const epNum = episodeNumberFromUrl(item.href) ?? extractEpisodeNumber(item.title);
   return (
     <Pressable
       onPress={() => onPress(item)}
@@ -799,16 +850,15 @@ const EpisodeCardView = memo(function EpisodeCardView({ item, onPress }: { item:
             <Text style={ss.badgeText}>{t.newBadge}</Text>
           </View>
         )}
-        {/* Play button overlay */}
-        <View style={ss.epPlayOverlay}>
-          <View style={ss.epPlayBtn}>
-            <Ionicons name="play" size={14} color={C.textOnAccent} />
-          </View>
+        <LinearGradient colors={["rgba(8,9,12,0)", "rgba(8,9,12,0.75)"]} style={ss.epScrim} pointerEvents="none" />
+        <View style={ss.epPill} pointerEvents="none">
+          <Ionicons name="play" size={11} color={C.textOnAccent} />
+          {epNum != null ? <Text style={ss.epPillText}>{t.episode} {epNum}</Text> : null}
         </View>
         <CompletionBadge hrefs={[item.animeHref]} titles={[item.animeTitle]} />
       </View>
-      <Text style={ss.epTitle} numberOfLines={1}>{item.title}</Text>
-      <Text style={ss.epSub} numberOfLines={1}>{item.animeTitle}</Text>
+      <Text style={ss.epTitle} numberOfLines={1}>{item.animeTitle || item.title}</Text>
+      {item.animeTitle && epNum == null ? <Text style={ss.epSub} numberOfLines={1}>{item.title}</Text> : null}
     </Pressable>
   );
 });
@@ -865,8 +915,11 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
   const epTitle = (!rawTitle || (animeName && rawTitle.toLowerCase() === animeName.toLowerCase()))
     ? (epNum !== null ? `${t.episode} ${epNum}` : "")
     : rawTitle;
-  const subShown = !!epTitle && !!animeName &&
-    !epTitle.toLowerCase().includes(animeName.toLowerCase());
+  // Anime name leads; the episode + time left is the supporting line. When the
+  // episode title already carries the anime name, it becomes the lead instead.
+  const epHasName = !!epTitle && !!animeName && epTitle.toLowerCase().includes(animeName.toLowerCase());
+  const lead = epHasName ? epTitle : (animeName || epTitle);
+  const support = [epHasName ? "" : epTitle, t.minLeft(remainMin)].filter(Boolean).join(" · ");
   return (
     <Pressable
       onPress={() => {
@@ -901,20 +954,10 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
             style={ABSOLUTE_FILL}
           />
         )}
-        <View style={ss.epPlayOverlay}>
-          <View style={ss.epPlayBtn}>
-            <Ionicons name="play" size={14} color={C.textOnAccent} />
-          </View>
-        </View>
-        {/* Episode number badge */}
-        {epNum !== null && (
-          <View style={ss.epNumBadge}>
-            <Text style={ss.epNumBadgeText}>{epNum}</Text>
-          </View>
-        )}
-        {/* Time remaining badge */}
-        <View style={ss.timeBadge}>
-          <Text style={ss.timeBadgeText}>{t.minLeft(remainMin)}</Text>
+        <LinearGradient colors={["rgba(8,9,12,0)", "rgba(8,9,12,0.75)"]} style={ss.epScrim} pointerEvents="none" />
+        <View style={[ss.epPill, ss.epPillResume]} pointerEvents="none">
+          <Ionicons name="play" size={11} color={C.textOnAccent} />
+          <Text style={ss.epPillText}>{t.resume}</Text>
         </View>
         {/* Delete button */}
         <Pressable
@@ -931,8 +974,8 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
           <View style={[ss.progressBarFill, { width: `${Math.round(pct * 100)}%` }]} />
         </View>
       </View>
-      <Text style={ss.epTitle} numberOfLines={1}>{epTitle || animeName}</Text>
-      {subShown && <Text style={ss.epSub} numberOfLines={1}>{animeName}</Text>}
+      <Text style={ss.epTitle} numberOfLines={1}>{lead}</Text>
+      <Text style={ss.epSub} numberOfLines={1}>{support}</Text>
     </Pressable>
   );
 });
@@ -1018,8 +1061,9 @@ const ss = StyleSheet.create({
   },
   // Frosted segmented action cluster — one connected control, three 44px segments.
   actionCluster: {
-    flexDirection: "row", alignItems: "center", height: 48,
-    borderRadius: R.md, overflow: "hidden", backgroundColor: C.surface,
+    flexDirection: "row", alignItems: "center", height: 48, paddingHorizontal: 4,
+    borderRadius: R.pill, overflow: "hidden", backgroundColor: "rgba(20,22,28,0.85)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.10)",
   },
   clusterBtn: {
     width: 44, height: 48, alignItems: "center", justifyContent: "center",
@@ -1035,44 +1079,50 @@ const ss = StyleSheet.create({
     color: C.textOnAccent, fontSize: 9, fontWeight: "800", fontFamily: "Cairo_700Bold",
   },
 
-  // Hero
-  heroSlide: { width: "100%", height: HERO_H, backgroundColor: C.surface },
-  meshBg: { ...StyleSheet.flatten(ABSOLUTE_FILL) },
+  // Floating top bar over the hero
+  topBarFloating: { position: "absolute", top: 0, left: 0, right: 0, backgroundColor: "transparent" },
+  topBarSolid: { backgroundColor: C.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
+
+  // Hero — full-bleed art, text block anchored bottom-right (RTL).
+  heroSlide: { backgroundColor: C.surface, overflow: "hidden" },
+  heroTopScrim: { position: "absolute", top: 0, left: 0, right: 0, height: 150 },
+  heroBottomScrim: { position: "absolute", left: 0, right: 0, bottom: 0 },
   heroContent: {
     position: "absolute", bottom: 0, left: 0, right: 0,
-    paddingHorizontal: PAD, paddingBottom: 50, gap: 12,
+    paddingHorizontal: PAD, paddingBottom: 48,
   },
-  // Segmented position indicator — pinned to the hero's bottom-center, in the
-  // lower padding zone below the CTAs (replaces the old dots).
   heroTrack: {
-    position: "absolute", bottom: 18, left: 0, right: 0,
+    position: "absolute", bottom: 20, left: 0, right: 0,
     flexDirection: "row", justifyContent: "center", gap: 6,
   },
-  seg: { width: 16, height: 3, borderRadius: 2, backgroundColor: C.controlDim },
-  segActive: { width: 28, backgroundColor: C.accent },
-  chipRow: { flexDirection: "row", justifyContent: "flex-end", gap: 7 },
-  // Editorial outline tags — hairline border, no fill.
-  chip: {
-    paddingHorizontal: 11, paddingVertical: 4, borderRadius: R.sm, overflow: "hidden",
-    backgroundColor: C.overlayMedium,
+  seg: { width: 6, height: 6, borderRadius: 3, backgroundColor: "rgba(255,255,255,0.32)" },
+  segActive: { width: 22, backgroundColor: C.accent },
+  heroGenres: {
+    ...TAr.caption, fontSize: 12, color: C.mint, textAlign: "right", marginBottom: 6,
   },
-  chipText: { color: C.textSecondary, fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3, fontFamily: "Cairo_600SemiBold" },
   heroTitle: {
-    ...TAr.display, fontSize: 24, lineHeight: 36,
+    ...TAr.display, fontSize: 30, lineHeight: 42,
     color: C.bone, textAlign: "right",
+    textShadowColor: "rgba(0,0,0,0.5)", textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 10,
   },
   heroDesc: {
-    ...TAr.body, color: C.textSecondary, textAlign: "right",
+    ...TAr.body, color: C.textSoft, textAlign: "right", marginTop: 6,
   },
-  heroButtons: { flexDirection: "row", gap: 10, marginTop: 6 },
-  btnPrimaryWrap: {
-    flex: 1, borderRadius: R.md,
+  // row-reverse puts the primary action on the right; margins, not gap.
+  heroButtons: { flexDirection: "row-reverse", marginTop: 18 },
+  heroPrimary: {
+    flex: 1.35, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
+    height: 52, borderRadius: R.pill, backgroundColor: C.accent, marginLeft: 10,
+    ...ELEVATION_GLOW,
   },
-  btnPrimaryGrad: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    minHeight: 52, paddingVertical: 14, borderRadius: R.md, overflow: "hidden",
+  heroPrimaryText: { ...TAr.label, color: C.textOnAccent, fontFamily: "Cairo_700Bold", marginRight: 8 },
+  heroSecondary: {
+    flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
+    height: 52, borderRadius: R.pill,
+    backgroundColor: "rgba(255,255,255,0.12)", borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
   },
-  btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_700Bold" },
+  heroSecondaryText: { ...TAr.label, color: C.text, marginRight: 6 },
+  pressedSoft: { opacity: 0.85, transform: [{ scale: 0.98 }] },
 
   // Resume shelf — frosted panel that sits cleanly below the hero (a small gap
   // keeps its rounded top reading as a distinct floating surface, not fused to
@@ -1090,17 +1140,20 @@ const ss = StyleSheet.create({
     flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: PAD, marginBottom: 14,
   },
-  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  sectionTitleRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 10 },
   // Editorial marginal rule — a crisp ember stroke leading the title.
   sectionTick: {
-    width: 3, height: 20, borderRadius: 0, backgroundColor: C.ember,
+    width: 4, height: 20, borderRadius: 2, backgroundColor: C.accent,
   },
   sectionTitle: {
     ...TAr.h2, color: C.bone,
   },
   // "See all" stays ash — ember is reserved for the primary action.
-  seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 3, minHeight: 44 },
-  seeAllText: { color: C.textSecondary, fontSize: 11, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
+  seeAllBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4, height: 32, paddingHorizontal: 12,
+    borderRadius: R.pill, backgroundColor: C.accentSoft,
+  },
+  seeAllText: { color: C.accent, fontSize: 12, lineHeight: 18, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // "See All" tail card in horizontal list
   seeAllCard: {
@@ -1115,22 +1168,22 @@ const ss = StyleSheet.create({
   },
   seeAllCardText: { color: C.accent, fontSize: 12, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
+  // Chart numeral behind ranked posters
+  rankNum: {
+    position: "absolute", right: 0, bottom: -18,
+    fontFamily: "Outfit_900Black", fontSize: 132, lineHeight: 150, letterSpacing: -8,
+    color: "rgba(139,147,255,0.42)",
+  },
+  rankPoster: { position: "absolute", left: 0, top: 0 },
+
   // Progress bar (continue watching)
   progressBarBg: {
-    position: "absolute", bottom: 0, left: 0, right: 0, height: 3,
-    backgroundColor: "rgba(255,255,255,0.2)",
+    position: "absolute", bottom: 0, left: 0, right: 0, height: 4,
+    backgroundColor: "rgba(255,255,255,0.18)", alignItems: "flex-end", // fills from the right (RTL)
   },
   progressBarFill: {
-    height: 3, backgroundColor: C.accent,
-    borderRadius: 2,
-  },
-  timeBadge: {
-    position: "absolute", bottom: 8, left: 8,
-    backgroundColor: "rgba(0,0,0,0.7)", borderRadius: 4,
-    paddingHorizontal: 6, paddingVertical: 2,
-  },
-  timeBadgeText: {
-    color: C.white, fontSize: 9, fontWeight: "600", fontFamily: "Cairo_600SemiBold",
+    height: 4, backgroundColor: C.accent,
+    borderTopLeftRadius: 2, borderBottomLeftRadius: 2,
   },
   deleteBtn: {
     position: "absolute", top: 6, right: 6,
@@ -1147,33 +1200,21 @@ const ss = StyleSheet.create({
     color: C.textOnAccent, fontSize: 9, fontWeight: "700", letterSpacing: 0.8,
     fontFamily: "Cairo_700Bold",
   },
-  epNumBadge: {
-    position: "absolute", top: 8, left: 8, zIndex: 2,
-    backgroundColor: C.ember, borderRadius: R.sm,
-    paddingHorizontal: 8, paddingVertical: 4,
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
-  },
-  epNumBadgeText: {
-    color: C.textOnAccent, fontSize: 10, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.5,
-  },
 
   // Episode cards
   epCard: {
     width: EP_W, height: EP_H, borderRadius: R.lg, overflow: "hidden",
     backgroundColor: C.surface,
   },
-  epPlayOverlay: {
-    ...ABSOLUTE_FILL,
-    alignItems: "center", justifyContent: "center",
-    // Light veil only — the accent play button carries its own contrast now,
-    // so the artwork stays bright instead of living under a permanent dim.
-    backgroundColor: "rgba(0,0,0,0.15)",
+  epScrim: { position: "absolute", left: 0, right: 0, bottom: 0, height: "55%" },
+  // Small action pill, bottom-left (trailing edge in RTL): play + episode no.
+  epPill: {
+    position: "absolute", left: 8, bottom: 10,
+    flexDirection: "row-reverse", alignItems: "center",
+    height: 26, paddingHorizontal: 10, borderRadius: R.pill, backgroundColor: C.accent,
   },
-  epPlayBtn: {
-    width: 38, height: 38, borderRadius: R.circle,
-    backgroundColor: C.ember,
-    alignItems: "center", justifyContent: "center",
-  },
+  epPillResume: { bottom: 12 },
+  epPillText: { color: C.textOnAccent, fontSize: 11, lineHeight: 16, fontFamily: "Cairo_700Bold", marginRight: 5 },
   epTitle: {
     color: C.text, fontSize: 13, fontWeight: "600", lineHeight: 21,
     marginTop: 10, width: EP_W, fontFamily: "Cairo_600SemiBold", textAlign: "right",

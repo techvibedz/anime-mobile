@@ -30,6 +30,6 @@ export function CardLayoutControl({ layout, onChange }: {
 }
 
 const s = StyleSheet.create({
-  trigger: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: R.md, backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft },
+  trigger: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: R.circle, backgroundColor: "rgba(255,255,255,0.07)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" },
   pressed: { opacity: 0.75 },
 });

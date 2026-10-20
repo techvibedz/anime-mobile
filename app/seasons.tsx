@@ -23,6 +23,7 @@ import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome"
 import { Shimmer } from "../components/Shimmer";
 import { useOnlineStatus } from "../lib/net";
 import { CardLayoutControl } from "../components/CardLayoutControl";
+import { RtlRow } from "../components/RtlRow";
 import { useCardLayout } from "../lib/cardLayout";
 
 const PAD = S.paddingContent;
@@ -89,7 +90,7 @@ export default function SeasonsScreen() {
 
       {/* Season selector rail */}
       <View style={s.railWrap}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.rail}>
+        <RtlRow contentContainerStyle={s.rail}>
           {options.map((o, i) => {
             const act = i === selected;
             return (
@@ -103,7 +104,7 @@ export default function SeasonsScreen() {
               </Pressable>
             );
           })}
-        </ScrollView>
+        </RtlRow>
       </View>
 
       <FlatList
@@ -118,7 +119,7 @@ export default function SeasonsScreen() {
         windowSize={7}
         updateCellsBatchingPeriod={50}
         contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4, rowGap: GAP }}
-        columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
+        columnWrapperStyle={cards.columnWrapperStyle}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
         }

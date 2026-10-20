@@ -103,10 +103,16 @@ const theme = loadUi("lib/theme.ts", {});
   for (const file of ["app/(tabs)/search.tsx", "app/(tabs)/mylist.tsx", "app/see-all/[section].tsx", "app/upcoming.tsx", "app/seasons.tsx", "app/popular/[kind].tsx"]) {
     const source = fs.readFileSync(file, "utf8");
     assert(source.includes("<CardLayoutControl"), `${file}: missing layout selector`);
-    assert(source.includes("key={`${cards.layout}-${cards.columns}`}"), `${file}: unsafe FlatList column change`);
+    // The key may carry extra remount segments (My List adds its shelf) but must lead with layout + columns.
+    assert(/key=\{`\$\{cards\.layout\}-\$\{cards\.columns\}[^`]*`\}/.test(source), `${file}: unsafe FlatList column change`);
     assert(source.includes("numColumns={cards.columns}"), `${file}: fixed column count`);
-    assert(source.includes("cards.columns > 1 ? { gap: GAP } : undefined"), `${file}: column wrapper must be absent in list mode`);
+    assert(source.includes("columnWrapperStyle={cards.columnWrapperStyle}"), `${file}: must use the shared RTL column wrapper`);
+    assert(source.includes("useCardLayout(") && /useCardLayout\("[^"]+", GAP\)/.test(source), `${file}: grid gap must match the wrapper gap`);
   }
+  // useCardLayout owns the wrapper: absent in list mode (FlatList forbids it for
+  // one column) and right-to-left for multi-column grids.
+  assert(fs.readFileSync("lib/cardLayout.ts", "utf8").includes('columnWrapperStyle: metrics.columns > 1 ? { gap, flexDirection: "row-reverse" as const } : undefined'),
+    "lib/cardLayout.ts: column wrapper must be absent in list mode and RTL otherwise");
   for (const file of ["app/anime/[id].tsx", "app/title/[id].tsx"]) {
     assert(fs.readFileSync(file, "utf8").includes("<CardLayoutControl"), `${file}: related grids must support layouts`);
   }

@@ -20,6 +20,7 @@ import { fetchAllUsage, type UsageRow } from "../lib/usage";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
+import { AdminMangaTab } from "../components/AdminMangaTab";
 
 type FilterKey = "all" | "online" | "active" | "inactive";
 type SortKey = "recent" | "time" | "sessions";
@@ -70,6 +71,7 @@ export default function UsersScreen() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [sort, setSort] = useState<SortKey>("recent");
+  const [tab, setTab] = useState<"users" | "manga">("users");
 
   const admin = isAdmin(user?.email);
 
@@ -139,6 +141,17 @@ export default function UsersScreen() {
       <Aurora />
       <ScreenHeader title={t.usersTitle} />
 
+      {/* Admin tabs — users (usage) / manga (what each user reads) */}
+      <View style={s.tabs}>
+        {(["users", "manga"] as const).map((k) => (
+          <Pressable key={k} onPress={() => setTab(k)} style={[s.tab, tab === k && s.tabActive]} accessibilityRole="tab" accessibilityState={{ selected: tab === k }}>
+            <Ionicons name={k === "users" ? "people" : "book"} size={15} color={tab === k ? C.textOnAccent : C.textSecondary} />
+            <Text style={[s.tabText, tab === k && s.tabTextActive]}>{k === "users" ? t.adminTabUsers : t.adminTabManga}</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {tab === "manga" ? <AdminMangaTab users={rows} bottomPad={insets.bottom} /> : (
       <FlatList
         data={loaded ? filtered : []}
         keyExtractor={(item) => item.userId}
@@ -226,6 +239,7 @@ export default function UsersScreen() {
           )
         )}
       />
+      )}
     </View>
   );
 }
@@ -373,6 +387,15 @@ function Stat({
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+
+  tabs: {
+    flexDirection: "row-reverse", marginHorizontal: S.paddingContent, marginBottom: 4,
+    padding: 4, borderRadius: R.pill, backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
+  },
+  tab: { flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", minHeight: 44, borderRadius: R.pill },
+  tabActive: { backgroundColor: C.accent },
+  tabText: { color: C.textSecondary, fontSize: 13, fontFamily: "Cairo_600SemiBold", marginRight: 6 },
+  tabTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
 
   counterCard: {
     borderRadius: R.lg, padding: 24, overflow: "hidden",

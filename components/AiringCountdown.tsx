@@ -131,7 +131,7 @@ const styles = StyleSheet.create({
   card: {
     marginTop: 16,
     alignSelf: "stretch",
-    flexDirection: "row",
+    flexDirection: "row-reverse", // RTL: label on the right, countdown reads days → minutes from the right
     flexWrap: "wrap", justifyContent: "space-between", alignItems: "center",
     gap: 12,
     paddingHorizontal: 14,
@@ -139,12 +139,12 @@ const styles = StyleSheet.create({
     borderRadius: R.lg,
     backgroundColor: C.surfaceContainer,
   },
-  header: { flexDirection: "row", alignItems: "center", gap: 5 },
+  header: { flexDirection: "row-reverse", alignItems: "center", gap: 5 },
   label: {
     color: C.violet, fontSize: 12, fontWeight: "700",
     fontFamily: "Cairo_600SemiBold",
   },
-  segs: { flexDirection: "row", gap: 6 },
+  segs: { flexDirection: "row-reverse", gap: 6 },
   seg: {
     minWidth: 34, alignItems: "center",
     paddingHorizontal: 6, paddingVertical: 4,

@@ -84,9 +84,9 @@ const s = StyleSheet.create({
     paddingHorizontal: 32, paddingTop: 40, paddingBottom: 40, gap: 16,
   },
   disc: {
-    width: 88, height: 88, borderRadius: R.xl,
+    width: 96, height: 96, borderRadius: R.circle,
     alignItems: "center", justifyContent: "center", marginBottom: 8,
-    backgroundColor: C.surfaceContainer,
+    backgroundColor: C.accentSoft, borderWidth: 1, borderColor: C.borderViolet,
   },
   title: { ...TAr.h2, color: C.text, textAlign: "center" },
   message: {
@@ -94,14 +94,14 @@ const s = StyleSheet.create({
   },
   primaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    maxWidth: "100%", backgroundColor: C.ember, borderRadius: R.md,
+    maxWidth: "100%", backgroundColor: C.ember, borderRadius: R.pill,
     minHeight: 52, paddingHorizontal: 28, paddingVertical: 14, marginTop: 12,
   },
   primaryText: { ...TAr.bodySmall, flexShrink: 1, textAlign: "center", color: C.textOnAccent, fontWeight: "700" },
   secondaryBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    maxWidth: "100%", minHeight: 48, borderRadius: R.md, paddingHorizontal: 24, paddingVertical: 12,
+    maxWidth: "100%", minHeight: 48, borderRadius: R.pill, paddingHorizontal: 24, paddingVertical: 12,
   },
   secondaryText: { ...TAr.bodySmall, flexShrink: 1, textAlign: "center", color: C.text },
 });

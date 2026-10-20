@@ -219,11 +219,17 @@ export default function ProfileScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
       >
-        {/* Hero */}
+        {/* Hero — a soft periwinkle→mint glow behind the avatar */}
         <View style={s.hero}>
+          <LinearGradient
+            colors={["rgba(139,147,255,0.22)", "rgba(94,234,212,0.08)", "rgba(8,9,12,0)"]}
+            locations={[0, 0.5, 1]}
+            style={s.heroGlow}
+            pointerEvents="none"
+          />
           <Pressable onPress={editing ? pickAvatar : undefined} disabled={!editing}>
             <LinearGradient
-              colors={[C.accent, C.violet]}
+              colors={[C.accent, C.mint]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={s.avatarRing}
@@ -386,10 +392,11 @@ const s = StyleSheet.create({
   // Shared horizontal spacer between equal-width cards (margins, not row gap).
   colSpace: { marginLeft: 10 },
 
-  hero: { alignItems: "center", paddingTop: 12, paddingBottom: 32, paddingHorizontal: S.paddingContent },
+  hero: { alignItems: "center", paddingTop: 20, paddingBottom: 32, paddingHorizontal: S.paddingContent },
+  heroGlow: { position: "absolute", top: -60, left: 0, right: 0, height: 320 },
   avatarRing: {
-    width: 96, height: 96, borderRadius: R.circle,
-    alignItems: "center", justifyContent: "center", padding: 2,
+    width: 112, height: 112, borderRadius: R.circle,
+    alignItems: "center", justifyContent: "center", padding: 3,
   },
   avatar: { width: "100%", height: "100%", borderRadius: R.circle },
   avatarFallback: { backgroundColor: C.bgDeep, alignItems: "center", justifyContent: "center" },

@@ -140,16 +140,20 @@ const { MangaCover } = load("components/MangaUI.tsx", {
   "expo-image": { Image: "Image" }, "@expo/vector-icons": { Ionicons: "Icon" },
   "../lib/manga/design": theme, "../lib/cardLayout": { CARD_LAYOUTS: ["compact", "comfortable", "list"] },
   "../lib/i18n": { t: {} }, "../lib/motion": { useReducedMotion: () => false }, "./Shimmer": { Shimmer: "Shimmer" },
+  "../lib/img": { posterUrl: (u) => (u ? `${u}?w=320` : undefined) },
 });
 let coverProps = { uri: "https://cdn.example.org/cover-one.jpg", label: "First story" };
 const renderCover = () => { cursor = 0; tree = MangaCover(coverProps); };
 renderCover();
+assert.equal(image().props.source.uri, `${coverProps.uri}?w=320`, "cover must load the display-sized variant first");
+image().props.onError(); renderCover();
+assert.equal(image().props.source.uri, coverProps.uri, "a failed sized cover must fall back to the original");
 image().props.onError(); renderCover();
 assert.equal(image(), undefined, "failed cover must stop rendering a broken image");
 assert(nodes(tree).some(node => node.type === "Text" && node.props.children === "First story"), "failed cover must retain the story's label");
 coverProps = { uri: "https://cdn.example.org/cover-two.jpg", label: "Second story" };
 renderCover();
-assert.equal(image().props.source.uri, coverProps.uri, "recycled cover must load the new story's artwork");
+assert.equal(image().props.source.uri, `${coverProps.uri}?w=320`, "recycled cover must load the new story's artwork");
 
 // Run the actual restore effects with cold preferences / warm progress and
 // verify approximate jumps cannot overwrite the saved target.

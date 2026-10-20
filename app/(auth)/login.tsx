@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, Text, Pressable, TextInput, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, I18nManager } from "react-native";
+import { View, Text, Pressable, TextInput, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -89,7 +89,7 @@ export default function Login() {
       >
         <View style={ss.header}>
           <Pressable onPress={() => router.back()} style={ss.backBtn} hitSlop={8}>
-            <Ionicons name={I18nManager.isRTL ? "chevron-forward" : "chevron-back"} size={22} color={C.text} />
+            <Ionicons name="chevron-forward" size={22} color={C.text} />
           </Pressable>
         </View>
 
@@ -259,15 +259,15 @@ const ss = StyleSheet.create({
   authCard: {
     marginTop: 4,
   },
-  header: { flexDirection: "row", marginBottom: 40 },
+  header: { flexDirection: "row-reverse", marginBottom: 40 }, // back on the right (RTL)
   backBtn: {
-    width: 48, height: 48, borderRadius: R.md,
-    backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
+    width: 48, height: 48, borderRadius: R.circle,
+    backgroundColor: "rgba(255,255,255,0.07)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)",
     alignItems: "center", justifyContent: "center",
   },
   body: { flex: 1, paddingTop: 8 },
   heading: {
-    color: C.text, fontSize: 26, lineHeight: 40, fontWeight: "700",
+    color: C.text, fontSize: 30, lineHeight: 46, fontWeight: "700",
     fontFamily: "Cairo_700Bold", textAlign: "right",
     writingDirection: "rtl",
   },
@@ -283,11 +283,11 @@ const ss = StyleSheet.create({
   },
   warnText: { color: C.gold, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium" },
 
-  googleWrap: { borderRadius: R.md, marginBottom: 24, overflow: "hidden" },
+  googleWrap: { borderRadius: R.pill, marginBottom: 24, overflow: "hidden" },
   googleBtn: {
     flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 10,
-    minHeight: 56, borderRadius: R.md, paddingVertical: 15,
+    minHeight: 56, borderRadius: R.pill, paddingVertical: 15,
   },
   googleBtnText: { color: "#111", fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
 
@@ -301,10 +301,10 @@ const ss = StyleSheet.create({
     fontFamily: "Cairo_600SemiBold", textAlign: "right", writingDirection: "rtl",
   },
   inputBox: {
-    flexDirection: "row",
+    flexDirection: "row-reverse", // icon on the right (RTL)
     alignItems: "center", gap: 10,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-    borderRadius: R.md, paddingHorizontal: 14, height: S.inputHeight,
+    borderRadius: R.lg, paddingHorizontal: 16, height: S.inputHeight,
   },
   input: {
     flex: 1, color: C.text, fontSize: 14, height: S.inputHeight,
@@ -342,11 +342,11 @@ const ss = StyleSheet.create({
   },
   noticeText: { color: C.text, fontSize: 12, flex: 1, fontFamily: "Cairo_500Medium", textAlign: "right" },
 
-  submitWrap: { borderRadius: R.md, marginTop: 16, overflow: "hidden" },
+  submitWrap: { borderRadius: R.pill, marginTop: 16, overflow: "hidden" },
   submitBtn: {
     flexDirection: "row",
     alignItems: "center", justifyContent: "center", gap: 8,
-    minHeight: 56, borderRadius: R.md, paddingVertical: 16,
+    minHeight: 56, borderRadius: R.pill, paddingVertical: 16,
   },
   submitText: { flexShrink: 1, textAlign: "center", color: C.textOnAccent, fontSize: 14, lineHeight: 24, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 

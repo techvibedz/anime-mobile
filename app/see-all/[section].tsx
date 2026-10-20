@@ -194,7 +194,7 @@ export default function SeeAllScreen() {
         windowSize={7}
         updateCellsBatchingPeriod={50}
         contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 20, rowGap: GAP }}
-        columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
+        columnWrapperStyle={cards.columnWrapperStyle}
         onEndReached={loadMore}
         onEndReachedThreshold={1.5}
         refreshControl={

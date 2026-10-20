@@ -2,8 +2,9 @@
 // unit-testable with plain tsx (see recommend.test.ts).
 //
 // Three jobs, all side-effect free:
-//   1) pickSeeds()      — collapse watch history to the N distinct, most
-//      recently watched anime that seed the recommendation lookups.
+//   1) pickTasteSeeds() — weight every distinct anime in the full history by
+//      engagement + recency and keep the top N as recommendation seeds
+//      (pickSeeds() is the plain newest-first variant).
 //   2) parseRecommendations() — shape raw AniList recommendation nodes into
 //      RecItems (anime only, deduped, best rating wins).
 //   3) rankRecommendations()  — merge the per-seed batches, sum community
@@ -67,6 +68,46 @@ export function pickSeeds(
   return out;
 }
 
+/** One anime from the full watch history, as pickTasteSeeds reads it. */
+export interface TasteSource extends RecSeedSource {
+  /** Distinct episodes watched (engagement). */
+  watched: number;
+  updatedAt: number;
+}
+
+export interface WeightedSeed extends RecSeed {
+  weight: number;
+}
+
+const TASTE_HALF_LIFE_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
+
+/**
+ * Seeds that represent the user's whole taste, not just the latest anime:
+ * every distinct anime in the history is weighted by how much of it was
+ * watched (log-scaled, so a 1000-episode One Piece doesn't own the rail) and
+ * how recently (60-day half-life, floored so an old favourite still counts).
+ * The top `cap` by weight seed the lookups.
+ */
+export function pickTasteSeeds(
+  groups: readonly TasteSource[],
+  keyOf: (entry: RecSeedSource) => string,
+  cap = 6,
+  now = Date.now(),
+): WeightedSeed[] {
+  const best = new Map<string, WeightedSeed>();
+  for (const g of groups) {
+    if (!g || !g.animeTitle || !g.animeTitle.trim()) continue;
+    const key = keyOf(g) || g.animeTitle.trim().toLowerCase();
+    const engagement = 1 + Math.log2(1 + Math.max(0, g.watched || 0));
+    const age = Math.max(0, now - (g.updatedAt || 0));
+    const recency = Math.max(0.25, Math.pow(0.5, age / TASTE_HALF_LIFE_MS));
+    const weight = engagement * recency;
+    const cur = best.get(key);
+    if (!cur || weight > cur.weight) best.set(key, { animeTitle: g.animeTitle, animeHref: g.animeHref, weight });
+  }
+  return [...best.values()].sort((a, b) => b.weight - a.weight).slice(0, cap);
+}
+
 /* ── AniList response parsing (the subset we read) ── */
 
 interface RawRecNode {
@@ -111,28 +152,33 @@ export function parseRecommendations(nodes: unknown): RecItem[] {
 }
 
 /**
- * Merge per-seed recommendation batches and rank them. Items recommended by
- * several seeds accumulate their ratings (a title multiple of your anime point
- * to is a stronger signal). `excluded` filters out anything already watched or
+ * Merge per-seed recommendation batches and rank them. Each batch is
+ * normalised to its own best rating (0..1) and scaled by that seed's weight,
+ * so one seed with hugely-upvoted recs can't drown the others — the rail
+ * reflects every anime you watch. Items several seeds point to accumulate
+ * (the strongest signal). `excluded` filters out anything already watched or
  * listed; equal scores break by newer year so the rail feels current.
  */
 export function rankRecommendations(
   batches: readonly (readonly RecItem[])[],
-  opts: { excluded?: (item: RecItem) => boolean; cap?: number } = {},
+  opts: { excluded?: (item: RecItem) => boolean; cap?: number; weights?: readonly number[] } = {},
 ): RankedRec[] {
   const cap = opts.cap ?? 15;
   const merged = new Map<number, RankedRec>();
-  for (const batch of batches) {
+  batches.forEach((batch, i) => {
+    const weight = opts.weights?.[i] ?? 1;
+    const top = Math.max(1, ...batch.map((it) => (it ? it.rating : 0)));
     for (const item of batch) {
       if (!item || item.anilistId == null) continue;
+      const part = (Math.max(0, item.rating) / top) * weight;
       const cur = merged.get(item.anilistId);
       if (cur) {
-        cur.score += item.rating;
+        cur.score += part;
         continue;
       }
-      merged.set(item.anilistId, { ...item, score: item.rating });
+      merged.set(item.anilistId, { ...item, score: part });
     }
-  }
+  });
   return [...merged.values()]
     .filter((item) => !opts.excluded?.(item))
     .sort((a, b) => b.score - a.score || (b.seasonYear ?? 0) - (a.seasonYear ?? 0))

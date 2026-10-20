@@ -100,7 +100,7 @@ export default function PopularScreen() {
           windowSize={7}
           updateCellsBatchingPeriod={50}
           contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4, rowGap: GAP }}
-          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
+          columnWrapperStyle={cards.columnWrapperStyle}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
           }

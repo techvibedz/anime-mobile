@@ -224,16 +224,20 @@ export function PosterCornerBtn({
   tint = "#fff",
   size = 15,
   style,
+  label,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   tint?: string;
   size?: number;
   style?: any;
+  label?: string;
 }) {
   return (
     <Pressable
       onPress={(e) => { e.stopPropagation?.(); onPress(); }}
+      accessibilityRole="button"
+      accessibilityLabel={label}
       hitSlop={8}
       style={[s.cornerBtn, style]}
     >

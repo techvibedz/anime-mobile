@@ -2325,11 +2325,11 @@ export default function WatchScreen() {
           <View style={[ss.serverAvatar, recommended && { borderColor: C.accent }]}>
             <Text style={[ss.serverAvatarText, recommended && { color: C.accent }]}>{initial}</Text>
           </View>
-          <View style={ss.serverInfo}>
-            <Text style={[ss.serverName, recommended && ss.serverNameActive]} numberOfLines={1}>
+          <View style={ss.selInfo}>
+            <Text style={[ss.serverName, ss.selName, recommended && ss.serverNameActive]} numberOfLines={1}>
               {getDisplayName(s.server)}
             </Text>
-            <Text style={ss.serverMeta} numberOfLines={1}>{s.server.source || t.tapToPlay}</Text>
+            <Text style={[ss.serverMeta, ss.selMeta]} numberOfLines={1}>{s.server.source || t.tapToPlay}</Text>
           </View>
           {q ? (
             <View style={[ss.qualityBadge, q === "FHD" && ss.qualityBadgeHi]}>
@@ -2344,10 +2344,10 @@ export default function WatchScreen() {
       <View style={ss.root}>
         <StatusBar hidden />
         <View style={[ss.selHeader, { paddingTop: (insets.top || 10) + 8 }]}>
-          <Pressable onPress={() => router.back()} style={ss.iconBtn} hitSlop={6}>
-            <Ionicons name="chevron-back" size={22} color={C.white} />
+          <Pressable onPress={() => router.back()} style={ss.selBack} hitSlop={6} accessibilityRole="button" accessibilityLabel={t.back}>
+            <Ionicons name="chevron-forward" size={22} color={C.white} />
           </Pressable>
-          <View style={ss.serverInfo}>
+          <View style={ss.selInfo}>
             <Text style={ss.selTitle} numberOfLines={1}>{t.chooseServerTitle}</Text>
             <Text style={ss.selSub} numberOfLines={1}>{title || animeTitle || t.chooseServerSub}</Text>
           </View>
@@ -3447,8 +3447,8 @@ const ss = StyleSheet.create({
     paddingHorizontal: 18, paddingBottom: 12,
   },
   iconBtn: {
-    width: 44, height: 44, borderRadius: R.md,
-    backgroundColor: C.overlayBlack50,
+    width: 44, height: 44, borderRadius: R.circle,
+    backgroundColor: "rgba(0,0,0,0.45)", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.16)",
     alignItems: "center", justifyContent: "center",
   },
   iconBtnAccent: {
@@ -3510,8 +3510,8 @@ const ss = StyleSheet.create({
   },
   partyLeaveText: { color: C.error, fontSize: 12, fontFamily: "Cairo_700Bold" },
   speedBtn: {
-    height: 44, minWidth: 48, borderRadius: R.md, paddingHorizontal: 10,
-    backgroundColor: C.overlayBlack50,
+    height: 44, minWidth: 52, borderRadius: R.pill, paddingHorizontal: 12,
+    backgroundColor: "rgba(0,0,0,0.45)", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.16)",
     alignItems: "center", justifyContent: "center",
   },
   speedBtnText: { color: C.white, fontSize: 12, fontWeight: "800", fontFamily: "Outfit_800ExtraBold", letterSpacing: 0.3 },
@@ -3590,8 +3590,8 @@ const ss = StyleSheet.create({
   ctrlRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   chipBtn: {
     flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: C.overlayBlack50,
-    minHeight: 48, borderRadius: R.md, paddingHorizontal: 16, paddingVertical: 10,
+    backgroundColor: "rgba(0,0,0,0.45)", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.16)",
+    minHeight: 46, borderRadius: R.pill, paddingHorizontal: 18, paddingVertical: 10,
   },
   chipBtnText: { color: C.white, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   chipBtnActive: {
@@ -3601,18 +3601,26 @@ const ss = StyleSheet.create({
   chipBtnAccent: {
     flexDirection: "row", alignItems: "center", gap: 6,
     backgroundColor: C.accent,
-    minHeight: 48, borderRadius: R.md, paddingHorizontal: 18, paddingVertical: 10,
+    minHeight: 46, borderRadius: R.pill, paddingHorizontal: 18, paddingVertical: 10,
   },
   chipBtnAccentText: { color: C.textOnAccent, fontSize: 12, fontWeight: "700", fontFamily: "Cairo_700Bold" },
 
   // Server selection layout (pre-playback)
+  // RTL: back on the right, title right-aligned beside it.
   selHeader: {
-    flexDirection: "row", alignItems: "center", gap: 12,
+    flexDirection: "row-reverse", alignItems: "center", gap: 12,
     paddingHorizontal: 20, paddingBottom: 12,
     borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.06)",
   },
-  selTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
-  selSub: { color: C.textMuted, fontSize: 13, marginTop: 4, fontFamily: "Cairo_500Medium" },
+  selTitle: { color: C.white, fontSize: 20, lineHeight: 30, fontWeight: "800", fontFamily: "Cairo_700Bold", textAlign: "right" },
+  selSub: { color: C.textMuted, fontSize: 13, marginTop: 2, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  selBack: {
+    width: 46, height: 46, borderRadius: R.circle, alignItems: "center", justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.07)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)",
+  },
+  selInfo: { flex: 1, alignItems: "flex-end" },
+  selName: { fontSize: 15, textAlign: "right" },
+  selMeta: { textAlign: "right", marginTop: 2 },
   selContent: {
     // direction:"ltr" + explicit column so the Arabic-locale RTL flip can't
     // turn the list into a row; gap dropped (RN 0.81 gap+row-reverse Yoga bug)
@@ -3622,8 +3630,8 @@ const ss = StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 16,
   },
   selSectionLabel: {
-    color: C.textMuted, fontSize: 12, fontWeight: "700",
-    letterSpacing: 0.6, marginTop: 8, marginBottom: 2, fontFamily: "Cairo_700Bold",
+    color: C.textSecondary, fontSize: 13, fontWeight: "700", textAlign: "right",
+    marginTop: 12, marginBottom: 8, fontFamily: "Cairo_700Bold",
   },
   selFinding: {
     direction: "rtl", flexDirection: "row", alignItems: "center", justifyContent: "center",
@@ -3634,9 +3642,11 @@ const ss = StyleSheet.create({
     // direction:"ltr" keeps avatar→info→play laid out left-to-right and, by
     // pinning the row to ltr (not RTL row-reverse), keeps `gap` safe from the
     // RN 0.81 gap+row-reverse Yoga bug. marginBottom replaces the list gap.
-    direction: "ltr", flexDirection: "row", alignItems: "center", gap: 12,
-    marginBottom: 8,
-    minHeight: 72, paddingVertical: 16, paddingHorizontal: 18, borderRadius: R.md,
+    // RTL row: avatar on the right, play on the left. (gap + row-reverse is
+    // fine on the current RN; it was the 0.81 Yoga bug.)
+    direction: "ltr", flexDirection: "row-reverse", alignItems: "center", gap: 12,
+    marginBottom: 10,
+    minHeight: 76, paddingVertical: 16, paddingHorizontal: 16, borderRadius: R.lg,
     backgroundColor: C.surfaceContainer,
     borderWidth: 1, borderColor: C.borderSoft,
   },
@@ -3663,15 +3673,16 @@ const ss = StyleSheet.create({
     borderTopLeftRadius: R.xl, borderBottomLeftRadius: R.xl,
     borderLeftWidth: 1, borderColor: "rgba(255,255,255,0.08)",
   },
-  pickerHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
-  pickerHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
+  // RTL sheets: title block on the right, close on the left.
+  pickerHeader: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+  pickerHeaderLeft: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   pickerHeaderIcon: {
     width: 34, height: 34, borderRadius: 17,
     backgroundColor: "rgba(139,147,255,0.14)", borderWidth: 1, borderColor: "rgba(139,147,255,0.3)",
     alignItems: "center", justifyContent: "center",
   },
-  pickerTitle: { color: C.white, fontSize: 17, fontWeight: "800", fontFamily: "Cairo_700Bold" },
-  pickerSub: { color: C.textMuted, fontSize: 12, marginTop: 4, fontFamily: "Cairo_500Medium" },
+  pickerTitle: { color: C.white, fontSize: 18, lineHeight: 28, fontWeight: "800", fontFamily: "Cairo_700Bold", textAlign: "right" },
+  pickerSub: { color: C.textMuted, fontSize: 12, marginTop: 2, fontFamily: "Cairo_500Medium", textAlign: "right" },
   pickerScroll: { flex: 1 },
   pickerContent: { gap: 7, paddingBottom: 20 },
   emptyText: {
@@ -3721,8 +3732,8 @@ const ss = StyleSheet.create({
   },
 
   serverItem: {
-    flexDirection: "row", alignItems: "center", gap: 11,
-    minHeight: 68, paddingVertical: 14, paddingHorizontal: 14, borderRadius: R.md,
+    flexDirection: "row-reverse", alignItems: "center", gap: 11,
+    minHeight: 60, paddingVertical: 10, paddingHorizontal: 12, borderRadius: R.lg,
     backgroundColor: C.surfaceContainer,
     borderWidth: 1, borderColor: C.borderSoft,
   },
@@ -3742,10 +3753,10 @@ const ss = StyleSheet.create({
     width: 10, height: 10, borderRadius: 5,
     borderWidth: 2, borderColor: C.playerSheet,
   },
-  serverInfo: { flex: 1 },
-  serverName: { color: C.white, fontSize: 13, fontWeight: "700", fontFamily: "Outfit_600SemiBold" },
+  serverInfo: { flex: 1, alignItems: "flex-end" },
+  serverName: { color: C.white, fontSize: 14, fontWeight: "700", fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   serverNameActive: { color: C.accent },
-  serverMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
+  serverMetaRow: { flexDirection: "row-reverse", alignItems: "center", marginTop: 2 },
   serverMetaLabel: { fontSize: 10, fontWeight: "700", fontFamily: "Cairo_600SemiBold" },
   serverMeta: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", flexShrink: 1 },
   activeBadge: {

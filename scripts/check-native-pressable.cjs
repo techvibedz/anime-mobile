@@ -78,7 +78,7 @@ for (const isDev of [false, true]) {
   assert.equal(flatStyle(ChapterRow({ number: "171", active: true, onPress() {} })).backgroundColor, theme.M.accentWash);
 
   const ui = evaluate(compile("components/MangaUI.tsx", isDev), {
-    ...imports, "expo-image": {}, "../lib/motion": {}, "./Shimmer": {},
+    ...imports, "expo-image": {}, "../lib/motion": {}, "./Shimmer": {}, "../lib/img": { posterUrl: (u) => u },
     "../lib/i18n": { t: {} }, "../lib/cardLayout": { CARD_LAYOUTS: ["compact", "comfortable", "list"] },
   });
   const controls = ui.MangaLayoutControl({ layout: "comfortable", onChange() {} }).props.children;

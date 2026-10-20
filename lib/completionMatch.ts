@@ -62,3 +62,48 @@ export function isBlobRecord(
   const titles = new Set(rec.titles.map(normalizeTitle).filter(Boolean));
   return slugs.size >= 5 || titles.size >= 4;
 }
+
+export interface CompletedEntry {
+  key: string;
+  title: string;
+  href: string;
+  image: string | null;
+  updatedAt: number;
+}
+
+/**
+ * My List "completed" shelf: one entry per anime whose finale was watched,
+ * newest first. Completion records carry no artwork, so each one borrows the
+ * title/href/poster of the first poster source (watch history, then My List)
+ * matching any of its href/title keys. Dedupe uses the same identity as the
+ * profile's completed count (title key, then href key) so the two always agree.
+ */
+export function buildCompletedList(
+  records: readonly (CompletionLike & { key: string; finished: boolean; updatedAt: number })[],
+  posters: readonly { title: string; href: string; image?: string | null }[],
+  normalizeHref: (value: string) => string,
+  normalizeTitle: (value: string) => string,
+): CompletedEntry[] {
+  const out: CompletedEntry[] = [];
+  const seen = new Set<string>();
+  const finished = records.filter((r) => r.finished).sort((a, b) => b.updatedAt - a.updatedAt);
+  for (const rec of finished) {
+    const id = normalizeTitle(rec.titles[0] || "") || normalizeHref(rec.hrefs[0] || "") || rec.key;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const hrefKeys = new Set(rec.hrefs.map(normalizeHref).filter(Boolean));
+    const titleKeys = new Set(rec.titles.map(normalizeTitle).filter(Boolean));
+    const poster = posters.find((p) => {
+      const t = normalizeTitle(p.title || "");
+      return hrefKeys.has(normalizeHref(p.href || "")) || (!!t && titleKeys.has(t));
+    });
+    out.push({
+      key: id,
+      title: poster?.title || rec.titles[0] || rec.key,
+      href: poster?.href || rec.hrefs[0] || rec.key,
+      image: poster?.image || null,
+      updatedAt: rec.updatedAt,
+    });
+  }
+  return out;
+}

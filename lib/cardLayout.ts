@@ -99,9 +99,13 @@ export function useCardLayout(scope: CardLayoutScope, gap = 12, padding = 20) {
   const snapshot = useMemo(() => () => getCardLayout(scope), [scope]);
   const layout = useSyncExternalStore(subscribe, snapshot, snapshot);
   useEffect(() => { void hydrateCardLayout(scope); }, [scope]);
+  const metrics = cardLayoutMetrics(layout, width, gap, padding);
   return {
     layout,
     setLayout: useMemo(() => (value: CardLayout) => setCardLayout(scope, value), [scope]),
-    ...cardLayoutMetrics(layout, width, gap, padding),
+    ...metrics,
+    // The app is locked LTR (see app/_layout.tsx), so grids fill right-to-left
+    // explicitly: the first result sits top-right, where an Arabic reader starts.
+    columnWrapperStyle: metrics.columns > 1 ? { gap, flexDirection: "row-reverse" as const } : undefined,
   };
 }

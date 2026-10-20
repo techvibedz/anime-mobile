@@ -30,6 +30,7 @@ import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 import { MalScoreBadge, useMalRating } from "../components/MalRating";
+import { RtlRow } from "../components/RtlRow";
 
 // Local day index (0 = Sunday) for "today", used to highlight the rail.
 function todayWeekday(): number {
@@ -78,9 +79,7 @@ export default function ScheduleScreen() {
 
       {/* Day rail — today first, then the next six days. */}
       <View style={s.railWrap}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
+        <RtlRow
           contentContainerStyle={s.rail}
         >
           {days.map((d, i) => {
@@ -110,7 +109,7 @@ export default function ScheduleScreen() {
               </Pressable>
             );
           })}
-        </ScrollView>
+        </RtlRow>
       </View>
 
       {loading ? (

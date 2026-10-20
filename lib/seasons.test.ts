@@ -1,15 +1,27 @@
 import assert from "node:assert/strict";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { fetchAniListDetail, fetchUpcomingAnimePage, sortUpcomingAnime } from "./seasons";
+import { fetchAniListDetail, fetchUpcomingAnimePage, sortUpcomingAnime, formatStartDate } from "./seasons";
 
 AsyncStorage.getItem = async () => null;
 AsyncStorage.setItem = async () => {};
 
 const originalFetch = globalThis.fetch;
 const calls: string[] = [];
-globalThis.fetch = (async (input) => {
+// "down" = AniList refuses (403) so the Kitsu fallback is exercised.
+let anilist: "up" | "down" = "down";
+globalThis.fetch = (async (input, init) => {
   const url = String(input);
   calls.push(url);
+  if (url.includes("anilist.co") && anilist === "up") {
+    const page = JSON.parse(String(init?.body ?? "{}")).variables?.page;
+    if (page === 2) return new Response("", { status: 500 });
+    const base = { format: "TV", averageScore: null, episodes: null, genres: ["Fantasy"], status: "NOT_YET_RELEASED", isAdult: false, coverImage: { large: "https://example.com/a.jpg" } };
+    return new Response(JSON.stringify({ data: { Page: { pageInfo: { hasNextPage: true }, media: [
+      { ...base, id: 1, title: { romaji: "Year Only" }, popularity: 900, countryOfOrigin: "JP", startDate: { year: 2027, month: null, day: null } },
+      { ...base, id: 2, title: { romaji: "Exact Day" }, popularity: 100, countryOfOrigin: "JP", startDate: { year: 2027, month: 3, day: 10 } },
+      { ...base, id: 3, title: { romaji: "Not Japanese" }, popularity: 999, countryOfOrigin: "CN", startDate: { year: 2027, month: 1, day: 1 } },
+    ] } } }), { status: 200 });
+  }
   if (url.includes("anilist.co")) return new Response("", { status: 403 });
   if (url.includes("/anime/45666?")) return new Response(JSON.stringify({
     data: {
@@ -73,9 +85,29 @@ globalThis.fetch = (async (input) => {
 
 async function main() {
   try {
+    // ── AniList is the primary source ──
+    anilist = "up";
+    const ani = await fetchUpcomingAnimePage(1, true);
+    assert.equal(ani.hasNext, true);
+    assert.deepEqual(ani.items.map((i) => i.title), ["Year Only", "Exact Day"], "non-JP titles are dropped");
+    assert.equal(ani.items[0].startPrecision, "year");
+    assert.equal(ani.items[1].startPrecision, undefined, "an exact day carries no precision flag");
+    assert.equal(formatStartDate(ani.items[0].startAt, "year"), "2027");
+    assert.equal(formatStartDate(ani.items[0].startAt, "month"), "يناير 2027");
+    // "2027" must not sort ahead of a confirmed 10 March 2027.
+    assert.deepEqual(sortUpcomingAnime(ani.items, "soon").map((i) => i.id), [2, 1]);
+    // A later AniList page failing must throw (screen retries), never fall back
+    // to Kitsu mid-list.
+    const before = calls.length;
+    await assert.rejects(() => fetchUpcomingAnimePage(2, true), /HTTP 500/);
+    assert.equal(calls.length, before + 1, "no Kitsu request for a failed later page");
+
+    // ── AniList down → page 1 falls back to Kitsu ──
+    anilist = "down";
+    calls.length = 0;
     const firstPage = await fetchUpcomingAnimePage(1);
     const items = firstPage.items;
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2, "AniList attempt, then Kitsu");
     assert.equal(firstPage.hasNext, true);
     assert.equal(items.length, 1);
     assert.deepEqual(items[0], {
@@ -107,14 +139,9 @@ async function main() {
       ], "soon").map((item) => item.id),
       [143103, 2, 3],
     );
-    const lastPage = await fetchUpcomingAnimePage(2);
-    assert.equal(lastPage.hasNext, false);
-    assert.deepEqual(lastPage.items, []);
-    // Page 2 must request offset 20 (item offset), not page*20=40 which
-    // skipped a whole page.
-    assert(calls[1].includes("page%5Boffset%5D=20"));
+    await assert.rejects(() => fetchUpcomingAnimePage(2), /HTTP 403/, "page 2 never mixes in Kitsu");
     const detail = await fetchAniListDetail(143103, 45666);
-    assert.equal(calls.length, 4);
+    assert.equal(calls.length, 5);
     assert.equal(detail?.description, "A detailed synopsis.");
     assert.equal(detail?.banner, "https://example.com/banner.jpg");
     assert.equal(detail?.cover, "https://example.com/detail-poster.jpg");
@@ -128,8 +155,7 @@ async function main() {
       format: "TV",
       relation: "PREQUEL",
     });
-    await assert.rejects(() => fetchUpcomingAnimePage(3), /HTTP 500/);
-    console.log("seasons fallback tests passed");
+    console.log("seasons upcoming + fallback tests passed");
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -31,6 +31,12 @@ test("hero-size requests can reach 1200px", () => {
   assert.match(buildPhotonUrl("https://witanime.you/a.jpg", 1000, 1200), /\?w=1200&/);
 });
 
+test("manga WordPress CDNs (3asq, mangalik) are wrapped", () => {
+  assert.ok(buildPhotonUrl("https://3asq.online/wp-content/uploads/2026/10/5.jpg", 150).startsWith("https://i0.wp.com/3asq.online/"));
+  assert.ok(buildPhotonUrl("https://io.mangalik.net/wp-content/uploads/a.webp", 150).startsWith("https://i0.wp.com/io.mangalik.net/"));
+  assert.equal(buildPhotonUrl("https://not3asq.online.evil.com/a.jpg", 150), "https://not3asq.online.evil.com/a.jpg");
+});
+
 test("anime4up passes through untouched (403s on Photon)", () => {
   const raw = "https://w1.anime4up.rest/wp-content/uploads/2026/04/Kill-Ao.jpg";
   assert.equal(buildPhotonUrl(raw, 240), raw);

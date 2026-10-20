@@ -32,8 +32,8 @@ const FORMAT_AR: Record<string, string> = {
   TV_SHORT: "مسلسل قصير",
   MOVIE: "فيلم",
   SPECIAL: "حلقة خاصة",
-  OVA: "OVA",
-  ONA: "ONA",
+  OVA: "أوفا (إصدار منزلي)",
+  ONA: "عرض عبر الإنترنت",
   MUSIC: "فيديو موسيقي",
 };
 

@@ -26,6 +26,9 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
+import { posterUrl } from "../../lib/img";
 import { useFocusEffect } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -564,8 +567,13 @@ function SectionHeader({ title, index }: { title: string; index?: number }) {
 function HeroBanner({ card }: { card: MangaCard }) {
   const cover = upgradeMangaCover(card.cover);
   return (
-    <Pressable style={({ pressed }) => [s.hero, pressed && { opacity: 0.85 }]} onPress={() => openMangaDetail(card)} accessibilityRole="button" accessibilityLabel={card.title}>
-      <MangaCover uri={cover} label={card.title} style={s.heroCover} />
+    <Pressable style={({ pressed }) => [s.hero, pressed && { opacity: 0.9 }]} onPress={() => openMangaDetail(card)} accessibilityRole="button" accessibilityLabel={card.title}>
+      {/* The cover's own art, blurred, washes the panel; ink gradient keeps text AA. */}
+      {cover ? (
+        <Image source={{ uri: posterUrl(cover, 120) }} style={MANGA_FILL} contentFit="cover" blurRadius={18} cachePolicy="memory-disk" />
+      ) : null}
+      <LinearGradient colors={["rgba(34,35,31,0.25)", "rgba(34,35,31,0.88)"]} start={{ x: 1, y: 0 }} end={{ x: 0, y: 1 }} style={MANGA_FILL} />
+      <MangaCover uri={cover} label={card.title} style={s.heroCover} displayWidth={160} />
       <View style={s.heroBody}>
         <Text style={s.heroEyebrow}>على رفّ الاختيارات</Text>
         <View style={s.heroPills}>{card.type ? <Pill text={card.type} /> : null}{card.status ? <Pill text={card.status} /> : null}</View>
@@ -716,16 +724,23 @@ const s = StyleSheet.create({
   sectionIndex: { ...MT.number, fontSize: 12, color: M.accent },
   sectionTitle: { ...MT.heading, flex: 1, color: M.ink, textAlign: "right" },
   railContent: { paddingHorizontal: PAD, gap: GAP },
-  hero: { marginHorizontal: PAD, marginTop: 28, padding: 18, borderRadius: 6, backgroundColor: M.ink, flexDirection: "row-reverse", alignItems: "center", gap: 18 },
-  heroCover: { width: "36%", aspectRatio: 2 / 3, borderRadius: 3 },
+  hero: {
+    marginHorizontal: PAD, marginTop: 28, padding: 18, borderRadius: 10, overflow: "hidden",
+    backgroundColor: M.ink, flexDirection: "row-reverse", alignItems: "center", gap: 18,
+  },
+  heroCover: {
+    width: "40%", aspectRatio: 2 / 3, borderRadius: 6,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.5, shadowRadius: 14, elevation: 10,
+  },
   heroBody: { flex: 1, minWidth: 0, alignItems: "flex-end", gap: 8 },
   heroEyebrow: { ...MT.caption, color: M.nightAccent },
   heroPills: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 6 },
   pill: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 3, backgroundColor: M.nightPanel, borderWidth: 1, borderColor: M.nightLine },
   pillText: { ...MT.caption, color: M.nightMuted },
-  heroTitle: { ...MT.heading, fontSize: 22, lineHeight: 33, color: M.white, textAlign: "right" },
+  heroTitle: { ...MT.heading, fontSize: 24, lineHeight: 36, color: M.white, textAlign: "right" },
   heroSub: { ...MT.caption, color: M.nightMuted, textAlign: "right" },
-  heroCta: { minHeight: 48, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 12, borderRadius: 4, backgroundColor: M.accent, marginTop: 4 },
+  heroCta: { minHeight: 48, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 18, borderRadius: 24, backgroundColor: M.accent, marginTop: 6 },
   heroCtaText: { ...MT.label, flexShrink: 1, color: M.white, textAlign: "center" },
   continueRow: { flexDirection: "row-reverse", gap: 12, padding: 14, borderRadius: 6, backgroundColor: M.sheet, borderWidth: 1, borderColor: M.line },
   continuePlate: { width: 78, aspectRatio: 2 / 3 },

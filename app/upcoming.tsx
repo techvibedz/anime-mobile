@@ -7,7 +7,7 @@ import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { fetchUpcomingAnimePage, sortUpcomingAnime, type CatalogAnime } from "../lib/seasons";
+import { fetchUpcomingAnimePage, sortUpcomingAnime, formatStartDate, type CatalogAnime } from "../lib/seasons";
 import { CatalogCard, type CatalogCardData } from "../components/CatalogCard";
 import { C, S, R, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
@@ -25,6 +25,8 @@ const DAY = 24 * 60 * 60;
 
 function badgeFor(item: CatalogAnime): string {
   if (!item.startAt) return t.upcomingSoon;
+  // Only an exact day earns a countdown; "2027" / "أكتوبر 2027" stay honest.
+  if (item.startPrecision) return formatStartDate(item.startAt, item.startPrecision) ?? t.upcomingSoon;
   const days = Math.ceil((item.startAt - Date.now() / 1000) / DAY);
   if (days <= 0) return t.upcomingSoon;
   return t.upcomingInDays(days);
@@ -173,7 +175,7 @@ export default function UpcomingScreen() {
           onEndReached={loadMore}
           onEndReachedThreshold={0.6}
           contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, rowGap: GAP }}
-          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
+          columnWrapperStyle={cards.columnWrapperStyle}
           ListHeaderComponent={
             <View>
               <Text style={s.intro}>{t.upcomingSub}</Text>
@@ -199,7 +201,7 @@ const s = StyleSheet.create({
     color: C.textSecondary, fontSize: 14, lineHeight: 25, textAlign: "right",
     fontFamily: "Cairo_500Medium", marginBottom: 12, marginTop: 2,
   },
-  filterRow: { flexDirection: "row", gap: 8, marginBottom: 24 },
+  filterRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 24 }, // first option on the right (RTL)
   filterChip: {
     flexDirection: "row", alignItems: "center", gap: 6,
     flex: 1, minHeight: 48, justifyContent: "center", paddingHorizontal: 12, paddingVertical: 10, borderRadius: R.md,

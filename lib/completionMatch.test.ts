@@ -2,7 +2,7 @@
 // shows no badge" path. Run:  npx tsx lib/completionMatch.test.ts
 
 import assert from "node:assert";
-import { matchingRecords, sameSource, isBlobRecord } from "./completionMatch";
+import { matchingRecords, sameSource, isBlobRecord, buildCompletedList } from "./completionMatch";
 
 const rec = (name: string, hrefs: string[], titles: string[]) => ({ name, hrefs, titles });
 const names = (records: { name: string }[]) => records.map((r) => r.name);
@@ -52,5 +52,24 @@ assert.equal(isBlobRecord({
   hrefs: ["w/anime/mushoku-iii", "w/anime/mushoku", "w/anime/one-piece", "a/anime/one-piece-gfjgfh", "w/anime/one-piece-heroines", "w/anime/eris"],
   titles: ["mushoku iii", "one piece", "one piece heroines", "mushoku", "eris"],
 }, id, id), true);
+
+// Completed shelf: finished only, one per anime (two source records of the same
+// title collapse), newest first, poster borrowed by href or title.
+{
+  const lower = (v: string) => v.toLowerCase();
+  const recs = [
+    { key: "w/frieren", hrefs: ["w/frieren"], titles: ["Frieren"], finished: true, updatedAt: 1 },
+    { key: "a/frieren-tv", hrefs: ["a/frieren-tv"], titles: ["frieren"], finished: true, updatedAt: 3 },
+    { key: "w/bleach", hrefs: ["w/bleach"], titles: ["Bleach"], finished: false, updatedAt: 9 },
+    { key: "w/naruto", hrefs: ["w/naruto"], titles: [], finished: true, updatedAt: 2 },
+  ];
+  const posters = [
+    { title: "Naruto", href: "W/NARUTO", image: "naruto.jpg" },
+    { title: "FRIEREN", href: "x/other", image: "frieren.jpg" },
+  ];
+  const out = buildCompletedList(recs, posters, lower, lower);
+  assert.deepEqual(out.map((e) => [e.title, e.image]), [["FRIEREN", "frieren.jpg"], ["Naruto", "naruto.jpg"]]);
+  assert.deepEqual(buildCompletedList(recs, [], lower, lower).map((e) => e.image), [null, null], "no poster → null, never a crash");
+}
 
 console.log("completionMatch.test.ts — all assertions passed");

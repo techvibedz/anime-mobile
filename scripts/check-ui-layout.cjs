@@ -107,13 +107,14 @@ const Hero=loadLayout('app/(tabs)/index.tsx','HeroCarousel');
 const Episode=loadLayout('app/anime/[id].tsx','EpisodeGridCard');
 for(width of [320,390,800]) {
   carouselIndex=2;
-  const hero=Hero({featured:Array.from({length:3},()=>({title:'A title',genres:[],href:'preview'}))});
+  const hero=Hero({topInset:24,featured:Array.from({length:3},()=>({title:'A title',genres:[],href:'preview'}))});
   const scroll=walk(hero).find(n=>n.type==='ScrollView');
   let offset; scroll.props.ref.current={scrollTo:value=>{offset=value}};
   scroll.props.onLayout();
   assert.equal(offset.x,carouselIndex*width,'resizing must keep the selected hero slide aligned');
   assert.equal(offset.animated,false);
-  const slide=walk(hero).find(n=>style(n).height===440 && style(n).width===width);
+  // Full-bleed hero: HERO_H (520) plus the status-bar inset it runs under.
+  const slide=walk(hero).find(n=>n.props && n.props.width===width && n.props.height===520+24);
   assert.ok(slide,'hero must use the current viewport width, even after resize');
   const episode=Episode({ep:{number:1,href:'preview'},byNum:[]});
   const cardWidth=style(episode).width;

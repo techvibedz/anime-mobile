@@ -9,6 +9,7 @@
 import assert from "node:assert";
 import {
   pickSeeds,
+  pickTasteSeeds,
   parseRecommendations,
   rankRecommendations,
   type RecItem,
@@ -95,14 +96,50 @@ test("parseRecommendations tolerates garbage", () => {
 
 /* ── rankRecommendations ── */
 
-test("rankRecommendations sums ratings across seeds and dedupes by id", () => {
+test("rankRecommendations merges seeds (normalised per batch) and dedupes by id", () => {
   const ranked = rankRecommendations([
     [item({ anilistId: 1, rating: 10 })],
     [item({ anilistId: 1, rating: 15 }), item({ anilistId: 2, rating: 12 })],
   ]);
   assert.deepEqual(ranked.map((r) => r.anilistId), [1, 2]);
-  assert.equal(ranked[0].score, 25);
-  assert.equal(ranked[1].score, 12);
+  assert.equal(ranked[0].score, 2); // top of both batches: 1 + 1
+  assert.equal(ranked[1].score, 12 / 15);
+});
+
+test("one hugely-upvoted seed can't drown the others", () => {
+  const ranked = rankRecommendations([
+    [item({ anilistId: 1, rating: 5000 }), item({ anilistId: 2, rating: 4000 }), item({ anilistId: 3, rating: 3000 })],
+    [item({ anilistId: 10, rating: 40 }), item({ anilistId: 11, rating: 30 })],
+  ], { cap: 4 });
+  // Raw sums would give [1, 2, 3, 10]; normalised, seed B's best ties seed A's.
+  assert.ok(ranked.slice(0, 2).some((r) => r.anilistId === 10), "second seed's best rec reaches the top");
+  assert.ok(ranked.some((r) => r.anilistId === 11));
+});
+
+test("rankRecommendations applies seed weights", () => {
+  const ranked = rankRecommendations([
+    [item({ anilistId: 1, rating: 10 })],
+    [item({ anilistId: 2, rating: 10 })],
+  ], { weights: [0.5, 2] });
+  assert.deepEqual(ranked.map((r) => r.anilistId), [2, 1]);
+});
+
+/* ── pickTasteSeeds ── */
+
+test("pickTasteSeeds spans the whole history, weighted by engagement + recency", () => {
+  const now = 1_000_000_000_000;
+  const day = 24 * 60 * 60 * 1000;
+  const seeds = pickTasteSeeds([
+    { animeTitle: "Latest One-off", animeHref: "h/a", watched: 1, updatedAt: now },
+    { animeTitle: "Binged Last Month", animeHref: "h/b", watched: 24, updatedAt: now - 30 * day },
+    { animeTitle: "Old Favourite", animeHref: "h/c", watched: 60, updatedAt: now - 400 * day },
+    { animeTitle: "Latest One-off", animeHref: "h/a", watched: 1, updatedAt: now - day }, // dupe
+    { animeTitle: "", animeHref: "h/x", watched: 99, updatedAt: now },
+  ], (e) => e.animeHref, 6, now);
+  // Every distinct anime seeds (not just the latest), the binge outranks the
+  // latest one-off, and a year-old favourite still counts.
+  assert.deepEqual(seeds.map((s) => s.animeTitle), ["Binged Last Month", "Latest One-off", "Old Favourite"]);
+  assert.equal(pickTasteSeeds([], (e) => e.animeHref).length, 0);
 });
 
 test("rankRecommendations drops excluded items and caps the result", () => {

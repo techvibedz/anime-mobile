@@ -49,6 +49,7 @@ import { setupNotifications, requestNotificationPermission, addNotificationTapLi
 import { reportRecentEpisodes, syncEpisodeNotifications } from "../lib/notifications";
 import { startPresence, stopPresence, isAdmin } from "../lib/presence";
 import { startUsageSession, endUsageSession } from "../lib/usage";
+import { startMangaCloudSync, flushMangaCloudSync } from "../lib/manga/cloud";
 import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
 import { syncDownloads } from "../lib/downloads";
@@ -111,6 +112,12 @@ function AuthGate() {
   // backgrounded device isn't "actively using" the app), so we tear the channel
   // down on background and re-establish it on foreground. startPresence is
   // idempotent, so re-calling on "active" is cheap.
+  // Mirror manga library + reading progress for the admin users screen.
+  useEffect(() => {
+    if (!user) return;
+    return startMangaCloudSync(user.id);
+  }, [user?.id]);
+
   useEffect(() => {
     if (!user) return;
     if (AppState.currentState === "active") {
@@ -128,6 +135,7 @@ function AuthGate() {
         // progress/completion now so the cloud (admin history, other devices)
         // can't lose a watched mark.
         flushHistoryCloudPushes();
+        flushMangaCloudSync(user.id);
       }
     });
     return () => {

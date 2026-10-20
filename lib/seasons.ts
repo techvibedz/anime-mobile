@@ -37,6 +37,9 @@ export interface CatalogAnime {
   status: string | null;
   /** Unix seconds for the announced start date (upcoming list), else null. */
   startAt: number | null;
+  /** How much of startAt is real: AniList often only knows the year or month,
+   *  and startAt then points at the 1st (absent = exact day). */
+  startPrecision?: DatePrecision;
   /** AniList popularity (number of users with the title on a list). */
   popularity: number;
   /** Kitsu id when the fallback catalogue supplied this title. */
@@ -131,6 +134,7 @@ export interface AniListDetail {
   season: string | null;
   seasonYear: number | null;
   startAt: number | null;
+  startPrecision?: DatePrecision;
   studios: string[];
   /** YouTube video id when the trailer is hosted on YouTube, else null. */
   trailerYoutube: string | null;
@@ -173,6 +177,28 @@ function stripHtml(s: string | null | undefined): string {
     .replace(/<[^>]+>/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+export type DatePrecision = "day" | "month" | "year";
+
+function startPrecisionOf(value: any): DatePrecision | undefined {
+  if (!value || typeof value === "string") return undefined; // Kitsu: full date
+  if (!value.year) return undefined;
+  if (!value.month) return "year";
+  if (!value.day) return "month";
+  return undefined;
+}
+
+const AR_MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
+
+/** Arabic label for an announced date at its real precision ("2027",
+ *  "أكتوبر 2027" or "20/11/2026"); null when unknown. */
+export function formatStartDate(startAt: number | null, precision?: DatePrecision): string | null {
+  if (!startAt) return null;
+  const d = new Date(startAt * 1000);
+  if (precision === "year") return String(d.getUTCFullYear());
+  if (precision === "month") return `${AR_MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
 }
 
 function startDateToUnix(value: any): number | null {
@@ -228,6 +254,7 @@ export async function fetchAniListDetail(id: number, kitsuId?: number): Promise<
     season: m.season || null,
     seasonYear: m.seasonYear || null,
     startAt,
+    startPrecision: startPrecisionOf(m.startDate),
     studios: (m.studios?.nodes || []).map((n: any) => n?.name).filter(Boolean),
     trailerYoutube: m.trailer?.site === "youtube" && m.trailer?.id ? m.trailer.id : null,
     externalLinks: (m.externalLinks || []).map((l: any) => ({ site: l?.site || "", url: l?.url || "" })).filter((l: AniLink) => l.url),
@@ -312,6 +339,7 @@ function toCatalogAnime(m: any): CatalogAnime {
     genres: Array.isArray(m.genres) ? m.genres : [],
     status: m.status || null,
     startAt: startDateToUnix(m.startDate),
+    startPrecision: startPrecisionOf(m.startDate),
     popularity: typeof m.popularity === "number" ? m.popularity : 0,
   };
 }
@@ -424,7 +452,36 @@ async function fetchKitsuUpcomingPage(page: number): Promise<{ items: CatalogAni
   return { items: out, hasNext: !!json.links?.next };
 }
 
-const UPCOMING_CACHE_PREFIX = "@upcoming_pages_v1:";
+// Announced, not-yet-released anime in AniList popularity order. AniList has
+// hundreds of these with full metadata; Kitsu's feed only carries ~99 (incl.
+// Western/game titles) and its offset paging repeats page 1, so it is now only
+// the fallback for a failed first page.
+const UPCOMING_QUERY = `query ($page: Int) {
+  Page(page: $page, perPage: 50) {
+    pageInfo { hasNextPage }
+    media(type: ANIME, status: NOT_YET_RELEASED, sort: POPULARITY_DESC, isAdult: false) {
+      ${SEASON_FIELDS}
+    }
+  }
+}`;
+
+async function fetchAniListUpcomingPage(page: number): Promise<{ items: CatalogAnime[]; hasNext: boolean }> {
+  const res = await fetch(ANILIST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ query: UPCOMING_QUERY, variables: { page } }),
+  }).catch(() => null);
+  if (!res?.ok) throw new Error(`upcoming page ${page}: HTTP ${res?.status ?? "network"}`);
+  const p = (await res.json().catch(() => null))?.data?.Page;
+  if (!p) throw new Error(`upcoming page ${page}: bad response`);
+  return {
+    items: (p.media || []).filter(isAcceptable).map(toCatalogAnime),
+    hasNext: !!p.pageInfo?.hasNextPage,
+  };
+}
+
+// v2+: AniList-sourced pages (v1 held Kitsu pages with different ids/ordering).
+const UPCOMING_CACHE_PREFIX = "@upcoming_pages_v3:"; // v3: + startPrecision
 
 /** One page of announced, not-yet-released anime in popularity order. Throws
  *  when the page can't be fetched so the caller keeps pagination alive and can
@@ -442,17 +499,35 @@ export async function fetchUpcomingAnimePage(page: number, force = false): Promi
       }
     } catch {}
   }
-  const result = await fetchKitsuUpcomingPage(safePage);
+  let result: { items: CatalogAnime[]; hasNext: boolean };
+  try {
+    result = await fetchAniListUpcomingPage(safePage);
+  } catch (e) {
+    // Later pages rethrow so the screen retries on the next scroll; mixing a
+    // Kitsu page into an AniList list would duplicate/skip titles.
+    if (safePage !== 1) throw e;
+    result = await fetchKitsuUpcomingPage(1);
+  }
   if (result.items.length > 0) {
     try { await AsyncStorage.setItem(UPCOMING_CACHE_PREFIX + safePage, JSON.stringify({ ts: Date.now(), ...result })); } catch {}
   }
   return result;
 }
 
+// "Soonest" ordering key: a year-only / month-only date sorts at the END of its
+// period, so "2027" never jumps ahead of a title confirmed for 10 March 2027.
+function soonKey(item: CatalogAnime): number {
+  if (!item.startAt) return Infinity;
+  const d = new Date(item.startAt * 1000);
+  if (item.startPrecision === "year") return Date.UTC(d.getUTCFullYear() + 1, 0, 1) / 1000 - 1;
+  if (item.startPrecision === "month") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) / 1000 - 1;
+  return item.startAt;
+}
+
 export function sortUpcomingAnime(items: CatalogAnime[], mode: "popular" | "soon"): CatalogAnime[] {
   return items.slice().sort((a, b) => mode === "popular"
-    ? b.popularity - a.popularity || (a.startAt ?? Infinity) - (b.startAt ?? Infinity)
-    : (a.startAt ?? Infinity) - (b.startAt ?? Infinity) || b.popularity - a.popularity);
+    ? b.popularity - a.popularity || soonKey(a) - soonKey(b)
+    : soonKey(a) - soonKey(b) || b.popularity - a.popularity);
 }
 
 /** Full popularity-ranked catalogue for one season. */

@@ -2,7 +2,7 @@ import { Tabs } from "expo-router";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { C, R, AR } from "../../lib/theme";
+import { C, AR, ELEVATION_NAV } from "../../lib/theme";
 import { M, MT } from "../../lib/manga/design";
 
 const TABS = [
@@ -38,35 +38,33 @@ export default function TabLayout() {
 function FloatingNav({ state, navigation }: any) {
   const insets = useSafeAreaInsets();
   const manga = state.routes[state.index]?.name === "manga";
-   // Keep the labeled navigation above both gesture and three-button system bars.
+  // A floating capsule above the system bars. row-reverse puts the first tab
+  // (home) on the right, where an Arabic reader starts.
   return (
-    <View style={[ss.navWrap, manga && { backgroundColor: M.paper, borderTopColor: M.line }, { paddingBottom: Math.max(insets.bottom, 10) }]} pointerEvents="box-none">
-      <View style={ss.navPill}>
-        <View style={ss.navInner}>
-          {TABS.map((tab, i) => {
-            const active = state.index === i;
-            return (
-              <Pressable
-                key={tab.name}
-                accessibilityRole="tab"
-                accessibilityLabel={tab.label}
-                accessibilityState={{ selected: active }}
-                onPress={() => {
-                  const event = navigation.emit({ type: "tabPress", target: state.routes[i].key, canPreventDefault: true });
-                  if (!active && !event.defaultPrevented) navigation.navigate(state.routes[i].name);
-                }}
-                style={[ss.navItem, active && ss.navItemActive, manga && { borderRadius: 4 }, manga && active && { backgroundColor: M.ink }]}
-              >
-                <Ionicons
-                  name={active ? tab.icon : (`${tab.icon}-outline` as any)}
-                  size={22}
-                  color={manga ? (active ? M.white : M.muted) : active ? C.ember : C.textMuted}
-                />
-                <Text style={[ss.navLabel, active && { color: C.accent }, manga && { ...MT.caption, fontSize: 11, color: active ? M.white : M.muted }]}>{tab.label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
+    <View style={[ss.navWrap, { bottom: Math.max(insets.bottom, 10) }]} pointerEvents="box-none">
+      <View style={[ss.capsule, manga && ss.capsuleManga]}>
+        {TABS.map((tab, i) => {
+          const active = state.index === i;
+          const tint = manga ? (active ? M.white : M.muted) : active ? C.accent : C.textMuted;
+          return (
+            <Pressable
+              key={tab.name}
+              accessibilityRole="tab"
+              accessibilityLabel={tab.label}
+              accessibilityState={{ selected: active }}
+              onPress={() => {
+                const event = navigation.emit({ type: "tabPress", target: state.routes[i].key, canPreventDefault: true });
+                if (!active && !event.defaultPrevented) navigation.navigate(state.routes[i].name);
+              }}
+              style={ss.navItem}
+            >
+              <View style={[ss.iconPill, active && (manga ? ss.iconPillManga : ss.iconPillActive)]}>
+                <Ionicons name={active ? tab.icon : (`${tab.icon}-outline` as any)} size={21} color={tint} />
+              </View>
+              <Text style={[ss.navLabel, { color: tint }, active && ss.navLabelActive, manga && { ...MT.caption, fontSize: 11, color: active ? M.ink : M.muted }]}>{tab.label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );
@@ -74,43 +72,24 @@ function FloatingNav({ state, navigation }: any) {
 
 const ss = StyleSheet.create({
   navWrap: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 100,
-    backgroundColor: C.bg,
-    borderTopWidth: 1,
-    borderTopColor: C.borderSoft,
+    position: "absolute", left: 14, right: 14,
+    alignItems: "center", zIndex: 100,
   },
-  navPill: {
-    width: "100%",
-    maxWidth: 600,
+  capsule: {
+    width: "100%", maxWidth: 560,
+    flexDirection: "row-reverse", alignItems: "center",
+    paddingHorizontal: 6, paddingVertical: 6,
+    borderRadius: 30,
+    backgroundColor: C.surface,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.08)",
+    ...ELEVATION_NAV,
   },
-  navInner: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-  },
-  navItem: {
-    flex: 1,
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 56,
-    paddingVertical: 6,
-    borderRadius: R.md,
-  },
-   // Selection gets a tonal panel; every destination keeps its label visible.
-  navItemActive: {
-    backgroundColor: C.accentSoft,
-  },
-  navLabel: {
-    fontSize: 11,
-    color: C.textMuted,
-    marginTop: 3,
-    fontFamily: AR.semibold,
-  },
+  capsuleManga: { backgroundColor: M.paper, borderColor: M.line, borderRadius: 8 },
+  navItem: { flex: 1, alignItems: "center", justifyContent: "center", minHeight: 56 },
+  // Material-style indicator: a pill behind the active icon, label below.
+  iconPill: { width: 56, height: 32, borderRadius: 16, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  iconPillActive: { backgroundColor: C.accentSoft },
+  iconPillManga: { backgroundColor: M.ink, borderRadius: 4 },
+  navLabel: { fontSize: 11, lineHeight: 16, marginTop: 2, fontFamily: AR.semibold },
+  navLabelActive: { fontFamily: AR.bold },
 });

@@ -22,6 +22,7 @@ import type { SearchResult } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { GlassFill } from "../../components/GlassFill";
+import { RtlRow } from "../../components/RtlRow";
 import { PosterCard, PosterPill, INLINE_POSTER_BADGE } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";
 import { useCardLayout, type CardLayout } from "../../lib/cardLayout";
@@ -247,6 +248,9 @@ export default function SearchScreen() {
   useFocusEffect(useCallback(() => {
     if (browseLoadedRef.current) return;
     browseLoadedRef.current = true;
+    // Arriving via ?q= / ?genre= already started that load; a browse load here
+    // would take a newer request id and silently discard it.
+    if (modeRef.current !== "browse") return;
     loadBrowse();
   }, [loadBrowse]));
 
@@ -365,17 +369,23 @@ export default function SearchScreen() {
     }
   }, [genreParam, handleGenre]);
 
-  // Deep link from the airing calendar: ?q=<title> pre-fills the search box and
-  // runs a search so the viewer can find the just-aired anime on our sources.
+  // ?q=<title> from any "search our sources" link pre-fills the box and runs the
+  // search. The param is consumed (cleared) so the same title linked again
+  // later searches again instead of being ignored as "already handled".
   useEffect(() => {
-    if (qParam && qParam !== lastQParam.current) {
-      lastQParam.current = qParam;
-      const decoded = decodeURIComponent(qParam);
-      setQuery(decoded);
-      setActiveGenre("All");
-      modeRef.current = "search";
-      doSearch(decoded);
-    }
+    // Reset once consumed, so the same title linked again searches again.
+    if (!qParam) { lastQParam.current = undefined; return; }
+    // doSearch's identity changes as results land; don't re-run for that.
+    if (qParam === lastQParam.current) return;
+    lastQParam.current = qParam;
+    let decoded = qParam;
+    try { decoded = decodeURIComponent(qParam); } catch {} // titles like "100%"
+    router.setParams({ q: undefined });
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setQuery(decoded);
+    setActiveGenre("All");
+    modeRef.current = "search";
+    doSearch(decoded);
   }, [qParam, doSearch]);
 
   useEffect(() => {
@@ -424,7 +434,7 @@ export default function SearchScreen() {
             {searching ? (
               <ActivityIndicator size="small" color={C.accent} />
             ) : (
-              <Ionicons name="search" size={18} color={C.textMuted} />
+              <Ionicons name="search" size={18} color={C.accent} />
             )}
           </View>
           <TextInput
@@ -451,10 +461,8 @@ export default function SearchScreen() {
 
         {/* Genre filter strip — part of the console, prevents vertical scroll capture */}
         <View style={ss.chipContainer}>
-          <ScrollView
-            horizontal
+          <RtlRow
             nestedScrollEnabled
-            showsHorizontalScrollIndicator={false}
             contentContainerStyle={ss.chipScroll}
             keyboardShouldPersistTaps="handled"
           >
@@ -465,7 +473,7 @@ export default function SearchScreen() {
                 </View>
               </Pressable>
             ))}
-          </ScrollView>
+          </RtlRow>
         </View>
 
         {/* Console bottom edge — full-width hairline that doubles as the live
@@ -503,7 +511,7 @@ export default function SearchScreen() {
           windowSize={7}
           updateCellsBatchingPeriod={50}
           contentContainerStyle={{ padding: PAD, paddingBottom: insets.bottom + 100, rowGap: GAP + 8 }}
-          columnWrapperStyle={cards.columns > 1 ? { gap: GAP } : undefined}
+          columnWrapperStyle={cards.columnWrapperStyle}
           onEndReached={loadMoreGenre}
           onEndReachedThreshold={0.5}
           refreshControl={
@@ -550,50 +558,51 @@ const ss = StyleSheet.create({
   headerTitleRow: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 8, marginLeft: 12 },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   menuBtn: {
-    width: 48, height: 48, borderRadius: R.md, overflow: "hidden", backgroundColor: C.surface,
+    width: 48, height: 48, borderRadius: R.circle, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.07)",
     alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: C.glassBorder,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.10)",
   },
   heading: {
-    ...TAr.h1, flexShrink: 1, textAlign: "right", color: C.bone,
+    ...TAr.display, fontSize: 30, lineHeight: 44, flexShrink: 1, textAlign: "right", color: C.bone,
   },
   intro: { ...TAr.body, color: C.textMuted, textAlign: "right", paddingHorizontal: PAD, marginBottom: 20 },
   countPill: {
-    backgroundColor: C.surfaceLight,
+    backgroundColor: C.accentSoft,
     borderRadius: R.pill, paddingHorizontal: 10, paddingVertical: 3,
   },
   countPillText: { color: C.ember, fontSize: 11, fontWeight: "700", fontFamily: "Outfit_700Bold" },
 
   // Search bar — the hero control: taller, big soft radius, accent ring on active.
+  // row-reverse: search icon on the right (reading edge), clear button on the left.
   searchBar: {
-    flexDirection: "row", alignItems: "center", gap: 10,
+    flexDirection: "row-reverse", alignItems: "center", gap: 6,
     marginHorizontal: PAD, marginBottom: 14,
-    borderRadius: R.md, height: 56, paddingHorizontal: 10, paddingRight: 16, backgroundColor: C.surface,
-    overflow: "hidden", borderWidth: 1, borderColor: C.line,
+    borderRadius: R.pill, height: 56, paddingHorizontal: 8, backgroundColor: C.surface,
+    overflow: "hidden", borderWidth: 1, borderColor: C.borderSoft,
   },
-  searchBarActive: { borderColor: C.accent },
+  searchBarActive: { borderColor: C.borderAccent, backgroundColor: C.surfaceLight },
   searchIcon: {
-    width: 36, height: 36, borderRadius: R.circle,
-    alignItems: "center", justifyContent: "center",
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: "center", justifyContent: "center", backgroundColor: C.accentSoft,
   },
-  searchIconActive: { backgroundColor: C.accentSoft },
+  searchIconActive: { backgroundColor: C.accentGlow },
   clearBtn: { width: 40, height: 48, alignItems: "center", justifyContent: "center" },
   input: {
-    flex: 1, color: C.text, fontSize: 15, height: 56,
+    flex: 1, color: C.text, fontSize: 15, height: 56, paddingHorizontal: 6,
     fontFamily: "Cairo_500Medium",
   },
 
   // Chips
-  chipContainer: { height: 64, overflow: "visible" },
-  chipScroll: { paddingHorizontal: PAD, gap: 8, paddingBottom: 16, alignItems: "center" as const },
+  chipContainer: { height: 60, overflow: "visible" },
+  chipScroll: { paddingHorizontal: PAD, gap: 8, paddingBottom: 14, alignItems: "center" as const },
   chip: {
-    height: 48, justifyContent: "center",
-    paddingHorizontal: 16, borderRadius: R.sm,
+    height: 42, justifyContent: "center",
+    paddingHorizontal: 18, borderRadius: R.pill,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.borderSoft,
   },
-  chipActive: { backgroundColor: C.accentSoft, borderColor: C.borderAccent },
+  chipActive: { backgroundColor: C.accent, borderColor: C.accent },
   chipText: { color: C.textSecondary, fontSize: 13, lineHeight: 20, fontWeight: "600", fontFamily: "Cairo_600SemiBold", includeFontPadding: false, textAlignVertical: "center" },
-  chipTextActive: { color: C.accent },
+  chipTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
 
   // Console bottom edge — full-width hairline + search-progress strip
   glowLineWrap: { height: 2, justifyContent: "center" },

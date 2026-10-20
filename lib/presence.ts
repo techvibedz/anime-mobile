@@ -12,6 +12,7 @@
 
 import type { RealtimeChannel, User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { profileName, profileAvatar } from "./profile";
 
 /** Accounts allowed to see the live-users screen. */
 export const ADMIN_EMAILS = ["zlabia66@gmail.com"];
@@ -80,10 +81,8 @@ export async function startPresence(user: User): Promise<void> {
   await stopPresence();
   trackedUserId = user.id;
 
-  const meta = user.user_metadata ?? {};
-  const name =
-    meta.full_name || meta.name || (user.email ? user.email.split("@")[0] : "User");
-  const avatarUrl = meta.avatar_url || meta.picture || null;
+  const name = profileName(user);
+  const avatarUrl = profileAvatar(user);
 
   channel = supabase.channel(CHANNEL, {
     config: { presence: { key: user.id } },

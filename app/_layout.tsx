@@ -37,7 +37,7 @@ import { AuthProvider, useAuth } from "../lib/auth";
 import { pullFavoritesFromCloud } from "../lib/favorites";
 import { pullHistoryFromCloud, flushHistoryCloudPushes } from "../lib/history";
 import { pruneExpiredCaches } from "../lib/storageMaintenance";
-import { pullCompletionFromCloud } from "../lib/completion";
+import { pullCompletionFromCloud, recheckUnfinishedCompletions } from "../lib/completion";
 import { checkForApkUpdate, checkForOtaUpdate } from "../lib/updater";
 import type { UpdateInfo } from "../lib/updater";
 import { UpdateModal } from "../components/UpdateModal";
@@ -99,7 +99,8 @@ function AuthGate() {
       if (cancelled) return;
       pullFavoritesFromCloud().catch(() => {});
       // History emits the final badge refresh after cloud completion has settled.
-      pullCompletionFromCloud().catch(() => {}).then(() => pullHistoryFromCloud()).catch(() => {});
+      pullCompletionFromCloud().catch(() => {}).then(() => pullHistoryFromCloud()).catch(() => {})
+        .then(() => recheckUnfinishedCompletions()).catch(() => {});
     })().catch(() => {}); }, 6000);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [user?.id]);

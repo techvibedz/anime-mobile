@@ -95,4 +95,7 @@ assert.equal(
   false,
 );
 
+// Unicode roman numerals fold to ASCII, so "Ⅲ" titles still match AniList's "III".
+assert.strictEqual(titleScore(media("Mushoku Tensei Ⅲ", null), ["mushoku tensei iii"]), 1000);
+
 console.log("airing match tests passed");

@@ -27,7 +27,8 @@ import {
 } from "../lib/history";
 import { countCompletedAnime } from "../lib/completion";
 import { getFavorites } from "../lib/favorites";
-import { updateProfile } from "../lib/profile";
+import { updateProfile, profileName, profileAvatar } from "../lib/profile";
+import { refreshUsageProfile } from "../lib/usage";
 import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, SectionLabel, GlassIconButton } from "../components/ScreenChrome";
@@ -108,12 +109,9 @@ export default function ProfileScreen() {
     [loadStats],
   );
 
-  const displayName =
-    user?.user_metadata?.full_name ||
-    user?.user_metadata?.name ||
-    (user?.email ? user.email.split("@")[0] : t.guest);
+  const displayName = user ? profileName(user, t.guest) : t.guest;
   const bioText = (user?.user_metadata?.bio as string) || "";
-  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+  const avatarUrl = profileAvatar(user);
   const initial = (displayName || "?").trim().charAt(0).toUpperCase();
   const since = arMonthYear(user?.created_at);
 
@@ -170,6 +168,7 @@ export default function ProfileScreen() {
     const r = await updateProfile({ name, bio, avatarBase64: picked?.base64 ?? null });
     setSaving(false);
     if (r.ok) {
+      if (r.user) refreshUsageProfile(r.user);
       // user_metadata change fires USER_UPDATED → AuthProvider refreshes `user`,
       // so the displayed values update on their own. Drop the local preview.
       setPicked(null);

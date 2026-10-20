@@ -48,6 +48,7 @@ function device(file, channels) {
       if (name === 'expo-router') return { router: { replace: navigate } };
       if (name === 'react-router-dom') return { useNavigate: () => navigate };
       if (name === './supabase') return { supabase };
+      if (name === './profile') return { profileName: (u) => u.user_metadata?.full_name || 'User', profileAvatar: () => null };
       if (name === './watchPartySync') return load(path.join(path.dirname(sourceFile), 'watchPartySync.ts'));
       throw Error(name);
     }, out, fn => { timers.add(fn); return fn; }, fn => timers.delete(fn), () => 0, () => {});

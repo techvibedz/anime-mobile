@@ -53,6 +53,9 @@ const inflight = new Map<string, Promise<NextAiring | null>>();
 
 function norm(s: string): string {
   return (s || "")
+    // NFKC folds Unicode numerals ("Mushoku Tensei Ⅲ" → "III"); stripping them
+    // as non-ASCII used to lose the season and miss the AniList match.
+    .normalize("NFKC")
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, "")
     .replace(/\s+/g, " ")
@@ -68,7 +71,7 @@ function norm(s: string): string {
 // airing one we're after), whereas the full noisy string returns junk or
 // nothing.
 function baseTitle(title: string): string {
-  let s = (title || "").toLowerCase();
+  let s = (title || "").normalize("NFKC").toLowerCase();
   // Drop an arc subtitle after a colon ("… : 2-nensei-hen 1 gakki").
   s = s.split(/[:：]/)[0];
   // Cut from the first season/part/cour marker onward.
@@ -118,7 +121,7 @@ async function searchCandidates(search: string): Promise<any[]> {
   const res = await fetch(ANILIST_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ query: QUERY, variables: { search: search.trim() } }),
+    body: JSON.stringify({ query: QUERY, variables: { search: search.normalize("NFKC").trim() } }),
   });
   if (!res.ok) return [];
   const json = await res.json();
@@ -155,7 +158,12 @@ function pickFinished(candidates: any[], queries: string[], lastKnownEp?: number
     if (validAiring(c.nextAiringEpisode) || c.status === "RELEASING") return false;
     if (c.status === "FINISHED") {
       const total = typeof c.episodes === "number" ? c.episodes : null;
-      if (total && lastKnownEp && lastKnownEp < total) return false;
+      // ponytail: 1-episode tolerance. AniList often counts an episode 0 /
+      // recap the sources don't list (Mushoku Tensei II: 13 vs 12), which
+      // blocked "finished" forever. Ceiling: a source missing exactly the
+      // real finale would read finished — rare, and the airing status
+      // already says the series is over.
+      if (total && lastKnownEp && lastKnownEp < total - 1) return false;
       return true;
     }
   }

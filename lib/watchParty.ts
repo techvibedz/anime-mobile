@@ -20,6 +20,7 @@ import { AppState } from "react-native";
 import { router } from "expo-router";
 import type { RealtimeChannel, User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { profileName, profileAvatar } from "./profile";
 import { computeSync, genCode, type PartyState } from "./watchPartySync";
 
 export type { PartyState } from "./watchPartySync";
@@ -124,10 +125,8 @@ function setConn(s: PartyConnStatus) {
 function presencePayload() {
   if (!room) return null;
   const { user, role } = room;
-  const meta = user.user_metadata ?? {};
-  const name =
-    meta.full_name || meta.name || (user.email ? user.email.split("@")[0] : "User");
-  const avatarUrl = meta.avatar_url || meta.picture || null;
+  const name = profileName(user);
+  const avatarUrl = profileAvatar(user);
   return {
     user_id: user.id,
     name,
@@ -328,6 +327,17 @@ function detach(): void {
 
 // ── React hook wired into the watch screen ─────────────────────────
 
+/** Host's live position. An embed (WebView) server has no native player time —
+ *  reading player.currentTime there broadcast 0 and dragged every viewer back
+ *  to the start each heartbeat, so their progress never saved. */
+function hostPositionMs(o: { player: any; getPositionMs?: () => number }): number {
+  try {
+    const custom = o.getPositionMs?.();
+    if (typeof custom === "number" && Number.isFinite(custom) && custom > 0) return Math.round(custom);
+    return Math.round((o.player?.currentTime ?? 0) * 1000);
+  } catch { return 0; }
+}
+
 export function useWatchPartySync(opts: {
   player: any;
   episode?: string;
@@ -336,6 +346,8 @@ export function useWatchPartySync(opts: {
   applyPaused: (paused: boolean) => void;
   /** This device has buffered enough to start — mirrored into the room. */
   selfReady?: boolean;
+  /** Host position override (WebView embeds report their position via JS). */
+  getPositionMs?: () => number;
 }) {
   const [role, setRole] = useState<PartyRole | null>(() => getRoom()?.role ?? null);
   const [code, setCode] = useState<string | null>(() => getRoom()?.code ?? null);
@@ -417,8 +429,7 @@ export function useWatchPartySync(opts: {
     const o = optsRef.current;
     if (typeof playingOverride === "boolean") o.paused = !playingOverride;
     if (!o.episode) return;
-    let pos = 0;
-    try { pos = Math.round((o.player?.currentTime ?? 0) * 1000); } catch {}
+    const pos = hostPositionMs(o);
     sendState({
       episode: o.episode,
       params: o.navParams,
@@ -459,8 +470,7 @@ export function useWatchPartySync(opts: {
     const iv = setInterval(() => {
       const o = optsRef.current;
       if (!o.episode) return;
-      let pos = 0;
-      try { pos = Math.round((o.player?.currentTime ?? 0) * 1000); } catch {}
+      const pos = hostPositionMs(o);
       sendState({
         episode: o.episode,
         params: o.navParams,

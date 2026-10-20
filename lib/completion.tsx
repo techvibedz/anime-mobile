@@ -193,7 +193,10 @@ export async function recordAnimeCompletion(rec: {
     // through the anchor-source feed reconcile.
     lastEpNum: rec.lastEpNum,
     caughtUp: rec.caughtUp,
-    finished: rec.caughtUp && (rec.finished ?? (prev?.lastEpNum === rec.lastEpNum && !!prev.finished)),
+    // ANY copy (witanime / anime4up / anime3rb) already confirmed finished at
+    // this episode count keeps it — checking only the anchor copy downgraded
+    // the confirmed sibling to "caught up" (Tokyo Revengers: Seiya Kessen-hen).
+    finished: rec.caughtUp && (rec.finished ?? matches.some((r) => r.lastEpNum === rec.lastEpNum && r.finished)),
   };
   const next: AnimeCompletion = {
     key,
@@ -274,6 +277,32 @@ export async function pullCompletionFromCloud(): Promise<void> {
   }
   await saveCompletionMap(map);
   notify();
+}
+
+/**
+ * Re-ask AniList about anime stuck at "caught up" but not "finished". The
+ * finished check used to miss real finales (episode-0 count mismatch, "Ⅲ"
+ * titles), and it only re-ran on a detail-page revisit — so those anime never
+ * reached the profile's completed list. One pass per app session, sequential,
+ * one request per anime (copies grouped).
+ */
+let recheckDone = false;
+export async function recheckUnfinishedCompletions(): Promise<void> {
+  if (recheckDone) return;
+  recheckDone = true;
+  const map = await getCompletionMap();
+  const groups = new Map<string, AnimeCompletion[]>();
+  for (const rec of Object.values(map)) {
+    if (!rec.caughtUp || rec.finished || rec.lastEpNum <= 0) continue;
+    const title = rec.titles[0];
+    if (!title) continue;
+    const id = `${animeTitleKey(title)}:${rec.lastEpNum}`;
+    groups.set(id, [...(groups.get(id) || []), rec]);
+  }
+  // ponytail: cap per session; the rest are picked up next launch / on visit.
+  for (const recs of [...groups.values()].slice(0, 20)) {
+    await confirmFinished(map, recs, recs[0].titles[0], recs[0].lastEpNum);
+  }
 }
 
 /** Count of anime whose final episode the user has watched (profile stat). */

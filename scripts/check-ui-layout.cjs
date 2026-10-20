@@ -27,7 +27,7 @@ const imports={react,'react-native':native,'react/jsx-runtime':{jsx,jsxs:jsx},'r
   'expo-image':{Image:'Image'},'expo-router':{router:{},usePathname:()=>pathname},
   'react-native-safe-area-context':{useSafeAreaInsets:()=>({top:24,bottom:20,left:0,right:0})},
   '@expo/vector-icons':{Ionicons:'Icon'},'expo-linear-gradient':{LinearGradient:'Gradient'},
-  '../lib/auth':{useAuth:()=>({user:null,isConfigured:false})},'../lib/presence':{isAdmin:()=>false},
+  '../lib/auth':{useAuth:()=>({user:null,isConfigured:false})},'../lib/presence':{isAdmin:()=>false},'../lib/profile':{profileName:(u,f)=>f,profileAvatar:()=>null},
   '../lib/history':{},'../lib/favorites':{},'../lib/theme':theme,'../lib/i18n':{t},
   'expo-constants':{expoConfig:{version:'test'}},'expo-application':{},'../assets/icon.png':'bundled-app-logo', '../lib/motion':{useReducedMotion:()=>true}};
 const {drawer}=load('components/Sidebar.tsx',imports,'\nexports.drawer = Sidebar;');

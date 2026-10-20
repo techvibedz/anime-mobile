@@ -653,8 +653,12 @@ export default function WatchScreen() {
       // now steps down early when the forward cushion is shrinking instead of
       // dropping straight from a stall back into another (the stutter loop).
       minBufferForPlayback: 4,
-      maxBufferBytes: 0,
-      prioritizeTimeOverSizeThreshold: true,
+      // ponytail: byte cap. ExoPlayer keeps the forward buffer on the Java heap;
+      // uncapped 300s of 1080p filled a 192-256MB heap and the app died with
+      // OutOfMemoryError mid-episode (losing unsaved progress). 80MB is still
+      // several minutes at typical anime bitrates. Raise only with largeHeap.
+      maxBufferBytes: 80 * 1024 * 1024,
+      prioritizeTimeOverSizeThreshold: false,
       // iOS: let AVPlayer delay playback to build a stall-proof buffer instead
       // of starting on a thread-bare one and rebuffering immediately.
       waitsToMinimizeStalling: true,
@@ -662,6 +666,9 @@ export default function WatchScreen() {
     // Keep audio (and PiP) alive when the app goes to the background. Both need
     // the expo-video config plugin from the APK build; on an older binary (OTA)
     // the native side rejects them — never let that kill player setup.
+    // Android defaults preservesPitch to false, so 1.25x/2x also raised the
+    // voice pitch (chipmunk audio) — speed felt far faster than the label.
+    try { p.preservesPitch = true; } catch {}
     try {
       p.staysActiveInBackground = true;
       p.showNowPlayingNotification = true;
@@ -1775,7 +1782,11 @@ export default function WatchScreen() {
     img: imgParam ?? "",
     animeTitle: animeTitleParam ?? "",
     epNum: epNumParam ?? "",
-  }), [url4up, url3rb, animeParam, imgParam, animeTitleParam, epNumParam]);
+    // nextEp="" marks the finale — viewers need it to record the completion
+    // badge (they open the episode straight from the room, never the detail
+    // page). Omitted when unknown: "" would falsely claim a finale.
+    ...(nextEpParam != null ? { nextEp: nextEpParam } : {}),
+  }), [url4up, url3rb, animeParam, imgParam, animeTitleParam, epNumParam, nextEpParam]);
   // Apply the host's play/pause without the client guard (the guard blocks the
   // user's OWN controls, not the host-driven sync).
   const applyPartyPaused = useCallback((paused: boolean) => {
@@ -1789,6 +1800,7 @@ export default function WatchScreen() {
     paused: isPlayerPaused,
     applyPaused: applyPartyPaused,
     selfReady,
+    getPositionMs: isWebView ? capturePlaybackPosition : undefined,
   });
   const isPartyClient = party.role === "client";
   useEffect(() => { partyClientRef.current = isPartyClient; }, [isPartyClient]);

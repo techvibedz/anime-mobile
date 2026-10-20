@@ -15,6 +15,7 @@
 import type { User } from "@supabase/supabase-js";
 import * as Application from "expo-application";
 import { supabase, isSupabaseConfigured } from "./supabase";
+import { profileName, profileAvatar } from "./profile";
 import {
   mapAdminHistoryRow,
   mergeWatchSummaries,
@@ -37,10 +38,8 @@ let accrualStart: number | null = null;
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 
 function metaOf(user: User): { email: string; name: string; avatar: string | null } {
-  const meta = user.user_metadata ?? {};
-  const name =
-    meta.full_name || meta.name || (user.email ? user.email.split("@")[0] : "User");
-  const avatar = meta.avatar_url || meta.picture || null;
+  const name = profileName(user);
+  const avatar = profileAvatar(user);
   return { email: user.email ?? "", name, avatar };
 }
 
@@ -95,6 +94,14 @@ export async function startUsageSession(user: User): Promise<void> {
     }, FLUSH_INTERVAL_MS);
   }
   await call(0, true);
+}
+
+/** The profile was edited: send the new name/avatar now so the admin users
+ *  list shows it immediately (the running session held the old user object). */
+export function refreshUsageProfile(user: User): void {
+  if (!activeUser || activeUser.id !== user.id) return;
+  activeUser = user;
+  void call(0, false);
 }
 
 /** End the current session: flush any pending seconds and stop the heartbeat. */

@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/presence";
+import { profileName, profileAvatar } from "../lib/profile";
 import { getHistory, isCompleted } from "../lib/history";
 import { getFavorites } from "../lib/favorites";
 import { C, ABSOLUTE_FILL } from "../lib/theme";
@@ -101,8 +102,8 @@ function Sidebar() {
     // Let the native drawer finish dismissing before presenting the share sheet.
     setTimeout(() => Share.share({ message: t.shareAppMessage }).catch(() => {}), reduced ? 0 : 260);
   };
-  const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || t.guest;
-  const avatarUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture;
+  const displayName = user ? profileName(user, t.guest) : t.guest;
+  const avatarUrl = profileAvatar(user);
   const groups: { title: string; items: NavRow[] }[] = [
     { title: t.discover, items: [
       { icon: "home-outline", label: t.home, path: "/(tabs)", match: "/" },

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type ViewStyle } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
@@ -8,6 +8,7 @@ import { t } from "../lib/i18n";
 import { useReducedMotion } from "../lib/motion";
 import { Shimmer } from "./Shimmer";
 import { posterUrl } from "../lib/img";
+import { findFallbackMangaCover } from "../lib/manga/coverFallback";
 
 export function MangaSkeleton({ style, borderRadius = 4, dark = false }: { style?: ViewStyle; borderRadius?: number; dark?: boolean }) {
   return <Shimmer borderRadius={borderRadius} style={{ ...style, backgroundColor: dark ? M.nightLine : M.line }} />;
@@ -30,12 +31,31 @@ export function MangaLayoutControl({ layout, onChange }: { layout: CardLayout; o
 // are re-served at display size through Photon where the host allows it. A
 // screenful of full-size covers used to saturate the image loader and stall
 // every other image in the app for ~50s. `displayWidth` is the cover's dp width.
-export function MangaCover({ uri, style, label, displayWidth = 280 }: { uri?: string | null; style?: ViewStyle; label: string; displayWidth?: number }) {
+export function MangaCover({ uri, alts, style, label, displayWidth = 280 }: { uri?: string | null; alts?: (string | null | undefined)[]; style?: ViewStyle; label: string; displayWidth?: number }) {
   const [failed, setFailed] = useState<string[]>([]);
+  // AniList cover for this title, looked up only once every source cover failed.
+  const [rescue, setRescue] = useState<{ label: string; url: string } | null>(null);
+  const requested = useRef<string | null>(null);
   const reducedMotion = useReducedMotion();
-  const sized = posterUrl(uri, displayWidth);
-  // Sized first, raw original if Photon errors, fallback tile if both fail.
-  const src = [sized, uri ?? undefined].find((u) => u && !failed.includes(u));
+  const altKey = (alts ?? []).join("|");
+  const rescueUrl = rescue?.label === label ? rescue.url : null;
+  // Per cover: sized first, raw original if Photon errors. Then the same work's
+  // cover from other sources, then AniList; the label tile if all fail.
+  const candidates = useMemo(() => [...new Set([uri, ...(alts ?? []), rescueUrl]
+    .filter((u): u is string => !!u)
+    .flatMap((u) => [posterUrl(u, displayWidth), u])
+    .filter((u): u is string => !!u))],
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [uri, altKey, rescueUrl, displayWidth]);
+  const src = candidates.find((u) => !failed.includes(u));
+  useEffect(() => {
+    // One lookup per title: if the AniList cover fails too, the tile stays.
+    if (src || requested.current === label) return;
+    requested.current = label;
+    let alive = true;
+    void findFallbackMangaCover(label).then((url) => { if (alive && url) setRescue({ label, url }); });
+    return () => { alive = false; };
+  }, [src, label]);
   return <View style={[s.cover, style]}>
     {src ? <Image source={{ uri: src }} style={MANGA_FILL} contentFit="cover" cachePolicy="memory-disk"
       recyclingKey={uri} transition={reducedMotion ? 0 : 120} accessibilityLabel={label} onError={() => setFailed((f) => [...f, src])} />
@@ -43,8 +63,8 @@ export function MangaCover({ uri, style, label, displayWidth = 280 }: { uri?: st
   </View>;
 }
 
-export function MangaCardTile({ image, title, width, layout = "comfortable", subtitle, rank, topRight, onPress }: {
-  image?: string | null; title: string; width: number; layout?: CardLayout; subtitle?: string;
+export function MangaCardTile({ image, imageAlts, title, width, layout = "comfortable", subtitle, rank, topRight, onPress }: {
+  image?: string | null; imageAlts?: (string | null)[]; title: string; width: number; layout?: CardLayout; subtitle?: string;
   rank?: number; topRight?: ReactNode; onPress: () => void;
 }) {
   const list = layout === "list";
@@ -52,7 +72,7 @@ export function MangaCardTile({ image, title, width, layout = "comfortable", sub
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={[title, subtitle].filter(Boolean).join("، ")}
       style={({ pressed }) => [list ? s.listCard : s.card, pressed && s.pressed]}>
       <View style={list ? s.listCoverWrap : undefined}>
-        <MangaCover uri={image} label={title} style={list ? s.listCover : s.cardCover} displayWidth={list ? 88 : width} />
+        <MangaCover uri={image} alts={imageAlts} label={title} style={list ? s.listCover : s.cardCover} displayWidth={list ? 88 : width} />
         {rank != null && <View style={s.rank}><Text style={s.rankText}>{String(rank).padStart(2, "0")}</Text></View>}
       </View>
       <View style={list ? s.listInfo : s.cardInfo}>

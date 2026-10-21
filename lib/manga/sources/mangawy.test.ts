@@ -161,6 +161,34 @@ async function main() {
   assert.equal(home.sections[2].items[1].title, "BLEACH");
   assert.equal(parseMangawyHome("<html><body>empty</body></html>"), null);
 
+  // 2026-10 redesign: no utility classes the old parsers keyed on — rails are
+  // found by their <h2> heading and cards by structure.
+  const card = (slug: string, title: string, extra = "") =>
+    `<a href="/series/${slug}" class="group flex min-w-0 flex-col gap-2 w-28"><div class="relative aspect-2/3"><img src="https://img.mangawy.org/covers/${slug}-thumb-sm.webp" alt="${title}"><span class="bg-emerald-500/10">مانهوا</span></div><div class="space-y-1"><h3 class="line-clamp-2">${title}</h3><div><span>170 فصل</span></div></div></a>${extra}`;
+  const redesigned = `<main><section class="featured-hero mb-8" aria-label="اختيار المحرر"><header><h2>اختيار المحرر</h2><p>سلاسل اخترناها لك</p></header>
+      <div class="fh-cover--active fh-cover"><div><img src="https://img.mangawy.org/covers/hua-cover-md.webp" alt="Return of the Mount Hua Sect"></div></div>
+      <a href="/series/return-of-the-mount-hua-sect-k2c31iwr"><h3>Return of the Mount Hua Sect</h3></a></section>
+    <section><h2 class="text-xl">الأكثر قراءة اليوم</h2>${card("dungeon-odyssey-ml9di46d", "Dungeon Odyssey")}${card("eleceed-orldm5hn", "Eleceed")}</section>
+    <section><h2>الأكثر متابعة</h2>${card("other-x", "Other")}</section>
+    <section><h2>آخر التحديثات</h2>
+      <a href="/series/the-return-of-the-crazy-demon-d4wiawry" class="home-update-cover"><div><img src="https://img.mangawy.org/covers/crazy-cover-md.webp" alt="The Return of the Crazy Demon"></div></a>
+      <div><a href="/series/the-return-of-the-crazy-demon-d4wiawry"><h3>The Return of the Crazy Demon</h3></a><div><span>مانهوا</span><span>213 فصل</span></div>
+      <a href="/series/the-return-of-the-crazy-demon-d4wiawry/chapter/213-r63u6cyw" class="home-update-chapter">الفصل 213</a></div>
+    </section></main>`;
+  const next = parseMangawyHome(redesigned);
+  assert.ok(next);
+  assert.equal(next.featured[0]?.title, "Return of the Mount Hua Sect", "the section heading is not the manga's title");
+  assert.equal(next.featured[0]?.cover, "https://img.mangawy.org/covers/hua-cover-md.webp");
+  const nextPopular = next.sections.find((s) => s.id === "popular")!.items;
+  assert.deepEqual(nextPopular.map((c) => c.id), ["dungeon-odyssey-ml9di46d", "eleceed-orldm5hn"], "rail stops at the next heading");
+  assert.equal(nextPopular[0].type, "مانهوا");
+  assert.equal(nextPopular[0].cover, "https://img.mangawy.org/covers/dungeon-odyssey-ml9di46d-thumb-sm.webp");
+  const nextLatest = next.sections.find((s) => s.id === "latest")!.items;
+  assert.equal(nextLatest.length, 1, "cover link, title link and chapter link are one card");
+  assert.equal(nextLatest[0].title, "The Return of the Crazy Demon");
+  assert.equal(nextLatest[0].cover, "https://img.mangawy.org/covers/crazy-cover-md.webp");
+  assert.equal(nextLatest[0].latest, "الفصل 213");
+
   const results = parseMangawySearch(searchJson);
   assert.equal(results.length, 2);
   assert.equal(results[0].id, "eternally-regressing-knight-mmnotiwf");

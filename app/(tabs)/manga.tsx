@@ -430,6 +430,7 @@ export default function MangaHubScreen() {
                       ) : (
                         <MangaCardTile
                           image={upgradeMangaCover(item.cover)}
+                          imageAlts={item.coverAlts?.map(upgradeMangaCover)}
                           title={item.title}
                           width={RAIL_W}
                           rank={section.kind === "ranked" ? index + 1 : undefined}
@@ -580,7 +581,7 @@ function HeroBanner({ card }: { card: MangaCard }) {
         <Image source={{ uri: posterUrl(cover, 120) }} style={MANGA_FILL} contentFit="cover" blurRadius={18} cachePolicy="memory-disk" />
       ) : null}
       <LinearGradient colors={["rgba(34,35,31,0.25)", "rgba(34,35,31,0.88)"]} start={{ x: 1, y: 0 }} end={{ x: 0, y: 1 }} style={MANGA_FILL} />
-      <MangaCover uri={cover} label={card.title} style={s.heroCover} displayWidth={160} />
+      <MangaCover uri={cover} alts={card.coverAlts?.map(upgradeMangaCover)} label={card.title} style={s.heroCover} displayWidth={160} />
       <View style={s.heroBody}>
         <Text style={s.heroEyebrow}>على رفّ الاختيارات</Text>
         <View style={s.heroPills}>{card.type ? <Pill text={card.type} /> : null}{card.status ? <Pill text={card.status} /> : null}</View>
@@ -648,7 +649,7 @@ function ContinueCard({ item, onRemove }: { item: MangaProgress; onRemove: (item
 }
 
 function LatestCard({ card }: { card: MangaCard }) {
-  return <MangaCardTile image={upgradeMangaCover(card.cover)} title={card.title} width={RAIL_W}
+  return <MangaCardTile image={upgradeMangaCover(card.cover)} imageAlts={card.coverAlts?.map(upgradeMangaCover)} title={card.title} width={RAIL_W}
     subtitle={card.latest || card.type || undefined} onPress={() => openMangaDetail(card)} />;
 }
 

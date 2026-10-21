@@ -169,9 +169,13 @@ export function mergeCards(cards: MangaCard[]): MangaCard[] {
         ? card
         : existing;
     const loser = winner === card ? existing : card;
+    const cover = winner.cover ?? loser.cover ?? null;
+    const coverAlts = [...new Set([winner.cover, ...(winner.coverAlts ?? []), loser.cover, ...(loser.coverAlts ?? [])])]
+      .filter((url): url is string => !!url && url !== cover);
     byKey.set(key, {
       ...winner,
-      cover: winner.cover ?? loser.cover ?? null,
+      cover,
+      ...(coverAlts.length ? { coverAlts } : {}),
       latest: higherLatest(winner.latest, loser.latest),
       rating: winner.rating ?? loser.rating ?? null,
       status: winner.status ?? loser.status ?? null,

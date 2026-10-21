@@ -22,7 +22,7 @@ export function MangaGrid({ cards, metrics, bottomInset, footer, empty, corner, 
       numColumns={metrics.columns}
       keyExtractor={(card) => `${card.source}:${card.id}`}
       renderItem={({ item }) => (
-        <MangaCardTile image={upgradeMangaCover(item.cover)} title={item.title}
+        <MangaCardTile image={upgradeMangaCover(item.cover)} imageAlts={item.coverAlts?.map(upgradeMangaCover)} title={item.title}
           width={metrics.cardWidth} layout={metrics.layout}
           subtitle={subtitle?.(item) ?? [item.type, item.latest].filter(Boolean).join(" · ")} topRight={corner?.(item)}
           onPress={() => openMangaDetail(item)} />

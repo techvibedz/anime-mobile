@@ -96,11 +96,19 @@ function parseFeatured(html: string): MangaCard[] {
   if (start < 0) return [];
   const end = html.indexOf("</section>", start);
   const scope = html.slice(start, end < 0 ? start + 12000 : end);
-  const title = stripTags(firstMatch(scope, /<h2[^>]*>([\s\S]*?)<\/h2>/) ?? "");
+  const active = scope.indexOf("fh-cover--active");
+  // The 2026-10 redesign put a section heading ("اختيار المحرر") above the
+  // card, which the first-<h2> read turned into the manga's title. The active
+  // cover's alt names the featured work; else the first non-section heading.
+  const sectionLabel = attr(firstMatch(scope, /(<section[^>]*>)/) ?? "", "aria-label");
+  const activeAlt = active >= 0 ? stripTags(attr(firstMatch(scope.slice(active, active + 1200), /(<img[^>]+)>/) ?? "", "alt") ?? "") : "";
+  const heading = [...scope.matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/g)]
+    .map((m) => stripTags(m[1]))
+    .find((text) => text && text !== sectionLabel && text !== "اختيار المحرر");
+  const title = activeAlt || heading || "";
   const href = firstMatch(scope, /href="(\/series\/[^"#?]+)"/);
   const id = href ? idFromHref(href) : null;
   if (!title || !id) return [];
-  const active = scope.indexOf("fh-cover--active");
   const cover =
     active >= 0
       ? absoluteUrl(firstMatch(scope.slice(active, active + 1200), /<img[^>]*src="([^"]+)"/), SITE)
@@ -187,12 +195,52 @@ function parseCompleted(html: string): MangaCard[] {
   return cards;
 }
 
+// Current layout (verified 2026-10-21): each rail is an <h2> heading followed by
+// cards that are `<a href="/series/<slug>">` with an <img alt> cover, an <h3>
+// title, a type tag and "N فصل"; update cards also link `/chapter/<n>-<id>`.
+// The 2026-10 redesign dropped every class the older parsers keyed on, which
+// silently emptied the popular + latest rails (44 series on the page, 7
+// parsed). Scope by heading and read structure, not utility classes.
+function parseHeadingRail(html: string, heading: string, withLatest: boolean): MangaCard[] {
+  const h = html.search(new RegExp(`<h2[^>]*>\\s*${heading}\\s*<\\/h2>`));
+  if (h < 0) return [];
+  const next = html.indexOf("<h2", h + 4);
+  const scope = html.slice(h, next > h ? next : h + 60000);
+  const order: string[] = [];
+  const chunks = new Map<string, string>();
+  for (const { href, chunk } of anchoredChunks(scope)) {
+    const id = idFromHref(href);
+    if (!id || href.includes("/chapter/")) continue;
+    if (!chunks.has(id)) order.push(id);
+    chunks.set(id, (chunks.get(id) ?? "") + chunk);
+  }
+  const cards: MangaCard[] = [];
+  for (const id of order) {
+    const chunk = chunks.get(id)!;
+    const image = firstMatch(chunk, /(<img[^>]+)>/) ?? "";
+    const title = stripTags(firstMatch(chunk, /<h3[^>]*>([\s\S]*?)<\/h3>/) ?? "") || stripTags(attr(image, "alt") ?? "");
+    if (!title) continue;
+    const chapter = firstMatch(chunk, new RegExp(`/series/${id}/chapter/(\\d+(?:\\.\\d+)?)-`)) ?? firstMatch(chunk, /(\d+(?:\.\d+)?)\s*فصل/);
+    cards.push({
+      source: "mangawy",
+      id,
+      title,
+      cover: absoluteUrl(attr(image, "src"), SITE),
+      type: firstMatch(chunk, />\s*(مانهوا|مانجا|مانها)\s*</) ?? null,
+      ...(withLatest ? { latest: chapter ? `الفصل ${chapter}` : null } : {}),
+    });
+  }
+  return cards;
+}
+
 export function parseMangawyHome(html: string): MangaHome | null {
   const featured = parseFeatured(html);
   const sections: MangaHomeSection[] = [];
-  const popular = parsePopular(html);
+  const railPopular = parseHeadingRail(html, "الأكثر قراءة اليوم", false);
+  const popular = railPopular.length ? railPopular : parsePopular(html);
   if (popular.length) sections.push({ id: "popular", title: "الأكثر قراءة اليوم", kind: "ranked", items: popular });
-  const latest = parseLatest(html);
+  const railLatest = parseHeadingRail(html, "آخر التحديثات", true);
+  const latest = railLatest.length ? railLatest : parseLatest(html);
   if (latest.length) sections.push({ id: "latest", title: "آخر الفصول", kind: "latest", items: latest });
   const completed = parseCompleted(html);
   if (completed.length) sections.push({ id: "completed", title: "مكتمل حديثاً", kind: "grid", items: completed });

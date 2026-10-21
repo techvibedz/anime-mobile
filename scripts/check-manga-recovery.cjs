@@ -35,6 +35,11 @@ const react = {
     }];
   },
   useRef(initial) { const i = cursor++; return slots[i] ?? (slots[i] = { current: initial }); },
+  useMemo(fn, deps) {
+    const i = cursor++;
+    if (!same(slots[i]?.deps, deps)) slots[i] = { deps, value: fn() };
+    return slots[i].value;
+  },
   useCallback(fn, deps) {
     const i = cursor++;
     if (!same(slots[i]?.deps, deps)) slots[i] = { deps, value: fn };
@@ -141,7 +146,9 @@ const { MangaCover } = load("components/MangaUI.tsx", {
   "../lib/manga/design": theme, "../lib/cardLayout": { CARD_LAYOUTS: ["compact", "comfortable", "list"] },
   "../lib/i18n": { t: {} }, "../lib/motion": { useReducedMotion: () => false }, "./Shimmer": { Shimmer: "Shimmer" },
   "../lib/img": { posterUrl: (u) => (u ? `${u}?w=320` : undefined) },
+  "../lib/manga/coverFallback": { findFallbackMangaCover: (title) => { lookups.push(title); const url = title === "Rescued story" ? "https://anilist.example/rescued.jpg" : null; return { then: (done) => done(url) }; } },
 });
+const lookups = [];
 let coverProps = { uri: "https://cdn.example.org/cover-one.jpg", label: "First story" };
 const renderCover = () => { cursor = 0; tree = MangaCover(coverProps); };
 renderCover();
@@ -154,6 +161,20 @@ assert(nodes(tree).some(node => node.type === "Text" && node.props.children === 
 coverProps = { uri: "https://cdn.example.org/cover-two.jpg", label: "Second story" };
 renderCover();
 assert.equal(image().props.source.uri, `${coverProps.uri}?w=320`, "recycled cover must load the new story's artwork");
+
+// A dead source cover falls through to another source's cover, then to the
+// AniList lookup — which runs once, only after every source cover failed.
+slots.length = 0; effects = [];
+coverProps = { uri: "https://dead.example/a.jpg", alts: ["https://other.example/b.jpg"], label: "Rescued story" };
+renderCover();
+for (const _ of [1, 2]) { image().props.onError(); renderCover(); }
+assert.equal(image().props.source.uri, "https://other.example/b.jpg?w=320", "another source's cover is tried next");
+for (const _ of [1, 2]) { image().props.onError(); renderCover(); }
+assert.equal(lookups.length, 0, "no lookup while a source cover is still loading");
+for (const run of effects.splice(0)) run();
+assert.deepEqual(lookups, ["Rescued story"], "AniList lookup once every source cover failed");
+renderCover();
+assert.equal(image().props.source.uri, "https://anilist.example/rescued.jpg?w=320", "the rescued cover renders (sized first, like every cover)");
 
 // Run the actual restore effects with cold preferences / warm progress and
 // verify approximate jumps cannot overwrite the saved target.

@@ -11,6 +11,10 @@ export interface MangaCard {
   id: string;
   title: string;
   cover: string | null;
+  /** Other sources' covers for the same work (set by mergeCards). Sources
+   * delete old uploads (mangalik 403s on ~28% of covers), so a dead primary
+   * cover falls back to these before the AniList lookup. */
+  coverAlts?: string[];
   /** Arabic content type label: "مانجا" | "مانهوا" | "مانها". */
   type?: string | null;
   /** "مستمر" | "مكتمل" | "معلق" when the source exposes it. */

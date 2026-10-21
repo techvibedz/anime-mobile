@@ -22,7 +22,7 @@ function compile(file, isDev = false) {
 const jsx = (type, props) => ({ type, props });
 const react = {
   memo: fn => fn, createElement: jsx, useContext: () => ({}),
-  useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {},
+  useState: value => [value, () => {}], useMemo: fn => fn(), useEffect() {}, useRef: value => ({ current: value }),
   useReducer: (reducer, initial, init) => [init(initial), () => {}],
 };
 const native = { Pressable: "Pressable", View: "View", Text: "Text", ActivityIndicator: "Spinner", StyleSheet: { create: value => value } };
@@ -79,6 +79,7 @@ for (const isDev of [false, true]) {
 
   const ui = evaluate(compile("components/MangaUI.tsx", isDev), {
     ...imports, "expo-image": {}, "../lib/motion": {}, "./Shimmer": {}, "../lib/img": { posterUrl: (u) => u },
+    "../lib/manga/coverFallback": { findFallbackMangaCover: async () => null },
     "../lib/i18n": { t: {} }, "../lib/cardLayout": { CARD_LAYOUTS: ["compact", "comfortable", "list"] },
   });
   const controls = ui.MangaLayoutControl({ layout: "comfortable", onChange() {} }).props.children;

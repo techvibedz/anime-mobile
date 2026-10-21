@@ -3,6 +3,7 @@ import {
   fetchWitListingDirect,
   fetchAnime4upRecentPageDirect,
   searchWitanimeDirect,
+  fetchWitDetailDirect,
   getWitBase,
   rewriteWitUrl,
   type WitCard,
@@ -81,9 +82,14 @@ export type RawDetail = {
 
 export async function scrapeEpisodesPage(animeUrl: string, priority = false) {
   const is4up = /anime4up/i.test(animeUrl);
-  const url = /witanime\./i.test(animeUrl)
-    ? rewriteWitUrl(animeUrl, await getWitBase())
-    : animeUrl;
+  const isWit = /witanime\./i.test(animeUrl);
+  // Static HTML carries the full detail in <1s; the WebView render below is
+  // only the fallback (unknown layout, CF challenge, network failure).
+  if (isWit) {
+    const direct = await fetchWitDetailDirect(animeUrl).catch(() => null);
+    if (direct) return direct;
+  }
+  const url = isWit ? rewriteWitUrl(animeUrl, await getWitBase()) : animeUrl;
   return enqueue({
     url,
     injectAfter: is4up ? EXTRACT_EPISODES_4UP : EXTRACT_EPISODES_WIT,

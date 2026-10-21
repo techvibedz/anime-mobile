@@ -30,7 +30,9 @@ import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, isEpisodeTracked, animeTitleKey, normHref, toggleWatched, subscribeHistory, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion } from "../../lib/completion";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
-import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, peekMalRating } from "../../lib/animeInfo";
+import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, fetchSeasonInfo, peekMalRating } from "../../lib/animeInfo";
+import { seasonLabelAr } from "../../lib/seasonLabel";
+import { translateToArabic } from "../../lib/translate";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
 import { MalBadge, MalCardBadge } from "../../components/MalRating";
 import { AniListPosterCard } from "../../components/AniListPosterCard";
@@ -80,6 +82,10 @@ export default function AnimeDetailScreen() {
   const [merged, setMerged] = useState<{ anime4up: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [synopsisOpen, setSynopsisOpen] = useState(false);
+  // Sequels usually ship without a synopsis or a number in the name — a
+  // season pill and an AniList description (translated) fill both gaps.
+  const [seasonLabel, setSeasonLabel] = useState<string | null>(null);
+  const [fallbackSynopsis, setFallbackSynopsis] = useState("");
   const [bookmarkList, setBookmarkList] = useState<FavoriteList | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("episodes");
@@ -139,6 +145,8 @@ export default function AnimeDetailScreen() {
     setMerged(null);
     setError(null);
     setLoading(true);
+    setSeasonLabel(null);
+    setFallbackSynopsis("");
   }, [id]);
 
   // Focus, resume and polling share one refresh; late callbacks from a page
@@ -221,6 +229,21 @@ export default function AnimeDetailScreen() {
     void fetchAnimeInfo(data.title);
     return () => { cancelled = true; };
   }, [data?.title]);
+
+  const sourceSynopsisEmpty = !synopsisForDisplay(data?.synopsis ?? "");
+  useEffect(() => {
+    if (!data?.title) return;
+    let cancelled = false;
+    void fetchSeasonInfo(data.title, animeHref).then(async (info) => {
+      if (cancelled || !info) return;
+      setSeasonLabel(seasonLabelAr(info.season, info.part));
+      if (!sourceSynopsisEmpty || !info.description) return;
+      const ar = await translateToArabic(info.description).catch(() => "");
+      // translateToArabic hands back the English on failure — show Arabic only.
+      if (!cancelled && /[؀-ۿ]/.test(ar)) setFallbackSynopsis(ar);
+    });
+    return () => { cancelled = true; };
+  }, [data?.title, animeHref, sourceSynopsisEmpty]);
 
   // Related + "you may like": one static GET of the Witanime anime page (that
   // page itself when opened from Witanime, else resolved by a season-aware
@@ -390,7 +413,8 @@ export default function AnimeDetailScreen() {
   }
 
   const firstPlayable = data.episodes.find((e) => e.href);
-  const synopsis = synopsisForDisplay(data.synopsis);
+  const sourceSynopsis = synopsisForDisplay(data.synopsis);
+  const synopsis = sourceSynopsis || fallbackSynopsis;
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "episodes", label: t.tabEpisodes, count: data.totalEpisodes },
     { key: "related", label: t.tabRelated, count: relationsLoading ? undefined : relations.length },
@@ -473,6 +497,12 @@ export default function AnimeDetailScreen() {
 
             {/* Quick meta — MAL score · site rating · episode count */}
             <View style={ss.quickMeta}>
+              {seasonLabel ? (
+                <View style={[ss.metaPill, ss.seasonPill]}>
+                  <Ionicons name="layers-outline" size={12} color={C.accent} />
+                  <Text style={[ss.metaPillText, ss.seasonPillText]}>{seasonLabel}</Text>
+                </View>
+              ) : null}
               <MalBadge score={malScore} />
               {data.rating && (
                 <View style={ss.ratingPill}>
@@ -499,6 +529,7 @@ export default function AnimeDetailScreen() {
                 {synopsis}
               </Text>
               <Text style={ss.readMore}>{synopsisOpen ? t.showLess : t.readMore}</Text>
+              {!sourceSynopsis ? <Text style={ss.synopsisNote}>{t.autoTranslatedSynopsis}</Text> : null}
             </Pressable>
           ) : null}
 
@@ -1518,6 +1549,9 @@ const ss = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 5,
   },
   metaPillText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontFamily: "Cairo_600SemiBold" },
+  seasonPill: { backgroundColor: C.accentSoft },
+  seasonPillText: { color: C.accent },
+  synopsisNote: { color: C.textMuted, fontSize: 11, marginTop: 4, fontFamily: "Cairo_500Medium", textAlign: "right" },
   ratingPill: {
     flexDirection: "row", alignItems: "center", gap: 4,
     backgroundColor: C.goldSoft, borderRadius: R.pill,

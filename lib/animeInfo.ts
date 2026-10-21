@@ -29,6 +29,7 @@ import {
   type RelatedAnimeEntry,
 } from "./relations";
 import { parseRecommendations, type RecItem } from "./recommend";
+import { cleanAniListDescription, isMainFormat, resolveSeason, type SeasonNode } from "./seasonLabel";
 
 export type { RelatedAnimeEntry } from "./relations";
 export type { RecItem } from "./recommend";
@@ -932,6 +933,76 @@ export async function fetchAnimeRecommendations(title: string, href?: string | n
     }
   })();
   recInflight.set(key, p);
+  return p;
+}
+
+/* ── Season position + fallback description ──
+ * Sequel pages mostly come without a synopsis and often without a number in
+ * the name. Resolve the page's AniList entry (same slug-sharpened, MAL-bridged
+ * resolver the Related tab trusts), walk its PREQUEL chain, and return the
+ * season/part (lib/seasonLabel) plus AniList's English description for the
+ * caller to translate. Cached a week; misses aren't cached so they retry. */
+
+export type SeasonInfo = { season: number | null; part: number | null; description: string };
+const SEASON_CACHE_PREFIX = "@anime_season_v1:";
+const SEASON_NODE_QUERY = `query ($id: Int) { Media(id: $id, type: ANIME) {
+  id format episodes description(asHtml: false) title { romaji english }
+  relations { edges { relationType node { id type format } } } } }`;
+const MAX_PREQUELS = 8;
+const seasonMem = new Map<string, SeasonInfo>();
+const seasonInflight = new Map<string, Promise<SeasonInfo | null>>();
+
+type SeasonMedia = SeasonNode & { id: number; description?: string | null; relations?: AniListMedia["relations"] };
+async function fetchSeasonNode(id: number): Promise<SeasonMedia | null> {
+  const json = await anilistPost(SEASON_NODE_QUERY, { id });
+  return (json?.data?.Media as SeasonMedia) || null;
+}
+function prequelId(m: SeasonMedia): number | null {
+  const edge = m.relations?.edges?.find((e) => e?.relationType === "PREQUEL" && e.node?.type === "ANIME" && isMainFormat(e.node?.format));
+  return typeof edge?.node?.id === "number" ? edge.node.id : null;
+}
+
+export async function fetchSeasonInfo(title: string, href?: string | null): Promise<SeasonInfo | null> {
+  if (!title || !title.trim()) return null;
+  const key = `${title.toLowerCase().trim()}|${slugToTitle(href).toLowerCase()}`;
+  const hit = seasonMem.get(key);
+  if (hit) return hit;
+  const pending = seasonInflight.get(key);
+  if (pending) return pending;
+  const p = (async (): Promise<SeasonInfo | null> => {
+    try {
+      const raw = await AsyncStorage.getItem(SEASON_CACHE_PREFIX + key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Date.now() - parsed.ts < CACHE_TTL) { seasonMem.set(key, parsed.data); return parsed.data as SeasonInfo; }
+      }
+    } catch {}
+    try {
+      const media = await resolveMediaForTitle(title, href);
+      const entry = media ? await fetchSeasonNode(media.id) : null;
+      if (!entry) return null;
+      const prequels: SeasonMedia[] = [];
+      const seen = new Set([entry.id]);
+      let next = isMainFormat(entry.format) ? prequelId(entry) : null;
+      while (next != null && !seen.has(next) && prequels.length < MAX_PREQUELS) {
+        seen.add(next);
+        const node = await fetchSeasonNode(next);
+        // A broken chain would undercount — better no number than a wrong one.
+        if (!node) return null;
+        prequels.push(node);
+        next = prequelId(node);
+      }
+      const info: SeasonInfo = { ...resolveSeason(title, entry, prequels), description: cleanAniListDescription(entry.description) };
+      seasonMem.set(key, info);
+      try { await AsyncStorage.setItem(SEASON_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), data: info })); } catch {}
+      return info;
+    } catch {
+      return null;
+    } finally {
+      seasonInflight.delete(key);
+    }
+  })();
+  seasonInflight.set(key, p);
   return p;
 }
 

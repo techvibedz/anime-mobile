@@ -10,7 +10,7 @@
 // Ported from the desktop app (pantoufa-desktop src/lib/scraper.ts +
 // electron/main.ts) with window.pantoufa.fetchHtml replaced by fetchHtml().
 
-import type { RawServer } from "./index";
+import type { RawDetail, RawServer } from "./index";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
@@ -455,6 +455,62 @@ export async function fetchWitanimeAnimeSections(
   const html = await fetchHtml(rewriteWitUrl(animeUrl, base), base + "/");
   if (!html) return null;
   return { ...parseWitAnimeSections(html), title: parseWitAnimePageTitle(html) };
+}
+
+/* ── witanime: direct static-HTML anime DETAIL ──
+ * The anime page ships title, poster, synopsis, genres and EVERY episode link
+ * in its initial HTML (One Piece: 1,200 links, ~3 MB, <1s). The detail screen
+ * used to render it in the hidden WebView — a 35s job on the serial scraper
+ * bus — so big pages timed out and busy queues made every cold open slow. A
+ * failed detail also never recorded completion, so finished anime lost their
+ * badge. Same selectors as EXTRACT_EPISODES_WIT's current-layout branch; null
+ * (not a partial) when the layout isn't recognised, so the WebView takes over. */
+export function parseWitAnimeDetail(html: string, origin: string): RawDetail | null {
+  const start = html.search(/<main\b/i);
+  if (start < 0) return null;
+  const main = html.slice(start);
+  const title = parseWitAnimePageTitle(main);
+  if (!title) return null;
+  const attr = (tag: string, name: string) => tag.match(new RegExp(`\\b${name}=["']([^"']*)["']`, "i"))?.[1] ?? "";
+  // The poster is the first <img> with a non-empty alt; the banner's alt is "".
+  const posterTag = [...main.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0]).find((tag) => attr(tag, "alt").trim());
+  const poster = posterTag ? attr(posterTag, "src") : "";
+  const afterTitle = main.slice(main.search(/<h1\b/i));
+  const synopsisMatch = afterTitle.match(/<p\b[^>]*class=["'][^"']*leading-relaxed[^"']*["'][^>]*>([\s\S]*?)<\/p>/i);
+  const synopsis = synopsisMatch ? htmlDecode(synopsisMatch[1].replace(/<[^>]+>/g, "")).trim() : "";
+  const genreBlock = afterTitle.match(/<div\b[^>]*class=["']mb-6 flex flex-wrap gap-2[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  const genres = genreBlock
+    ? [...genreBlock[1].matchAll(/<span\b[^>]*>([\s\S]*?)<\/span>/gi)].map((m) => htmlDecode(m[1].replace(/<[^>]+>/g, "")).trim()).filter(Boolean)
+    : [];
+  const episodes: RawDetail["episodes"] = [];
+  const seen = new Set<string>();
+  for (const m of main.matchAll(/<a\b[^>]*href=["']([^"']*\/watch\/[^"']*)["']/gi)) {
+    let href = htmlDecode(m[1]);
+    if (!/^https?:/i.test(href)) href = origin + (href.startsWith("/") ? "" : "/") + href;
+    if (seen.has(href)) continue;
+    const ep = href.match(/\/watch\/([^/?#]+)\/(\d+)(?:[/?#]|$)/i);
+    const movie = href.match(/\/watch\/movie\/([^/?#]+)(?:[/?#]|$)/i);
+    if (!ep && !movie) continue;
+    seen.add(href);
+    const number = ep ? parseInt(ep[2], 10) : 1;
+    episodes.push({ title: movie ? "فيلم" : `الحلقة ${number}`, number, type: movie ? "فيلم" : "", screenshot: poster, href });
+  }
+  if (!episodes.length) return null;
+  episodes.sort((a, b) => a.number - b.number);
+  return { title, poster, synopsis, genres, episodes };
+}
+
+// 12s + 15s attempts: room for the 3 MB One Piece page on slow mobile data,
+// while a dead network still hands over to the WebView within ~30s.
+const WIT_DETAIL_TIMEOUTS = [12000, 15000] as const;
+export async function fetchWitDetailDirect(animeUrl: string): Promise<RawDetail | null> {
+  const base = await getWitBase();
+  const url = rewriteWitUrl(animeUrl, base);
+  const html = await fetchHtml(url, base + "/", WIT_DETAIL_TIMEOUTS);
+  if (!html) return null;
+  let origin = base;
+  try { origin = new URL(url).origin; } catch {}
+  return parseWitAnimeDetail(html, origin);
 }
 
 /* ── witanime: direct static-HTML HOME ──

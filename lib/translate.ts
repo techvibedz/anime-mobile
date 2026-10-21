@@ -34,6 +34,27 @@ async function gtxTranslate(text: string): Promise<string> {
   return json[0].map((seg: any) => (Array.isArray(seg) ? seg[0] : "")).join("");
 }
 
+// Fallbacks for when gtx answers Google's "automated queries" page (it rate-
+// limits per IP): the Chrome-dictionary endpoint has its own budget, and
+// MyMemory takes up to 500 chars anonymously.
+async function dictTranslate(text: string): Promise<string> {
+  const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=en&tl=ar&q=${encodeURIComponent(text)}`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) return "";
+  const json = await res.json();
+  // Shape: ["translated"] or [["translated", "en"]].
+  if (!Array.isArray(json)) return "";
+  return json.map((seg: any) => (Array.isArray(seg) ? seg[0] : typeof seg === "string" ? seg : "")).join("");
+}
+
+async function myMemoryTranslate(text: string): Promise<string> {
+  if (text.length > 480) return "";
+  const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ar`);
+  if (!res.ok) return "";
+  const json = await res.json();
+  return json?.responseStatus === 200 ? String(json?.responseData?.translatedText || "") : "";
+}
+
 /** Translate English text to Arabic (cached). Returns the original on failure. */
 export async function translateToArabic(text: string): Promise<string> {
   const input = (text || "").trim();
@@ -51,7 +72,12 @@ export async function translateToArabic(text: string): Promise<string> {
       const raw = await AsyncStorage.getItem(CACHE_PREFIX + key);
       if (raw) { mem.set(key, raw); return raw; }
     } catch {}
-    const out = await gtxTranslate(input).catch(() => "");
+    let out = "";
+    for (const translate of [gtxTranslate, dictTranslate, myMemoryTranslate]) {
+      const candidate = await translate(input).catch(() => "");
+      // Only real Arabic counts — never cache an error page or echoed English.
+      if (candidate && isMostlyArabic(candidate)) { out = candidate; break; }
+    }
     const result = out || input; // graceful fallback to the source text
     if (out) {
       mem.set(key, result);

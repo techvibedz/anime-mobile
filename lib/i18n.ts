@@ -123,6 +123,7 @@ export const ar = {
   mayLikeTab: "قد يعجبك",
   tabInfo: "تفاصيل",
   readMore: "اقرأ المزيد",
+  autoTranslatedSynopsis: "وصف مترجم آليًا",
   showLess: "عرض أقل",
   noEpisodes: "لا توجد حلقات متاحة",
   noRelated: "لا توجد أنميات مشابهة",

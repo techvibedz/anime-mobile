@@ -116,7 +116,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
   const direct = loadPure(path.join(root, 'lib/scraper/direct.ts'), {
     '@react-native-async-storage/async-storage': storage,
     './bus': { enqueue: async (job) => { jobs.push(job); return { html: job.url.includes('witanime') ? witHtml : up4Html }; } },
-    './scripts': { EXTRACT_RENDERED_HTML: (marker) => marker },
+    './scripts': { EXTRACT_RENDERED_HTML: (marker) => marker }, './a3rbCatalogSeed': { A3RB_CATALOG_SEED: '' },
     '../fuzzy': loadPure(path.join(root, 'lib/fuzzy.ts')),
     '../remoteLog': { remoteLog: () => {} }, '../videoProviders': providers, './sourceDomains': domains,
   }, { fetch: async () => ({ ok: !blocked, status: blocked ? 403 : 200, headers: { get: () => null }, text: async () => up4Html }) });

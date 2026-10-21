@@ -51,7 +51,7 @@ function api(overrides = {}, cached = null) {
 function direct(fetcher, browser) {
   return load('lib/scraper/direct.ts', {
     '@react-native-async-storage/async-storage': storage, './bus': { enqueue: browser },
-    './scripts': { EXTRACT_RENDERED_HTML: marker => marker }, '../fuzzy': fuzzy, '../remoteLog': { remoteLog() {} },
+    './scripts': { EXTRACT_RENDERED_HTML: marker => marker }, '../fuzzy': fuzzy, './a3rbCatalogSeed': { A3RB_CATALOG_SEED: '' }, '../remoteLog': { remoteLog() {} },
     '../videoProviders': { ...providers, VIDEO_USER_AGENT: 'Mozilla/5.0' }, './sourceDomains': domains,
   }, { fetch: fetcher, ...(live ? {} : { setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)) }) });
 }

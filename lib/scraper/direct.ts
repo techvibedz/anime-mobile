@@ -15,6 +15,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { enqueue } from "./bus";
 import { EXTRACT_RENDERED_HTML } from "./scripts";
 import { fuzzyScore, fuzzyScoreNormalized, normFuzzy, sourceSearchQueries } from "../fuzzy";
+import { A3RB_CATALOG_SEED } from "./a3rbCatalogSeed";
 import { remoteLog } from "../remoteLog";
 import { classifyProvider, classifyProviderWithName, probeMediaUrl, videoPlaybackHeaders, VIDEO_USER_AGENT as BROWSER_UA } from "../videoProviders";
 import {
@@ -225,12 +226,37 @@ export async function fetchHtml(
 // latter is worth escalating to the WebView). Second attempt gets a longer
 // budget so a slow-but-steady link can finish instead of aborting mid-download
 // (see fetchHtml above).
-async function rawGetA3rb(url: string): Promise<{ html: string | null; status: number }> {
+// anime3rb rate-limits per IP: measured 2026-10-21, ~48 requests per rolling
+// minute, then HTTP 429 for EVERY page (playback included) until traffic stops.
+// One search used to fetch up to 40 title pages, so a second search — or the
+// Play right after — hit the wall (anime3rb was the "incomplete" source in up to
+// 75% of searches). All anime3rb requests share this window; search cards may
+// only use part of it so a detail open or Play always has headroom.
+const A3RB_WINDOW_MS = 60_000;
+const A3RB_BUDGET = 44;
+const A3RB_BACKGROUND_BUDGET = 28;
+const a3rbStamps: number[] = [];
+async function takeA3rbSlot(background: boolean): Promise<boolean> {
+  for (;;) {
+    const now = Date.now();
+    while (a3rbStamps.length && now - a3rbStamps[0] >= A3RB_WINDOW_MS) a3rbStamps.shift();
+    if (a3rbStamps.length < (background ? A3RB_BACKGROUND_BUDGET : A3RB_BUDGET)) {
+      a3rbStamps.push(now);
+      return true;
+    }
+    // Search cards are optional — drop them rather than queue behind the window.
+    if (background) return false;
+    await new Promise((r) => setTimeout(r, a3rbStamps[0] + A3RB_WINDOW_MS - now + 50));
+  }
+}
+
+async function rawGetA3rb(url: string, background = false): Promise<{ html: string | null; status: number }> {
   const ATTEMPT_TIMEOUTS = [8000, 20000];
   const ATTEMPTS = ATTEMPT_TIMEOUTS.length;
   const candidates = await getSourceCandidates(url);
   let lastStatus = 0;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    if (!(await takeA3rbSlot(background))) return { html: null, status: 429 };
     const attemptUrl = candidateForAttempt(candidates, attempt);
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUTS[attempt - 1]);
@@ -245,6 +271,8 @@ async function rawGetA3rb(url: string): Promise<{ html: string | null; status: n
         },
       });
       lastStatus = res.status;
+      // Rate-limited: a retry 0.5s later lands in the same window — stop.
+      if (res.status === 429) return { html: null, status: 429 };
       if (res.ok) {
         const html = await res.text();
         if (!identifySource(attemptUrl) ? !looksLikeCfChallenge(html) : isValidSourceHtml("anime3rb", html)) {
@@ -298,10 +326,12 @@ export async function fetchSourceHtml(url: string, referer: string, marker: stri
 // page). Fast path: a raw GET whose body carries the marker and isn't a
 // challenge. Otherwise — block, challenge, timeout, or marker-missing — render
 // it in the WebView. A clean 404 short-circuits to null (genuine miss).
-async function fetchAnime3rbHtml(url: string, marker: string, priority = false): Promise<string | null> {
-  const { html, status } = await rawGetA3rb(url);
+async function fetchAnime3rbHtml(url: string, marker: string, priority = false, background = false): Promise<string | null> {
+  const { html, status } = await rawGetA3rb(url, background);
   if (html && !looksLikeCfChallenge(html) && (!marker || html.indexOf(marker) >= 0)) return html;
-  if (status === 404 || status === 410) return null;
+  // 429: the WebView shares this IP's limit — rendering there only adds a ~25s
+  // stall before failing the same way.
+  if (status === 404 || status === 410 || status === 429) return null;
   const viaWv = await fetchHtmlViaWebView(url, marker, priority);
   if (viaWv) return viaWv;
   // Last resort: hand back the raw body (may still parse) rather than nothing.
@@ -1139,6 +1169,9 @@ export function tm_seasonNum(orig: string): number {
 }
 function tm_normLatin(s: string): string {
   return String(s || "").toLowerCase()
+    // Slugs drop apostrophes ("Darwin's Game" → darwins-game); a space here
+    // split it into "darwin s" and the strict anime3rb match never fired.
+    .replace(/['’`]/g, "")
     .replace(/\b(?:season|s|part|cour)\s*\d+\b/g, " ")
     .replace(/\b(?:the|a|an|of|to|wa|no|wo|ga|ni)\b/g, " ")
     .replace(/[^a-z0-9 ]+/g, " ")
@@ -2201,21 +2234,81 @@ export function anime3rbExactSlugs(title: string): string[] {
 let a3rbCatalog: { slugs: string[]; ts: number } | null = null;
 const A3RB_CATALOG_TTL = 6 * 60 * 60 * 1000;
 
+// The catalog is a 2.6 MB sitemap that used to be downloaded on every app
+// launch before anime3rb search could run — slow on mobile data, and when the
+// big transfer dropped mid-body the search silently got no anime3rb results.
+// Keep the slug list (~170 KB) on device; a stale copy answers immediately
+// while a background download refreshes it.
+const A3RB_CATALOG_KEY = "@a3rb_catalog_v1";
+const A3RB_CATALOG_MAX_STALE = 7 * 24 * 60 * 60 * 1000;
+let a3rbCatalogInflight: Promise<string[]> | null = null;
+// After a failed/truncated download, answer from what's on hand for a while
+// instead of making every search wait on another 2+ MB attempt.
+const A3RB_CATALOG_RETRY_MS = 10 * 60 * 1000;
+let a3rbNextDownloadAt = 0;
+// anime3rb serves the 2+ MB sitemap truncated mid-transfer more often than not
+// (one file came back with 194, 325 and 6,465 titles), and the partial XML still
+// parses — the old code then REPLACED the catalog with that fragment for 6h
+// (a phone was seen on 525 titles), so most anime3rb titles vanished from
+// search and playback. The live file is now MERGED into the bundled baseline
+// (+ what this device has seen) and the list never shrinks.
+let a3rbSeed: string[] | null = null;
+function a3rbSeedSlugs(): string[] {
+  return (a3rbSeed ??= A3RB_CATALOG_SEED.split(/\r?\n/));
+}
+function mergeSlugs(...lists: string[][]): string[] {
+  return [...new Set(lists.flat())];
+}
+
 async function fetchA3rbCatalog(): Promise<string[]> {
   if (a3rbCatalog && Date.now() - a3rbCatalog.ts < A3RB_CATALOG_TTL) return a3rbCatalog.slugs;
+  if (!a3rbCatalog) {
+    let stored: { ts?: number; slugs?: string[] } | null = null;
+    try {
+      const raw = await AsyncStorage.getItem(A3RB_CATALOG_KEY);
+      stored = raw ? JSON.parse(raw) : null;
+    } catch {}
+    if (!a3rbCatalog) {
+      const storedOk = !!stored && Array.isArray(stored.slugs) && typeof stored.ts === "number" && Date.now() - stored.ts < A3RB_CATALOG_MAX_STALE;
+      // ts 0 = this device never refreshed from the live site.
+      a3rbCatalog = { slugs: mergeSlugs(a3rbSeedSlugs(), storedOk ? stored!.slugs! : []), ts: storedOk ? stored!.ts! : 0 };
+    }
+    if (Date.now() - a3rbCatalog.ts < A3RB_CATALOG_TTL) return a3rbCatalog.slugs;
+  }
+  if (Date.now() < a3rbNextDownloadAt) return a3rbCatalog.slugs;
+  const download = a3rbCatalogInflight ??= downloadA3rbCatalog().finally(() => { a3rbCatalogInflight = null; });
+  // Never refreshed (once per install): wait, so titles newer than the bundled
+  // baseline are searchable; a failed download still answers with the baseline.
+  if (a3rbCatalog.ts === 0) return download.catch(() => a3rbCatalog!.slugs);
+  // Merely stale: answer now, refresh in the background.
+  void download.catch(() => {});
+  return a3rbCatalog.slugs;
+}
+
+async function downloadA3rbCatalog(): Promise<string[]> {
   const xml = await fetchHtml(
     `${A3RB_BASE}/storage/sitemaps/titles_sitemap.xml`,
     A3RB_BASE + "/",
   );
-  if (!xml) return a3rbCatalog?.slugs ?? [];
+  if (!xml) {
+    a3rbNextDownloadAt = Date.now() + A3RB_CATALOG_RETRY_MS;
+    return a3rbCatalog?.slugs ?? a3rbSeedSlugs();
+  }
   const slugs: string[] = [];
   const re = /<loc>\s*https?:\/\/anime3rb\.com\/titles\/([^<\s]+?)\/?\s*<\/loc>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml))) {
     try { slugs.push(decodeURIComponent(m[1])); } catch { slugs.push(m[1]); }
   }
-  if (slugs.length > 0) a3rbCatalog = { slugs, ts: Date.now() };
-  return slugs;
+  // A truncated transfer still adds what it carried, but doesn't count as a
+  // refresh — another download is tried after the back-off.
+  const complete = /<\/urlset>\s*$/.test(xml);
+  if (!complete) a3rbNextDownloadAt = Date.now() + A3RB_CATALOG_RETRY_MS;
+  if (!slugs.length) return a3rbCatalog?.slugs ?? a3rbSeedSlugs();
+  const current = a3rbCatalog ?? { slugs: a3rbSeedSlugs(), ts: 0 };
+  a3rbCatalog = { slugs: mergeSlugs(current.slugs, slugs), ts: complete ? Date.now() : current.ts };
+  void AsyncStorage.setItem(A3RB_CATALOG_KEY, JSON.stringify(a3rbCatalog)).catch(() => {});
+  return a3rbCatalog.slugs;
 }
 
 // Season number for a catalog slug / title. Falls back to a small trailing
@@ -2393,13 +2486,22 @@ export async function searchAnime3rbDirectList(
   const results: WitCard[] = [];
   let next = 0;
   let failed = false;
+  // Fresh page loads per search are capped (best-scored first) so one big
+  // franchise can't spend the whole anime3rb budget and starve the next search;
+  // cached title pages are free and always included.
+  let freshLeft = A3RB_SEARCH_FRESH_MAX;
   const deadline = Date.now() + 60_000;
   await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, async () => {
     while (next < candidates.length) {
       if (Date.now() >= deadline) { failed = true; break; }
       const { slug } = candidates[next++];
       const href = `${A3RB_BASE}/titles/${slug}`;
-      const detail = await scrapeAnime3rbTitlePage(href).catch(() => null);
+      if (!isA3rbTitleFresh(href)) {
+        // Deliberate cap, not a failure: the best-scored titles are already in.
+        if (freshLeft <= 0) continue;
+        freshLeft--;
+      }
+      const detail = await scrapeAnime3rbTitlePage(href, { background: true }).catch(() => null);
       if (!detail?.title) { failed = true; continue; }
       const card = { title: detail.title, href, image: detail.poster || null,
         type: null, status: null, synopsis: detail.synopsis || null };
@@ -2573,8 +2675,29 @@ export function parseA3rbGenres(html: string): string[] {
 
 // Scrape a full anime3rb anime page (detail + episodes). Returns null on a
 // fetch/parse failure so callers degrade gracefully to the other sources.
-export async function scrapeAnime3rbTitlePage(titleUrl: string): Promise<A3rbDetail | null> {
-  const html = await fetchAnime3rbHtml(titleUrl, "og:title");
+// Search cards reuse a title page for 30 min (retyping "nar"→"naruto" hits the
+// same franchise pages); detail/playback reads are always fresh so new episodes
+// show, and refresh the entry.
+const A3RB_TITLE_TTL = 30 * 60_000;
+const A3RB_SEARCH_FRESH_MAX = 14;
+const a3rbTitleMemo = new Map<string, { ts: number; detail: A3rbDetail }>();
+function isA3rbTitleFresh(titleUrl: string): boolean {
+  const memo = a3rbTitleMemo.get(titleUrl);
+  return !!memo && Date.now() - memo.ts < A3RB_TITLE_TTL;
+}
+export async function scrapeAnime3rbTitlePage(titleUrl: string, opts: { background?: boolean } = {}): Promise<A3rbDetail | null> {
+  const memo = a3rbTitleMemo.get(titleUrl);
+  if (opts.background && memo && Date.now() - memo.ts < A3RB_TITLE_TTL) return memo.detail;
+  const detail = await scrapeAnime3rbTitlePageFresh(titleUrl, !!opts.background);
+  if (detail) {
+    if (a3rbTitleMemo.size > 300) a3rbTitleMemo.clear();
+    a3rbTitleMemo.set(titleUrl, { ts: Date.now(), detail });
+  }
+  return detail;
+}
+
+async function scrapeAnime3rbTitlePageFresh(titleUrl: string, background: boolean): Promise<A3rbDetail | null> {
+  const html = await fetchAnime3rbHtml(titleUrl, "og:title", false, background);
   if (!html) return null;
   const slug = decodeURIComponent(titleUrl.replace(/\/+$/, "").split("/").pop() || "");
   if (!slug) return null;

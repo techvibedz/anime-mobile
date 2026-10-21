@@ -21,7 +21,7 @@ let fetcher, browser, requests;
 const direct = load("lib/scraper/direct.ts", {
   "@react-native-async-storage/async-storage": storage,
   "./bus": { enqueue: (job) => browser(job) }, "./scripts": scripts,
-  "../fuzzy": { fuzzyScore: () => 0 }, "../remoteLog": { remoteLog: () => {} },
+  "../fuzzy": { fuzzyScore: () => 0 }, "../remoteLog": { remoteLog: () => {} }, "./a3rbCatalogSeed": { A3RB_CATALOG_SEED: "" },
   "../videoProviders": { VIDEO_USER_AGENT: "test-browser" }, "./sourceDomains": domains,
 }, { ...shortTimers, fetch: (url, init) => { requests.push(url); return fetcher(url, init); } },
 "\nexport { rawGetA3rb, fetchWitPlayerResponse };\n");

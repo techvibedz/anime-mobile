@@ -1210,7 +1210,14 @@ function tm_score(want: string, title: string): number {
   else s = Math.round(Math.max(latinOverlap, arabicOverlap) * 75);
   const sw = tm_seasonNum(want), sg = tm_seasonNum(title);
   if (sw === sg) s += 8; else s -= 12;
+  // A movie never matches its TV series (or vice versa). Overlap is measured
+  // against the SHORTER title, so "Kimetsu no Yaiba" scored 83 for "Kimetsu no
+  // Yaiba Movie: Mugen-jou-hen …" and the movie row played TV episode 1.
+  if (tm_isMovie(want) !== tm_isMovie(title)) s -= 60;
   return s;
+}
+export function tm_isMovie(title: string): boolean {
+  return /\b(?:movie|film|gekijou?ban)\b|فيلم/i.test(String(title || ""));
 }
 
 // Normalize mp4upload URLs to the canonical embed form so they autoplay
@@ -1575,6 +1582,10 @@ export async function fetchAnime3rbHomeDirect(): Promise<WitHome | null> {
 // uses random hash slugs (…-الحلقة-wtgjd/), so the number must come from the
 // anchor's title attribute ("… الحلقة 20"). Falls back to the slug only when a
 // title number is unavailable (older pages embed the number in the URL).
+function safeDecode(s: string): string {
+  try { return decodeURIComponent(s); } catch { return s; }
+}
+
 function up4EpisodeNumber(href: string, title?: string): number | null {
   if (title) {
     const tm = title.match(/الحلقة\s*(\d+)/) || title.match(/\bepisode\s*(\d+)/i) || title.match(/\bep\s*(\d+)/i);
@@ -1619,7 +1630,10 @@ export function parseUp4Episodes(
     if (seen.has(href)) continue;
     const titleM = tag.match(/\btitle=["']([^"']*)["']/i);
     const title = titleM ? titleM[1] : undefined;
-    const num = up4EpisodeNumber(href, title);
+    // A movie's single entry carries no number ("…/episode/فيلم-<slug>/"); it
+    // is episode 1 everywhere else (anime3rb /episode/<slug>/1, MAL players).
+    let num = up4EpisodeNumber(href, title);
+    if (num == null && /فيلم/.test(safeDecode(href) + (title || ""))) num = 1;
     if (num == null) continue;
     seen.add(href);
     out.push({ title: "الحلقة " + num, number: num, type: "", screenshot: "", href });
@@ -1721,7 +1735,9 @@ export function parseUp4Servers(html: string): RawServer[] {
   const re = /<li[^>]*\sdata-watch=["']([^"']+)["'][^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(scope))) {
-    const src = normalizeEmbedUrl((m[1] || "").trim());
+    // Raw attribute text: "&amp;" must become "&" or multi-param embeds (vk's
+    // oid/id/hash) reach the provider as "amp;id" and resolve to nothing.
+    const src = normalizeEmbedUrl((m[1] || "").replace(/&amp;/g, "&").trim());
     if (!src || src.indexOf("http") !== 0 || seen.has(src)) continue;
     if (/google|facebook|pyppo|popads|disqus/.test(src)) continue;
     try {
@@ -1920,6 +1936,18 @@ function witSessionCookie(response: Response): string {
   return pairs.join("; ");
 }
 
+// WitAnime's player endpoints answer only requests that look like Chrome's own:
+// without client hints + fetch metadata, /sources returns 404 and every gate
+// 404s, so the fast path silently fell back to the slow WebView scrape (whose
+// gates often stayed embeds). Verified live 2026-10-21: these headers alone
+// turn both into 200/302.
+const WIT_CLIENT_HINTS = {
+  "Sec-CH-UA": `"Chromium";v="${BROWSER_UA.match(/Chrome\/(\d+)/)?.[1] || "120"}", "Not_A Brand";v="24"`,
+  "Sec-CH-UA-Mobile": "?1",
+  "Sec-CH-UA-Platform": '"Android"',
+  "Accept-Language": "ar,en;q=0.9",
+};
+
 async function resolveWitManifestServers(
   html: string,
   episodeUrl: string,
@@ -1929,51 +1957,68 @@ async function resolveWitManifestServers(
   if (!config) return [];
   const origin = new URL(episodeUrl).origin;
   const headers = {
+    ...WIT_CLIENT_HINTS,
     Accept: "application/json",
     "X-CSRF-TOKEN": config.csrf,
-    "X-Requested-With": "XMLHttpRequest",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
     Referer: episodeUrl,
     Origin: origin,
     "User-Agent": BROWSER_UA,
     ...(cookie ? { Cookie: cookie } : {}),
   };
+  // Gates are iframe navigations under referrerpolicy=no-referrer (same
+  // identity as lib/scraper/witGate.ts, minus the WebView's X-Requested-With).
+  const gateHeaders = {
+    ...WIT_CLIENT_HINTS,
+    "User-Agent": BROWSER_UA,
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Sec-Fetch-Dest": "iframe",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Upgrade-Insecure-Requests": "1",
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
   const manifestResponse = await fetchWitPlayerResponse(config.sourcesUrl, { method: "POST", headers });
   if (!manifestResponse.response.ok) return [];
   const entries = parseWitManifestEntries(JSON.parse(manifestResponse.text));
-  // Each entry costs up to three sequential requests (stream-source, gate
-  // redirect, gate follow). Running the entries in PARALLEL turns a 4-provider
-  // page from ~12 serial round-trips into the slowest single provider — the
-  // main "servers take forever to appear" fix for Witanime episodes.
-  const resolved = await Promise.all(entries.map(async (entry): Promise<RawServer | null> => {
-    const sourceUrl = `${origin}/watch/stream-source/${entry.token}`;
-    let ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
-    if (ready?.response.status === 429) {
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      ready = await fetchWitPlayerResponse(sourceUrl, { method: "POST", headers }).catch(() => null);
+  // WitAnime rate-limits bursts: parallel stream-source/gate calls measured
+  // live as 429s that silently dropped 1-3 of the mirrors. Walk the entries one
+  // at a time (like the site's own player) and retry a 429 after a pause.
+  const call = async (url: string, init: RequestInit) => {
+    for (let attempt = 0; ; attempt++) {
+      const got = await fetchWitPlayerResponse(url, init).catch(() => null);
+      if (got?.response.status !== 429 || attempt >= 2) return got;
+      await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
     }
-    if (!ready?.response.ok) return null;
+  };
+  const resolved: (RawServer | null)[] = [];
+  for (const [index, entry] of entries.entries()) {
+    if (index > 0) await new Promise((resolve) => setTimeout(resolve, 400));
+    const ready = await call(`${origin}/watch/stream-source/${entry.token}`, { method: "POST", headers });
+    if (!ready?.response.ok) { resolved.push(null); continue; }
     const gateUrl = `${origin}/watch/stream-gate/${entry.token}`;
     let target: string | null = null;
-    try {
-      const gate = await fetchWitPlayerResponse(gateUrl, { method: "GET", headers, redirect: "manual" });
+    const gate = await call(gateUrl, { method: "GET", headers: gateHeaders, redirect: "manual" });
+    if (gate && gate.response.status < 400) {
       target = parseWitGateTarget(gate.response.headers.get("location"), gate.text, gate.response.url, gateUrl);
-    } catch {}
+    }
     // Some React Native networking versions ignore/manual-hide redirects.
     // A normal follow still exposes the final provider URL on Response.url.
-    if (!target) {
-      try {
-        const gate = await fetchWitPlayerResponse(gateUrl, { method: "GET", headers, redirect: "follow" });
-        target = parseWitGateTarget(null, "", gate.response.url, gateUrl);
-      } catch {}
+    if (!target && (!gate || gate.response.status < 400)) {
+      const followed = await call(gateUrl, { method: "GET", headers: gateHeaders, redirect: "follow" });
+      if (followed) target = parseWitGateTarget(null, "", followed.response.url, gateUrl);
     }
-    if (!target) return null;
-    return {
+    // A rejected gate bounces back to WitAnime itself — that is not a server.
+    if (!target || new URL(target).origin === origin) { resolved.push(null); continue; }
+    resolved.push({
       id: entry.token,
       name: `${entry.label} ${entry.quality}`.trim(),
       iframeUrl: target,
       provider: classifyProvider(target),
-    };
-  }));
+    });
+  }
   const servers: RawServer[] = [];
   for (const server of resolved) {
     if (!server || servers.some((existing) => existing.iframeUrl === server.iframeUrl)) continue;
@@ -1994,9 +2039,12 @@ export async function scrapeWitanimeEpisodePageDirect(
   const page = await fetchWitPlayerResponse(resolvedEpisodeUrl, {
     method: "GET",
     headers: {
+      ...WIT_CLIENT_HINTS,
       "User-Agent": BROWSER_UA,
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "ar,en;q=0.9",
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
       Referer: base + "/",
     },
   }).catch(() => null);
@@ -2350,7 +2398,7 @@ function a3rbCatalogMatch(title: string, slugs: string[]): string | null {
   const reParen = /[\(\[]([^\)\]]+)[\)\]]/g;
   let pm: RegExpExecArray | null;
   while ((pm = reParen.exec(title))) { const p = pm[1].trim(); if (p) rawForms.push(p); }
-  type Want = { set: Record<string, true>; n: number; season: number };
+  type Want = { set: Record<string, true>; toks: string[]; pairs: Record<string, true>; n: number; season: number };
   const wants: Want[] = [];
   for (const f of rawForms) {
     for (const v of [f, f.replace(/(\S)[:：](\S)/g, "$1$2")]) {
@@ -2358,7 +2406,11 @@ function a3rbCatalogMatch(title: string, slugs: string[]): string | null {
       if (!toks.length) continue;
       const set: Record<string, true> = {};
       toks.forEach((t) => { set[t] = true; });
-      wants.push({ set, n: toks.length, season: a3rbSeasonOf(v.toLowerCase()) });
+      // Adjacent pairs joined: sites split compound romaji differently
+      // ("Mugen-jou-hen" on witanime vs anime3rb's "mugenjou-hen").
+      const pairs: Record<string, true> = {};
+      for (let i = 0; i + 1 < toks.length; i++) pairs[toks[i] + toks[i + 1]] = true;
+      wants.push({ set, toks, pairs, n: toks.length, season: a3rbSeasonOf(v.toLowerCase()) });
     }
   }
   if (!wants.length) return null;
@@ -2371,11 +2423,15 @@ function a3rbCatalogMatch(title: string, slugs: string[]): string | null {
       if (gotSeason !== w.season) continue;
       let gc = 0;
       const gotSet: Record<string, true> = {};
-      for (const t of gotToks) { gotSet[t] = true; if (w.set[t]) gc++; }
+      for (const t of gotToks) { gotSet[t] = true; if (w.set[t] || w.pairs[t]) gc++; }
       let wc = 0;
-      for (const t in w.set) { if (gotSet[t]) wc++; }
-      const wantCov = wc / w.n;
-      const gotCov = gc / gotToks.length;
+      for (let i = 0; i < w.toks.length; i++) {
+        const t = w.toks[i];
+        if (gotSet[t]) wc++;
+        else if (i + 1 < w.toks.length && gotSet[t + w.toks[i + 1]]) { wc += 2; i++; }
+      }
+      const wantCov = Math.min(1, wc / w.n);
+      const gotCov = Math.min(1, gc / gotToks.length);
       // Containment: the slug's ENTIRE name appears inside the wanted title
       // (with enough tokens to be non-coincidental). Catches witanime titles
       // that concatenate the English and romaji names — especially the
@@ -2914,6 +2970,36 @@ export async function extractAnime4upCdn(iframeUrl: string): Promise<{ url: stri
   return { url: stream, type: "hls", subtitles };
 }
 
+// anime4up's own HLS players are addressed by MyAnimeList id, not by title:
+// /Anime4up-S{1,2}/mal/<malId>/<episode>/sub/. With the MAL id in hand, its two
+// best native servers resolve without ANY cross-site title matching — the fix
+// for "the other source names it differently, so its servers never show".
+// A page without `streamUrl` (episode not uploaded) or whose <title> names a
+// different episode/season is rejected, so a wrong MAL guess can't play the
+// wrong show.
+export function anime4upMalPageMatches(html: string, episode: number, wantTitle: string): boolean {
+  if (!parseAnime4upStreamUrl(html)) return false;
+  const pageTitle = htmlDecode(html.match(/<title>([^<]*)/i)?.[1] || "");
+  const ep = pageTitle.match(/(?:الحلقة|episode)\s*(\d+)/i);
+  if (ep && parseInt(ep[1], 10) !== episode) return false;
+  if (tm_isMovie(pageTitle) !== tm_isMovie(wantTitle)) return false;
+  const want = tm_seasonNum(wantTitle) || 1;
+  const got = tm_seasonNum(pageTitle.replace(/(?:الحلقة|episode)\s*\d+.*/i, "")) || 1;
+  return want === got;
+}
+
+export async function fetchAnime4upMalPlayer(malId: number, episode: number, wantTitle: string): Promise<RawServer[]> {
+  if (!malId || !episode) return [];
+  const pages = await Promise.all([1, 2].map(async (slot) => {
+    const iframeUrl = `${UP4_BASE}/Anime4up-S${slot}/mal/${malId}/${episode}/sub/`;
+    // The player page is ~270 KB; 9s was measured to cut off healthy loads.
+    const got = await fetchEmbed(iframeUrl, 15000, UP4_BASE + "/");
+    if (!got.html || !anime4upMalPageMatches(got.html, episode, wantTitle)) return null;
+    return { id: `mal-${slot}`, name: `anime4up${slot} متعدد الجودات`, iframeUrl, provider: "anime4upcdn" } as RawServer;
+  }));
+  return pages.filter((server): server is RawServer => !!server);
+}
+
 export async function extractMp4upload(iframeUrl: string): Promise<{ url: string; type: "mp4" } | null> {
   const embedUrl = normalizeEmbedUrl(iframeUrl);
   // The embed page is tiny (~4 KB) and the direct .mp4 sits in its static HTML
@@ -2924,7 +3010,7 @@ export async function extractMp4upload(iframeUrl: string): Promise<{ url: string
   // it cannot clear on an immediate second GET, so that case still bails out.
   for (const timeoutMs of [6000, 12000]) {
     const got = await fetchEmbed(embedUrl, timeoutMs, "https://www.mp4upload.com/");
-    if (got.blocked) return null;
+    if (got.blocked || got.dead) return null;
     const url = got.html ? extractMp4uploadUrl(got.html) : null;
     if (url) return { url, type: "mp4" };
   }
@@ -2954,7 +3040,40 @@ const DECOY_RE =
 // that final host, not the dead one. `blocked` marks a Cloudflare challenge
 // (403/503 or a challenge body) so callers bail to the WebView NOW instead of
 // spending their second attempt on a block that won't clear.
-type EmbedPage = { html: string | null; finalUrl: string; blocked: boolean };
+// `dead`: the host answered definitively that the file is gone (404/410 or its
+// own "file was deleted" page). Device logs showed most "server keeps loading"
+// cases were deleted uploads that then burned the 40s WebView extractor — a dead
+// embed must fail in about a second instead. Pattern verified against live and
+// dead pages of doodstream/mp4upload/streamruby/voe (a live dood page carries a
+// hidden "<h1>Not Found</h1>" template, so headings are NOT a signal).
+const EMBED_DEAD_RE =
+  /\bfile (?:was |has been )?(?:deleted|removed)\b|\bfile not found\b|\bfile is no longer available\b|\bvideo (?:not found|has been (?:deleted|removed)|is (?:no longer available|unavailable))\b|<title>\s*(?:404\b|not found\b|file not found)/i;
+export function isDeadEmbedPage(status: number, html: string): boolean {
+  if (status === 404 || status === 410) return true;
+  return EMBED_DEAD_RE.test(html) && !/eval\(function\(p,a,c,k|pass_md5|\.m3u8|\.mp4\b/i.test(html);
+}
+
+// Embeds proven dead this session. The resolver checks it to skip the WebView
+// fallback, and server discovery drops them from the list. ponytail: in-memory,
+// session-scoped; a re-upload under the same URL is vanishingly rare.
+const deadEmbeds = new Set<string>();
+const deadKey = (raw: string) => raw.replace(/#.*$/, "").replace(/\/+$/, "").toLowerCase();
+export function isKnownDeadEmbed(url: string): boolean {
+  return deadEmbeds.has(deadKey(url));
+}
+function markDeadEmbed(...urls: string[]) {
+  for (const url of urls) if (url) deadEmbeds.add(deadKey(url));
+}
+
+// One cheap GET to learn whether a WebView-only provider's file still exists,
+// so a deleted upload fails in seconds instead of after the 40s WebView scrape.
+export async function probeEmbedDead(url: string, timeoutMs = 7000): Promise<boolean> {
+  if (isKnownDeadEmbed(url)) return true;
+  const got = await fetchEmbed(url, timeoutMs);
+  return !!got.dead;
+}
+
+type EmbedPage = { html: string | null; finalUrl: string; blocked: boolean; dead?: boolean };
 async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Promise<EmbedPage> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -2970,9 +3089,17 @@ async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Pro
     });
     const finalUrl = res.url || url;
     if (res.status === 403 || res.status === 503) return { html: null, finalUrl, blocked: true };
-    if (!res.ok) return { html: null, finalUrl, blocked: false };
+    if (!res.ok) {
+      const dead = isDeadEmbedPage(res.status, "");
+      if (dead) markDeadEmbed(url, finalUrl);
+      return { html: null, finalUrl, blocked: false, dead };
+    }
     const html = await res.text();
     if (looksLikeCfChallenge(html)) return { html: null, finalUrl, blocked: true };
+    if (isDeadEmbedPage(res.status, html)) {
+      markDeadEmbed(url, finalUrl);
+      return { html: null, finalUrl, blocked: false, dead: true };
+    }
     return { html, finalUrl, blocked: false };
   } catch {
     return { html: null, finalUrl: url, blocked: false };
@@ -3065,7 +3192,7 @@ export async function extractVk(embedUrl: string): Promise<{ url: string; type: 
     candidates.push(alternate.toString());
   }
   for (const candidate of candidates) {
-    if (await probeMediaUrl(candidate, videoPlaybackHeaders(candidate, canonical.toString(), "vk"), fetch, 4000)) return { url: candidate, type: mediaType(candidate) };
+    if (await probeMediaUrl(candidate, videoPlaybackHeaders(candidate, canonical.toString(), "vk"), fetch, 8000)) return { url: candidate, type: mediaType(candidate) };
   }
   return null;
 }
@@ -3088,15 +3215,28 @@ export async function extractShare4max(embedUrl: string): Promise<{ url: string;
     streams = (await response.json())?.props?.streams?.data;
   } finally { clearTimeout(timer); }
   if (!Array.isArray(streams)) return null;
-  // Megamax aggregates mirrors; use the existing progressive extractor at the best quality.
+  // Megamax aggregates mirrors (earnvids, lulustream, voe, mp4upload, mega, …).
+  // Only taking mp4upload left most episodes unplayable — many carry no
+  // mp4upload mirror at all. Try every mirror we can resolve natively, best
+  // quality first, and keep the first that actually serves bytes.
   for (const stream of streams.sort((a, b) => parseInt(b.label) - parseInt(a.label))) {
     for (const mirror of stream.mirrors || []) {
-      if (mirror.driver !== "mp4upload" || typeof mirror.link !== "string") continue;
+      if (typeof mirror.link !== "string") continue;
       let url: string;
       try { url = new URL(mirror.link, got.finalUrl).toString(); } catch { continue; }
-      if (!/(^|\.)mp4upload\.com$/i.test(new URL(url).hostname)) continue;
-      const resolved = await extractMp4upload(url).catch(() => null);
-      if (resolved && await probeMediaUrl(resolved.url, videoPlaybackHeaders(resolved.url, url, "mp4upload"))) return resolved;
+      const driver = String(mirror.driver || "").toLowerCase();
+      const host = new URL(url).hostname;
+      let resolved: { url: string; type: "hls" | "mp4" } | null = null;
+      let provider = classifyProvider(url);
+      if (driver === "mp4upload" && /(^|\.)mp4upload\.com$/i.test(host)) {
+        resolved = await extractMp4upload(url).catch(() => null);
+        provider = "mp4upload";
+      } else if (driver === "voe") {
+        resolved = await extractVoe(url).catch(() => null);
+      } else if (driver === "earnvids" || driver === "lulustream" || provider === "streamwish" || provider === "luluvdo") {
+        resolved = await extractPackedEmbed(url).catch(() => null);
+      }
+      if (resolved && await probeMediaUrl(resolved.url, videoPlaybackHeaders(resolved.url, url, provider))) return resolved;
     }
   }
   return null;
@@ -3186,7 +3326,14 @@ export function decodeVideaXml(body: string, key: string): string {
   return rc4Binary(b64ToBinary(body), key);
 }
 
-export function extractVideaXmlUrl(xml: string): string | null {
+// Android's ExoPlayer plays Videa's WebM/VP9 renditions natively, and they are
+// the ONLY ones above 240p (live 2026-10-21: 240p mp4, 480p/1080p webm). Only
+// iOS needs the portable MP4. Lazy require keeps this file importable in node.
+function playsWebm(): boolean {
+  try { return require("react-native").Platform.OS === "android"; } catch { return false; }
+}
+
+export function extractVideaXmlUrl(xml: string, allowWebm = false): string | null {
   const decoded = htmlDecode(xml).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1");
   const hashes = new Map<string, string>();
   for (const match of decoded.matchAll(/<hash_value_([^>\s]+)[^>]*>([^<]+)<\/hash_value_[^>]+>/gi)) {
@@ -3207,8 +3354,8 @@ export function extractVideaXmlUrl(xml: string): string | null {
       url,
       quality: Number((name.match(/\d+/) || [])[0]) || 0,
       // MP4/H.264 is native on both Android and iOS; Videa's higher WebM/VP9
-      // renditions are Android-only, so prefer the portable stream.
-      nativeScore: /video\/mp4/i.test(attr("mimetype")) ? 1 : 0,
+      // renditions are Android-only, so prefer the portable stream off Android.
+      nativeScore: allowWebm || /video\/mp4/i.test(attr("mimetype")) ? 1 : 0,
     });
   }
   sources.sort((a, b) => b.nativeScore - a.nativeScore || b.quality - a.quality);
@@ -3217,16 +3364,78 @@ export function extractVideaXmlUrl(xml: string): string | null {
 
 // streamwish family (streamwish/hlswish/wishembed/wishfast/…): the master
 // m3u8 lives in packed JS in the embed page's initial HTML.
-export async function extractStreamwish(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+// Packed-JS players (streamwish clones, earnvids, lulustream, streamruby): the
+// m3u8 sits in the embed page's static HTML. One page, no WebView.
+export async function extractPackedEmbed(embedUrl: string, referer?: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const got = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
-    if (got.blocked) return null;
+    const got = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000, referer);
+    if (got.blocked || got.dead) return null;
     const html = got.html;
     if (!html) continue;
     const url = extractFromPacked(html) || pickMediaUrl(html);
-    if (url) return { url, type: mediaType(url) };
     // Got a page but no URL — markup drift; retrying won't change it.
+    return url ? { url, type: mediaType(url) } : null;
+  }
+  return null;
+}
+
+// hgcloud/streamwish.to now serve a ~450-byte obfuscated JS loader that picks a
+// mirror in the browser, so the static page has no player. The same file id is
+// served with the packed player on these mirrors (verified live 2026-10-21).
+const STREAMWISH_MIRRORS = ["swdyu.com", "embedwish.com"];
+
+export async function extractStreamwish(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  const direct = await extractPackedEmbed(embedUrl);
+  if (direct || isKnownDeadEmbed(embedUrl)) return direct;
+  let path = "";
+  let host = "";
+  try { const u = new URL(embedUrl); path = u.pathname; host = u.hostname; } catch { return null; }
+  const id = path.match(/\/(?:e|v|f|embed)\/([a-z0-9]+)/i)?.[1];
+  if (!id) return null;
+  for (const mirror of STREAMWISH_MIRRORS) {
+    if (host === mirror) continue;
+    const r = await extractPackedEmbed(`https://${mirror}/e/${id}`);
+    if (r) return r;
+  }
+  return null;
+}
+
+// voe: the embed page JS-redirects to a rotating mirror, which carries the
+// sources in an obfuscated JSON blob (<script type="application/json">["…"]).
+// Decoding is the public voe scheme (same as yt-dlp/resolveurl): ROT13 → drop
+// junk markers → base64 → char-3 → reverse → base64 → JSON {source: m3u8}.
+export function decodeVoeBlob(enc: string): { source?: string; direct_access_url?: string } | null {
+  try {
+    let s = enc.replace(/[a-zA-Z]/g, (c) => {
+      const b = c <= "Z" ? 65 : 97;
+      return String.fromCharCode(((c.charCodeAt(0) - b + 13) % 26) + b);
+    });
+    for (const junk of ["@$", "^^", "~@", "%?", "*~", "!!", "#&"]) s = s.split(junk).join("");
+    s = Array.from(b64ToBinary(s), (c) => String.fromCharCode(c.charCodeAt(0) - 3)).join("");
+    s = s.split("").reverse().join("");
+    const bin = b64ToBinary(s);
+    // JSON may carry UTF-8 titles; decode bytes properly.
+    const json = decodeURIComponent(Array.from(bin, (c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join(""));
+    return JSON.parse(json);
+  } catch {
     return null;
+  }
+}
+
+export async function extractVoe(embedUrl: string): Promise<{ url: string; type: "hls" | "mp4" } | null> {
+  let url = embedUrl;
+  for (let hop = 0; hop < 3; hop++) {
+    const got = await fetchEmbed(url, 10000);
+    if (got.blocked || got.dead || !got.html) return null;
+    const blob = got.html.match(/<script type=["']application\/json["']>\s*\[\s*"([^"]+)"\s*\]\s*<\/script>/i)?.[1];
+    if (blob) {
+      const data = decodeVoeBlob(blob);
+      const src = data?.source;
+      return src && /^https?:\/\//.test(src) ? { url: src, type: mediaType(src) } : null;
+    }
+    const next = got.html.match(/window\.location\.href\s*=\s*['"](https?:\/\/[^'"]+)['"]/)?.[1];
+    if (!next) return null;
+    url = next;
   }
   return null;
 }
@@ -3255,7 +3464,7 @@ export async function extractVidea(embedUrl: string): Promise<{ url: string; typ
       const xs = response.headers.get("X-Videa-XS") || response.headers.get("x-videa-xs") || "";
       xml = decodeVideaXml(xml, request.keyPrefix + xs);
     }
-    const url = extractVideaXmlUrl(xml);
+    const url = extractVideaXmlUrl(xml, playsWebm());
     return url ? { url, type: mediaType(url) } : null;
   } catch {
     return null;
@@ -3277,7 +3486,7 @@ export async function extractVidea(embedUrl: string): Promise<{ url: string; typ
 export async function extractDoodstream(embedUrl: string): Promise<{ url: string; type: "mp4" } | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const got = await fetchEmbed(embedUrl, attempt === 0 ? 8000 : 15000);
-    if (got.blocked) return null;
+    if (got.blocked || got.dead) return null;
     const html = got.html;
     if (!html) continue;
     const m = html.match(/['"]([^'"]*\/pass_md5\/[^'"]+)['"]/);

@@ -6,7 +6,8 @@
 // Run:  npx tsx lib/scraper/embedExtract.test.ts
 
 import assert from "node:assert";
-import { extractVkUrl } from './direct';
+import { extractVkUrl, isDeadEmbedPage, decodeVoeBlob, anime4upMalPageMatches, tm_isMovie } from './direct';
+import { mergeVideoServers, episodeNumberFromUrl } from '../videoProviders';
 import { buildVideaXmlRequest, extractFromPacked, extractMp4uploadUrl, extractVideaXmlUrl, extractVideasUrl, isMp4uploadMediaUrl, looksLikeCfChallenge, parseA3rbGenres, parseA3rbSynopsis, parseAnime4upEpisodeTitles, parseAnime4upRecentHtml, parseAnime4upStreamUrl, parseAnime4upSubtitles, parseUp4Episodes, parseUp4Servers, parseWitAnimeSections, pickHighestHlsVariant, pickMediaUrl } from "./direct";
 
 let passed = 0, failed = 0;
@@ -154,6 +155,11 @@ test("Videa manifest request and signed source parse without a WebView", () => {
   assert.ok(request?.url.includes("/player/xml?v=abc123&_s=12345678&_t="));
   const xml = '<hash_values><hash_value_720>sig</hash_value_720></hash_values><video_sources><video_source name="720" exp="99">https://videa.hu/static/video.mp4</video_source></video_sources>';
   assert.equal(extractVideaXmlUrl(xml), "https://videa.hu/static/video.mp4?md5=sig&expires=99");
+  // Live shape: only 240p is MP4; Android takes the 1080p WebM, iOS the MP4.
+  const mixed = '<video_sources><video_source name="240p" mimetype="video/mp4">https://videa.hu/static/240p/a</video_source>' +
+    '<video_source name="1080p" mimetype="video/webm">https://videa.hu/static/1080p/a</video_source></video_sources>';
+  assert.equal(extractVideaXmlUrl(mixed), "https://videa.hu/static/240p/a");
+  assert.equal(extractVideaXmlUrl(mixed, true), "https://videa.hu/static/1080p/a");
 });
 
 test("current Anime4up HTML exposes private CDN and redirected DoodStream servers", () => {
@@ -337,6 +343,73 @@ test("anime3rb genres stay scoped to the anime, not the related-works cards (Re:
   // still reject a card-shaped capture.
   const drifted = `<a href="/genre/action">أكشن</a><span href="/genre/comedy">كوميدي</span><p class="badge">ربيع 2016 التقييم 6.92 11 حلقات</p><p class="synopsis">قصة مكررة.</p></a>`;
   assert.deepEqual(parseA3rbGenres(drifted), ["أكشن"]);
+});
+
+test("dead embed pages are recognised; live players never are", () => {
+  assert.equal(isDeadEmbedPage(404, ""), true);
+  assert.equal(isDeadEmbedPage(200, "File was deleted"), true);
+  assert.equal(isDeadEmbedPage(200, "<b>File is no longer available</b>"), true);
+  assert.equal(isDeadEmbedPage(200, "<h2>Video not found</h2>"), true);
+  // Live doodstream page: hidden error template + a real pass_md5 endpoint.
+  assert.equal(isDeadEmbedPage(200, "<h1>Not Found</h1><script>$.get('/pass_md5/1-2/abc')</script>"), false);
+  assert.equal(isDeadEmbedPage(200, "<script>eval(function(p,a,c,k,e,d){}('video not found'))</script>"), false);
+  assert.equal(isDeadEmbedPage(500, ""), false);
+});
+
+test("voe obfuscated source blob decodes to the stream", () => {
+  // Inverse of the decoder: JSON → b64 → reverse → +3 → b64 → junk → ROT13.
+  const b64 = (s: string) => Buffer.from(s, "latin1").toString("base64");
+  const json = JSON.stringify({ source: "https://cdn.example/engine/hls2/master.m3u8?t=x", title: "حلقة" });
+  let s = b64(Buffer.from(json, "utf8").toString("latin1"));
+  s = s.split("").reverse().join("");
+  s = Array.from(s, (c) => String.fromCharCode(c.charCodeAt(0) + 3)).join("");
+  s = b64(s);
+  s = s.slice(0, 4) + "@$" + s.slice(4, 9) + "^^" + s.slice(9);
+  s = s.replace(/[a-zA-Z]/g, (c) => { const b = c <= "Z" ? 65 : 97; return String.fromCharCode(((c.charCodeAt(0) - b + 13) % 26) + b); });
+  const out = decodeVoeBlob(s);
+  assert.equal(out?.source, "https://cdn.example/engine/hls2/master.m3u8?t=x");
+  assert.equal((out as any)?.title, "حلقة");
+  assert.equal(decodeVoeBlob("not-a-blob"), null);
+});
+
+test("anime4up MAL player pages must match the requested episode and season", () => {
+  const page = (title: string, stream = true) =>
+    `<title>${title}</title>` + (stream ? `<script>let streamUrl = "https://cdn1.x.shop/?token=a";</script>` : "");
+  assert.equal(anime4upMalPageMatches(page("Sousou no Frieren الحلقة 5"), 5, "Sousou no Frieren"), true);
+  assert.equal(anime4upMalPageMatches(page("Sousou no Frieren الحلقة 5"), 6, "Sousou no Frieren"), false);
+  assert.equal(anime4upMalPageMatches(page("Sousou no Frieren الحلقة 5"), 5, "Sousou no Frieren Season 2"), false);
+  assert.equal(anime4upMalPageMatches(page("Kikansha no Mahou wa Tokubetsu desu 2nd Season الحلقة 3"), 3, "Kikansha no Mahou wa Tokubetsu desu 2nd Season"), true);
+  assert.equal(anime4upMalPageMatches(page("Sousou no Frieren الحلقة 5", false), 5, "Sousou no Frieren"), false);
+  // A movie title never accepts the series' episode page, and vice versa.
+  const movie = "Kimetsu no Yaiba Movie: Mugen-jou-hen Daiisshou Akaza Sairai";
+  assert.equal(anime4upMalPageMatches(page("Kimetsu no Yaiba الحلقة 1"), 1, movie), false);
+  assert.equal(anime4upMalPageMatches(page("فيلم Kimetsu no Yaiba Movie 1: Mugenjou-hen &#8211; Akaza Sairai مترجم"), 1, movie), true);
+});
+
+test("movies: numberless URLs are episode 1, and never match their TV series", () => {
+  assert.equal(episodeNumberFromUrl("https://witanime.site/watch/movie/kimetsu-no-yaiba-movie-mugen-jou-hen-daiisshou-akaza-sairai"), 1);
+  assert.equal(episodeNumberFromUrl("https://witanime.site/watch/one-piece/1180"), 1180);
+  assert.equal(episodeNumberFromUrl("https://witanime.site/anime/one-piece"), null);
+  const eps = parseUp4Episodes(`<div class="anime-grid"><a href="https://w1.anime4up.rest/episode/%d9%81%d9%8a%d9%84%d9%85-kimetsu-movie-x/">x</a></div>`);
+  assert.equal(eps.length, 1);
+  assert.equal(eps[0].number, 1);
+  assert.equal(tm_isMovie("Kimetsu no Yaiba Movie: Mugen-jou-hen"), true);
+  assert.equal(tm_isMovie("Kimetsu no Yaiba"), false);
+  assert.equal(tm_isMovie("فيلم Kimetsu"), true);
+});
+
+test("the same MAL player on anime4up's rotating hosts is one server", () => {
+  const merged = mergeVideoServers([
+    [{ name: "anime4up1", provider: "anime4upcdn", iframeUrl: "https://4m.aotvx8s.shop/Anime4up-S1/mal/21/1180/sub/" }],
+    [{ name: "anime4up1", provider: "anime4upcdn", iframeUrl: "https://w1.anime4up.rest/Anime4up-S1/mal/21/1180/sub/" },
+     { name: "anime4up2", provider: "anime4upcdn", iframeUrl: "https://w1.anime4up.rest/Anime4up-S2/mal/21/1180/sub/" }],
+  ]);
+  assert.equal(merged.length, 2);
+});
+
+test("anime4up server attributes are entity-decoded (vk multi-param embeds)", () => {
+  const html = `<ul id="episode-servers"><li data-watch="https://vkvideo.ru/video_ext.php?oid=-1&amp;id=2&amp;hash=h"><a>vk</a></li></ul>`;
+  assert.equal(parseUp4Servers(html)[0].iframeUrl, "https://vkvideo.ru/video_ext.php?oid=-1&id=2&hash=h");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

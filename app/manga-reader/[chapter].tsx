@@ -140,6 +140,154 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+// Below 1× the page shrinks to show space around it; above, up to 5×.
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 5;
+
+/** Pan bound on one axis: the scaled overflow plus half a screen of slack, so
+ * the page edge can be dragged past the screen edge instead of hitting a wall. */
+function panLimit(scale: number, content: number, view: number): number {
+  "worklet";
+  return Math.max(0, (scale * content - view) / 2) + view / 2;
+}
+
+/** Pinch zoom anchored at the fingers + one-finger pan while zoomed. Shared by
+ * the paged pages and the continuous list. `panAxis: "x"` leaves vertical drags
+ * to the scrolling list underneath. */
+function useZoomGestures({
+  width,
+  height,
+  contentW,
+  contentH,
+  panAxis,
+  scrollGesture,
+  onInteract,
+  onZoomChange,
+}: {
+  width: number;
+  height: number;
+  contentW: number;
+  contentH: number;
+  panAxis: "x" | "both";
+  scrollGesture: unknown;
+  onInteract: () => void;
+  onZoomChange: (zoomed: boolean) => void;
+}) {
+  const scale = useSharedValue(1);
+  const tx = useSharedValue(0);
+  const ty = useSharedValue(0);
+  const pinchStart = useSharedValue({ scale: 1, x: 0, y: 0, fx: 0, fy: 0 });
+  const panStart = useSharedValue({ x: 0, y: 0, tx: 0, ty: 0 });
+  // Worklets read this synchronously (React state lags behind the UI thread).
+  const zoomFlag = useSharedValue(false);
+  const zoomedRef = useRef(false);
+
+  const setZoom = useCallback(
+    (on: boolean) => {
+      zoomedRef.current = on;
+      onZoomChange(on);
+    },
+    [onZoomChange],
+  );
+
+  const reset = useCallback(() => {
+    zoomFlag.value = false;
+    scale.value = withTiming(1);
+    tx.value = withTiming(0);
+    ty.value = withTiming(0);
+    if (zoomedRef.current) setZoom(false);
+  }, [scale, tx, ty, zoomFlag, setZoom]);
+
+  const pinch = useMemo(
+    () =>
+      Gesture.Pinch()
+        .blocksExternalGesture(scrollGesture as never)
+        .onStart((event) => {
+          pinchStart.value = { scale: scale.value, x: tx.value, y: ty.value, fx: event.focalX, fy: event.focalY };
+          runOnJS(onInteract)();
+        })
+        .onUpdate((event) => {
+          const start = pinchStart.value;
+          const next = clamp(start.scale * event.scale, MIN_ZOOM, MAX_ZOOM);
+          const k = next / start.scale;
+          scale.value = next;
+          // Keep the point under the fingers fixed (transform origin = center).
+          const limX = panLimit(next, contentW, width);
+          const limY = panLimit(next, contentH, height);
+          tx.value = clamp(event.focalX - width / 2 - k * (start.fx - width / 2 - start.x), -limX, limX);
+          ty.value = clamp(event.focalY - height / 2 - k * (start.fy - height / 2 - start.y), -limY, limY);
+          if (Math.abs(next - 1) > 0.05 && !zoomFlag.value) {
+            zoomFlag.value = true;
+            runOnJS(setZoom)(true);
+          }
+        })
+        .onEnd(() => {
+          // Released near 1× → snap back so list swiping works again.
+          if (Math.abs(scale.value - 1) <= 0.08) {
+            scale.value = withTiming(1);
+            tx.value = withTiming(0);
+            ty.value = withTiming(0);
+            if (zoomFlag.value) {
+              zoomFlag.value = false;
+              runOnJS(setZoom)(false);
+            }
+          } else if (!zoomFlag.value) {
+            zoomFlag.value = true;
+            runOnJS(setZoom)(true);
+          }
+        }),
+    [scrollGesture, pinchStart, scale, tx, ty, zoomFlag, setZoom, onInteract, contentW, contentH, width, height],
+  );
+
+  // Manual activation on the LIVE scale: at 1× the pan fails at once so the
+  // native list keeps its swipe; zoomed, it drags the content.
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .maxPointers(1)
+        .manualActivation(true)
+        .onTouchesDown((event) => {
+          const touch = event.allTouches[0];
+          if (touch) panStart.value = { ...panStart.value, x: touch.absoluteX, y: touch.absoluteY };
+        })
+        .onTouchesMove((event, state) => {
+          if (Math.abs(scale.value - 1) <= 0.01) {
+            state.fail();
+            return;
+          }
+          if (panAxis === "both") {
+            state.activate();
+            return;
+          }
+          const touch = event.allTouches[0];
+          if (!touch) return;
+          const dx = Math.abs(touch.absoluteX - panStart.value.x);
+          const dy = Math.abs(touch.absoluteY - panStart.value.y);
+          if (dx > 10 && dx > dy) state.activate();
+          else if (dy > 10) state.fail();
+        })
+        .onStart(() => {
+          panStart.value = { ...panStart.value, tx: tx.value, ty: ty.value };
+          runOnJS(onInteract)();
+        })
+        .onUpdate((event) => {
+          const limX = panLimit(scale.value, contentW, width);
+          tx.value = clamp(panStart.value.tx + event.translationX, -limX, limX);
+          if (panAxis === "both") {
+            const limY = panLimit(scale.value, contentH, height);
+            ty.value = clamp(panStart.value.ty + event.translationY, -limY, limY);
+          }
+        }),
+    [panAxis, panStart, scale, tx, ty, onInteract, contentW, contentH, width, height],
+  );
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: tx.value }, { translateY: ty.value }, { scale: scale.value }],
+  }));
+
+  return { pinch, pan, animatedStyle, reset };
+}
+
 async function loadReaderPrefs(): Promise<ReaderPrefs> {
   try {
     const raw = await AsyncStorage.getItem(PREFS_KEY);
@@ -711,6 +859,8 @@ export default function MangaReaderScreen() {
       {pages && prefsLoaded && progressReady ? (
         prefs.mode === "vertical" ? (
           <View style={s.listWrap} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+            <ZoomLayer width={width} height={height} scrollGesture={listNative} onInteract={hideChrome} onZoomChange={handleZoomChange}>
+            <GestureDetector gesture={listNative}>
             <FlatList
               key="manga-vertical"
               ref={verticalRef}
@@ -760,6 +910,8 @@ export default function MangaReaderScreen() {
               updateCellsBatchingPeriod={60}
               showsVerticalScrollIndicator={false}
             />
+            </GestureDetector>
+            </ZoomLayer>
           </View>
         ) : prefs.mode === "paged" ? (
           <GestureDetector gesture={listNative}>
@@ -1148,9 +1300,8 @@ export default function MangaReaderScreen() {
 
 // ── pages ────────────────────────────────────────────────────────────────────
 
-/** Zoomable full-screen page for the paged modes. Pinch (1×–4×), pan while
- * zoomed, tap zones; `blocksExternalGesture` keeps the native list scroll from
- * stealing the pinch on Android. No double-tap zoom — pinch only. */
+/** Zoomable full-screen page for the paged modes. Pinch (0.5×–5×), free pan
+ * while zoomed, tap zones. No double-tap zoom — pinch only. */
 const PagedPage = memo(function PagedPage({
   uri,
   page,
@@ -1180,40 +1331,10 @@ const PagedPage = memo(function PagedPage({
   onZoomChange: (zoomed: boolean) => void;
   onInteract: () => void;
 }) {
-  const scale = useSharedValue(1);
-  const baseScale = useSharedValue(1);
-  const tx = useSharedValue(0);
-  const ty = useSharedValue(0);
-  const baseX = useSharedValue(0);
-  const baseY = useSharedValue(0);
-  // Shared zoom flag: worklets read it synchronously, so a pan that starts the
-  // instant a pinch ends still knows the page is zoomed (React state lags).
-  const zoomFlag = useSharedValue(false);
-  const zoomedRef = useRef(false);
   const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? 1.5);
   const [naturalWidth, setNaturalWidth] = useState(() => naturalWidthCache.get(uri) ?? 0);
 
-  const setZoom = useCallback(
-    (on: boolean) => {
-      zoomFlag.value = on;
-      zoomedRef.current = on;
-      onZoomChange(on);
-    },
-    [onZoomChange, zoomFlag],
-  );
-
-  // Leaving the page always resets its transform — no sticky zoom.
-  useEffect(() => {
-    if (active) return;
-    zoomFlag.value = false;
-    scale.value = withTiming(1);
-    tx.value = withTiming(0);
-    ty.value = withTiming(0);
-    if (zoomedRef.current) setZoom(false);
-  }, [active, scale, tx, ty, setZoom, zoomFlag]);
-
-  // Fitted (visible) image box at scale 1 — pan/zoom clamps use it so the
-  // artwork can never be dragged into the letterbox void.
+  // Fitted (visible) image box at scale 1 — the pan bounds are measured from it.
   const fitted = useMemo(() => {
     if (fit === "stretch") return { dw: width, dh: height };
     const r = ratio;
@@ -1226,71 +1347,21 @@ const PagedPage = memo(function PagedPage({
     return { dw, dh };
   }, [ratio, width, height, fit]);
 
+  const { pinch, pan, animatedStyle, reset } = useZoomGestures({
+    width,
+    height,
+    contentW: fitted.dw,
+    contentH: fitted.dh,
+    panAxis: "both",
+    scrollGesture,
+    onInteract,
+    onZoomChange,
+  });
 
-  // Pinch = the ONLY zoom input (1×–4×). `blocksExternalGesture` keeps the
-  // native list from stealing the two-finger gesture on Android; the zoom flag
-  // flips as soon as the scale crosses 1.05 so the list disables mid-pinch.
-  const pinch = useMemo(
-    () =>
-      Gesture.Pinch()
-        .blocksExternalGesture(scrollGesture as never)
-        .onStart(() => {
-          baseScale.value = scale.value;
-          runOnJS(onInteract)();
-        })
-        .onUpdate((event) => {
-          scale.value = clamp(baseScale.value * event.scale, 1, 4);
-          const maxX = Math.max(0, (scale.value * fitted.dw - width) / 2);
-          const maxY = Math.max(0, (scale.value * fitted.dh - height) / 2);
-          tx.value = clamp(tx.value, -maxX, maxX);
-          ty.value = clamp(ty.value, -maxY, maxY);
-          if (scale.value > 1.05 && !zoomFlag.value) {
-            zoomFlag.value = true;
-            runOnJS(setZoom)(true);
-          }
-        })
-        .onEnd(() => {
-          // Read the shared flag, never the React ref — refs are captured at
-          // gesture creation and go stale on the UI thread (zoom-out would
-          // latch scrollEnabled=false).
-          if (scale.value <= 1.05) {
-            scale.value = withTiming(1);
-            tx.value = withTiming(0);
-            ty.value = withTiming(0);
-            if (zoomFlag.value) runOnJS(setZoom)(false);
-          } else if (!zoomFlag.value) {
-            runOnJS(setZoom)(true);
-          }
-        }),
-    [baseScale, scale, tx, ty, setZoom, scrollGesture, zoomFlag, onInteract, fitted, width, height],
-  );
-
-  // One-finger pan. Manual activation gates it on the LIVE zoom flag instead of
-  // React state: when the page is at 1× the gesture fails on the first move so
-  // the native list still swipes pages; when zoomed it activates and drags the
-  // artwork. `.maxPointers(1)` keeps two-finger input for the pinch alone.
-  const pan = useMemo(
-    () =>
-      Gesture.Pan()
-        .maxPointers(1)
-        .manualActivation(true)
-        .onTouchesMove((_event, state) => {
-          if (scale.value > 1.01) state.activate();
-          else state.fail();
-        })
-        .onStart(() => {
-          baseX.value = tx.value;
-          baseY.value = ty.value;
-          runOnJS(onInteract)();
-        })
-        .onUpdate((event) => {
-          const maxX = Math.max(0, (scale.value * fitted.dw - width) / 2);
-          const maxY = Math.max(0, (scale.value * fitted.dh - height) / 2);
-          tx.value = clamp(baseX.value + event.translationX, -maxX, maxX);
-          ty.value = clamp(baseY.value + event.translationY, -maxY, maxY);
-        }),
-    [fitted, width, height, baseX, baseY, scale, tx, ty, onInteract],
-  );
+  // Leaving the page always resets its transform — no sticky zoom.
+  useEffect(() => {
+    if (!active) reset();
+  }, [active, reset]);
 
   const singleTap = useMemo(
     () =>
@@ -1311,15 +1382,10 @@ const PagedPage = memo(function PagedPage({
         }),
     [axis, width, height, onTapZone],
   );
-
   const composed = useMemo(
     () => Gesture.Simultaneous(pinch, pan, singleTap),
     [pinch, pan, singleTap],
   );
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: tx.value }, { translateY: ty.value }, { scale: scale.value }],
-  }));
 
   return (
     <GestureDetector gesture={composed}>
@@ -1342,6 +1408,25 @@ const PagedPage = memo(function PagedPage({
     </GestureDetector>
   );
 });
+
+/** Continuous-mode zoom: pinch scales the whole scrolling strip, horizontal
+ * drags pan it, vertical drags still scroll the list underneath. */
+function ZoomLayer({ width, height, scrollGesture, onInteract, onZoomChange, children }: {
+  width: number; height: number; scrollGesture: unknown; onInteract: () => void;
+  onZoomChange: (zoomed: boolean) => void; children: ReactNode;
+}) {
+  const { pinch, pan, animatedStyle } = useZoomGestures({
+    width, height, contentW: width, contentH: height, panAxis: "x", scrollGesture, onInteract, onZoomChange,
+  });
+  const gesture = useMemo(() => Gesture.Simultaneous(pinch, pan), [pinch, pan]);
+  return (
+    <GestureDetector gesture={gesture}>
+      <View style={s.zoomLayer} collapsable={false}>
+        <Animated.View style={[MANGA_FILL, animatedStyle]}>{children}</Animated.View>
+      </View>
+    </GestureDetector>
+  );
+}
 
 /** Continuous-mode page. Intrinsic size comes from the <Image>'s own onLoad
  * event (no `useImage` — holding a decoded full-res ref per windowed cell is
@@ -1513,6 +1598,7 @@ function ChoiceChip({ label, active, onPress, icon }: { label: string; active: b
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: M.night },
   listWrap: { flex: 1 },
+  zoomLayer: { flex: 1, overflow: "hidden" },
   loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14 },
   loadingText: { ...MT.body, color: M.nightMuted },
   topBar: { position: "absolute", top: 0, left: 0, right: 0, flexDirection: "row-reverse", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: M.night },

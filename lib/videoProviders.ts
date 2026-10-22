@@ -46,7 +46,11 @@ export function episodeNumberFromUrl(raw: string): number | null {
   let decoded = raw;
   try { decoded = decodeURIComponent(raw); } catch {}
   const match = decoded.match(/الحلقة[\s_-]*(\d+)/) || decoded.match(/\/(?:episode|watch)\/[^/]+\/(\d+)(?:\/|$)/i);
-  return match ? parseInt(match[1], 10) : null;
+  if (match) return parseInt(match[1], 10);
+  // Movies carry no number (witanime /watch/movie/<slug>, anime4up
+  // /episode/فيلم-<slug>/) but are episode 1 on every other source — without
+  // this, the anime3rb + MAL lookups were skipped for every movie.
+  return /\/watch\/movie\/|\/movie\/|\/episode\/فيلم-/i.test(decoded) ? 1 : null;
 }
 
 export function anime4upEpisodeUrl(title: string, episodeNumber: number): string | null {
@@ -264,6 +268,10 @@ export function normalizeServerUrl(raw: string): string {
     const url = new URL(value.startsWith("//") ? `https:${value}` : value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return "";
     if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+    // anime4up's MAL-addressed players are linked on rotating hosts that all
+    // redirect to w1.anime4up.rest — one canonical URL, so every merge (lists
+    // AND the watch screen's iframeUrl map) sees the same server once.
+    if (/^\/anime4up-s\d+\/mal\/\d+\/\d+(?:\/|$)/i.test(url.pathname)) url.host = "w1.anime4up.rest";
     return url.toString();
   } catch {
     return "";

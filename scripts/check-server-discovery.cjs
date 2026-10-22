@@ -64,6 +64,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
     scrapeAnime4upEpisodePageDirect: async () => ({ ...payload('anime4up').data }),
     resolveUp4EpisodeUrl: async () => href('anime4up'),
     fetchAnime3rbServersByUrl: async () => [server('anime3rb')],
+    fetchAnime4upServersByMal: async () => [], isKnownDeadEmbed: () => false,
     fetchAnime3rbServers: async (title) => { events.push('a3rb-title:' + title); return [server('anime3rb')]; },
     resolveDirectServerList: async (servers, _timeout, _fresh, callback) => {
       if (lateUp4) await new Promise((r) => setTimeout(r, 50));
@@ -225,7 +226,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
   let picked = false;
   const selection = vm.createContext({
     useCallback: (fn) => fn, loadGenerationRef: { current: guard },
-    _cancelBackground: () => {}, selectServer: (idx) => { selected = idx; },
+    _cancelBackground: () => {}, stopPrefetch: () => {}, selectServer: (idx) => { selected = idx; },
     setPicked: (value) => { picked = value; }, setNoServersFinal: () => {},
   });
   vm.runInContext(ts.transpileModule('const ' + pick + '; pickServer(0);', {

@@ -71,32 +71,48 @@ export async function prefetchNextEpisode(opts: {
     if (!result.success || !result.data?.videoUrl) return;
     if (shouldRun && !shouldRun()) return;
 
-    const videoUrl = result.data.videoUrl;
-    stopPrefetch();
-
-    const source = {
-      uri: videoUrl,
-      headers: videoPlaybackHeaders(videoUrl, pick.iframeUrl, "vid3rb"),
-      contentType: videoContentType(videoUrl, "vid3rb"),
-      useCaching: true,
-    };
-    const player = createVideoPlayer(source);
-    const timer = setTimeout(() => stopPrefetch(), PREFETCH_MAX_MS);
-    active = { key, player, timer };
-
-    try {
-      player.muted = true;
-      player.bufferOptions = {
-        preferredForwardBufferDuration: PREFETCH_BUFFER_SECONDS,
-        prioritizeTimeOverSizeThreshold: true,
-      };
-      player.play();
-    } catch {
-      stopPrefetch();
-    }
+    startHiddenBuffer(key, result.data.videoUrl, pick.iframeUrl, "vid3rb");
   } catch {
     // Best-effort: prefetch failures must never surface anywhere.
   }
+}
+
+function startHiddenBuffer(key: string, videoUrl: string, iframeUrl: string, provider: string): void {
+  stopPrefetch();
+  const source = {
+    uri: videoUrl,
+    headers: videoPlaybackHeaders(videoUrl, iframeUrl, provider),
+    contentType: videoContentType(videoUrl, provider),
+    useCaching: true,
+  };
+  const player = createVideoPlayer(source);
+  const timer = setTimeout(() => stopPrefetch(), PREFETCH_MAX_MS);
+  active = { key, player, timer };
+  try {
+    player.muted = true;
+    player.bufferOptions = {
+      preferredForwardBufferDuration: PREFETCH_BUFFER_SECONDS,
+      prioritizeTimeOverSizeThreshold: true,
+    };
+    player.play();
+  } catch {
+    stopPrefetch();
+  }
+}
+
+/**
+ * Warm an already-resolved stream (the server picker's top anime3rb entry)
+ * into the disk cache while the user is still choosing. Long movies carry a
+ * ~9 MB MP4 index that must download before the first frame on vid3rb's
+ * ~0.9 MB/s per-file throttle; caching it here makes the tap start at once.
+ * Callers MUST stopPrefetch() before real playback: the CDN answers 503 to a
+ * second concurrent connection on the same file.
+ */
+export async function prefetchStream(videoUrl: string, iframeUrl: string, provider: string): Promise<void> {
+  if (!videoUrl || active?.key === videoUrl) return;
+  const gen = ++generation;
+  if (!(await getPrefetchNext()) || gen !== generation) return;
+  startHiddenBuffer(videoUrl, videoUrl, iframeUrl, provider);
 }
 
 // Backgrounding must never keep the hidden player downloading: it has no

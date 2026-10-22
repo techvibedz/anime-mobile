@@ -46,6 +46,11 @@ import {
   extractVk,
   extractShare4max,
   extractDoodstream,
+  extractVoe,
+  extractPackedEmbed,
+  isKnownDeadEmbed,
+  probeEmbedDead,
+  fetchAnime4upMalPlayer,
   fetchAnime4upRecentPageDirect,
   fetchWitHomeDirect,
   fetchAnime4upHomeDirect,
@@ -57,7 +62,7 @@ import {
   type WitCard,
   type MediaSubtitle,
 } from "./scraper/direct";
-import { getAltTitles, getAnimeYearType } from "./animeInfo";
+import { getAltTitles, getAnimeYearType, getMalId } from "./animeInfo";
 import { fuzzyScore, normFuzzy, sourceSearchQueries, wordSearchFallbacks } from "./fuzzy";
 import { identifySource, type SourceId } from "./scraper/sourceDomains";
 import { readCloudMetadata, writeCloudMetadata } from "./metadataCache";
@@ -106,7 +111,9 @@ const HOME_SERVE_TTL = 24 * 60 * 60 * 1000; // 24 h
 // by the page-wide /genre/ match) — the prefix bump purges them on next run.
 const DETAIL_CACHE_PREFIX = "@detail_v3:";
 const DETAIL_CACHE_TTL = 30 * 60 * 1000; // 30 min
-const UP4_CACHE_PREFIX = "@up4_eps_v2:";
+// v3/v2/v2 (2026-10-21): movies were matched to their TV series (Kimetsu no
+// Yaiba movie → TV episode 1); discard those persisted cross-source mappings.
+const UP4_CACHE_PREFIX = "@up4_eps_v3:";
 const UP4_CACHE_TTL = 24 * 60 * 60 * 1000; // stable source URLs; episode lists revalidate
 const SEARCH_CACHE_PREFIX = "@search_v4:";
 const SEARCH_CACHE_TTL = 15 * 60 * 1000; // 15 min
@@ -116,13 +123,15 @@ const LISTING_CACHE_TTL = 30 * 60 * 1000; // 30 min
 // pre-v10 per-page caches (anime4up archive order) are discarded.
 const RECENT_CACHE_PREFIX = "@recent_v10:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
-const SERVERS_CACHE_PREFIX = "@servers_v8:";
+// v9: lists built before the witanime handshake/gate fixes could carry a junk
+// "witanime.site/" target (a 404 gate parsed as a server) and miss mirrors.
+const SERVERS_CACHE_PREFIX = "@servers_v9:";
 // Resolved Witanime ANIME pages per source title (see fetchCompleteVideoServers).
 // Remembers what a free-text search resolved to so later episodes of the same
 // anime skip the site's rate-limited /search and only fetch the anime page.
 const WIT_ANIME_CACHE_PREFIX = "@wit_anime_v1:";
 const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
-const XSOURCE_CACHE_KEY = "@xsource_v1";
+const XSOURCE_CACHE_KEY = "@xsource_v2";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
 const completeVideoServerRequests = createRequestCache<VideoServersPayload>(30_000);
 const videoResolutionRequests = createRequestCache<ResolveVideoResult>(90_000);
@@ -965,7 +974,11 @@ export function findAnime4upAnimeUrl(title: string): Promise<string | null> {
 // caching a null for 24h would permanently block retries), and successes are
 // persisted so revisits after an app restart skip the search + list fetches.
 const up4EpUrlCache = new Map<string, { url: string; ts: number }>();
-const UP4_EP_URL_PREFIX = "@up4_ep_url_v1:";
+const UP4_EP_URL_PREFIX = "@up4_ep_url_v2:";
+// Resolved anime page per title (session) so later episodes skip the search,
+// and titles whose alt-name bridge already ran (it costs Jikan + searches).
+const up4AnimeByTitle = new Map<string, string>();
+const up4BridgeTried = new Set<string>();
 export async function resolveUp4EpisodeUrl(animeTitle: string, epNumber: number): Promise<string | null> {
   if (!animeTitle || epNumber == null) return null;
   const key = `${animeTitle.toLowerCase().trim()}#${epNumber}`;
@@ -973,15 +986,35 @@ export async function resolveUp4EpisodeUrl(animeTitle: string, epNumber: number)
   if (hit && Date.now() - hit.ts < UP4_CACHE_TTL) return hit.url;
   const stored = await readCache<string>(UP4_EP_URL_PREFIX + key, UP4_CACHE_TTL);
   if (stored) { up4EpUrlCache.set(key, { url: stored, ts: Date.now() }); return stored; }
-  let animeUrl: string | null = null;
-  for (const v of searchVariants(animeTitle)) {
+  const titleKey = animeTitle.toLowerCase().trim();
+  let animeUrl: string | null = up4AnimeByTitle.get(titleKey) || null;
+  for (const v of animeUrl ? [] : searchVariants(animeTitle)) {
     try {
       // Score against the full title so season disambiguation survives.
       animeUrl = await searchAnime4upDirect(v, animeTitle);
     } catch { animeUrl = null; }
     if (animeUrl) break;
   }
+  if (!animeUrl && !up4BridgeTried.has(titleKey)) {
+    // anime4up indexed it under another name (English vs romaji, a different
+    // romanization). Retry with every Latin name MAL knows, re-attaching the
+    // season so "X Season 2" can't land on season 1's page.
+    up4BridgeTried.add(titleKey);
+    const season = tm_seasonNum(animeTitle);
+    const alts = await withTimeout(getAltTitles(animeTitle), 15_000, []).catch(() => [] as string[]);
+    for (const alt of alts) {
+      if (!/[a-z]/i.test(alt)) continue;
+      const altTitle = season >= 2 && tm_seasonNum(alt) !== season ? `${alt} Season ${season}` : alt;
+      if (altTitle.toLowerCase().trim() === titleKey) continue;
+      for (const v of searchVariants(altTitle).slice(0, 3)) {
+        animeUrl = await searchAnime4upDirect(v, altTitle).catch(() => null);
+        if (animeUrl) break;
+      }
+      if (animeUrl) break;
+    }
+  }
   if (!animeUrl) return null;
+  up4AnimeByTitle.set(titleKey, animeUrl);
   let url: string | null = null;
   try {
     url = await findUp4EpisodeAcrossPages(animeUrl, epNumber);
@@ -991,6 +1024,38 @@ export async function resolveUp4EpisodeUrl(animeTitle: string, epNumber: number)
     void writeCache(UP4_EP_URL_PREFIX + key, url);
   }
   return url;
+}
+
+// MAL id per title, persisted: one Jikan lookup per anime instead of per
+// episode. Only hits are stored — a miss is usually Jikan rate-limiting.
+const MAL_ID_PREFIX = "@mal_id_v1:";
+const malIdMem = new Map<string, Promise<number | null>>();
+function cachedMalId(title: string): Promise<number | null> {
+  const key = title.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!key || !/[a-z]/i.test(key)) return Promise.resolve(null);
+  if (!malIdMem.has(key)) {
+    malIdMem.set(key, (async () => {
+      const stored = await readCache<number>(MAL_ID_PREFIX + key, 30 * 24 * 60 * 60 * 1000);
+      if (stored) return stored;
+      const id = await withTimeout(getMalId(title), 15_000, null).catch(() => null);
+      if (id) void writeCache(MAL_ID_PREFIX + key, id);
+      else malIdMem.delete(key);
+      return id;
+    })());
+  }
+  return malIdMem.get(key)!;
+}
+
+// anime4up's MAL-addressed HLS players for an episode (see
+// fetchAnime4upMalPlayer). Title-independent, so it works even when anime4up
+// lists the anime under a name no title search would match.
+async function fetchAnime4upServersByMal(titles: string[], episode: number): Promise<RawServer[]> {
+  for (const title of titles) {
+    const malId = await cachedMalId(title);
+    if (!malId) continue;
+    return fetchAnime4upMalPlayer(malId, episode, title).catch(() => []);
+  }
+  return [];
 }
 
 // ── anime3rb (third server source) ──
@@ -1610,9 +1675,11 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     // Surface whichever source answers first. The complete merge still runs
     // below, but a blocked primary must not hide a ready sibling for 45s.
     const emitEarly = (
-      servers: (VideoServer & { source?: string })[],
+      raw: (VideoServer & { source?: string })[],
       metadata: VideoServersPayload | null,
     ) => {
+      // Canonical URLs before the screen sees them — its merge keys on iframeUrl.
+      const servers = mergeVideoServers([raw]);
       if (servers.length === 0) return;
       for (const server of servers) discovered.set(server.iframeUrl, [server]);
       warm({ success: true, data: { episodeTitle: metadata?.data.episodeTitle || "", animeTitle: initialTitle || metadata?.data.animeTitle || "", animeHref: options.animeHref || "", servers, serverCount: servers.length, navigation: { prev: null, next: null } } });
@@ -1639,6 +1706,15 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     });
     if (a3rbPromise) void a3rbPromise.then((servers) => {
       emitEarly(servers.map((server) => ({ ...server, source: "anime3rb" })), null);
+    });
+    // anime4up by MAL id — independent of how any site spells the title.
+    const malTitles = [initialTitle, titleFromSlug(options.animeHref || "")]
+      .filter((title, index, all) => title && all.indexOf(title) === index);
+    const malPromise: Promise<RawServer[]> = episodeNumber != null && malTitles.length
+      ? fetchAnime4upServersByMal(malTitles, episodeNumber)
+      : Promise.resolve([]);
+    void malPromise.then((servers) => {
+      emitEarly(servers.map((server) => ({ ...server, source: "anime4up" })), null);
     });
 
     const primary = await withTimeout(primaryPromise, discoveryDeadline - Date.now(), null);
@@ -1725,10 +1801,11 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     // slot available for cross-source discovery instead of saturating the pool.
     if (primary) warm(primary);
     const remaining = Math.max(0, discoveryDeadline - Date.now());
-    const [up4, a3rb, wit] = await Promise.all([
+    const [up4, a3rb, wit, mal] = await Promise.all([
       withTimeout(observedUp4, remaining, null),
       withTimeout(observedA3rb, remaining, [] as RawServer[]),
       withTimeout(observedWit, remaining, null),
+      withTimeout(malPromise, remaining, [] as RawServer[]),
     ]);
     const a3rbServers: (VideoServer & { source?: string })[] = a3rb.map((server) => ({
       ...server,
@@ -1740,6 +1817,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       wit?.data.servers || [],
       up4?.data.servers || [],
       a3rbServers,
+      mal.map((server) => ({ ...server, source: "anime4up" })),
     ]);
     const metadata = primary || wit || up4;
     const playable = await resolveDirectServerList(
@@ -1749,7 +1827,9 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       (playable) => emit(playable, metadata),
     );
     // A fallback can finish during media resolution, after the lookup cutoff.
-    const servers = mergePlayableServers(mergeVideoServers([candidates, ...discovered.values()]), playable);
+    // Uploads proven deleted during validation never reach the picker.
+    const servers = mergePlayableServers(mergeVideoServers([candidates, ...discovered.values()]), playable)
+      .filter((server) => !isKnownDeadEmbed(server.iframeUrl));
     return {
       success: servers.length > 0,
       data: {
@@ -2145,7 +2225,29 @@ async function resolveVideoFresh(iframeUrl: string, provider: string, priority: 
     const resolved = success(r);
     if (resolved) return resolved;
   }
+  if (provider === "voe") {
+    const r = await extractVoe(iframeUrl).catch(() => null);
+    const resolved = success(r);
+    if (resolved) return resolved;
+  }
+  if (provider === "luluvdo" || provider === "streamruby") {
+    const r = await extractPackedEmbed(iframeUrl).catch(() => null);
+    const resolved = success(r);
+    if (resolved) return resolved;
+  }
   if (policy.resolution === "direct") return { success: false, error: `Could not extract ${provider} video URL` };
+  // A deleted upload must fail in a second, not after the 40s WebView scrape —
+  // that wait was most of the "server stuck loading" reports in device logs.
+  // Providers with a direct extractor already fetched the page above (and
+  // recorded a dead one); only the WebView-only ones need the extra probe.
+  const fetchedAbove = ["mp4upload", "streamwish", "videas", "videa", "vk", "share4max", "doodstream", "voe", "luluvdo", "streamruby"].includes(provider);
+  if (isKnownDeadEmbed(iframeUrl) || (!fetchedAbove && await probeEmbedDead(iframeUrl).catch(() => false))) {
+    return { success: false, error: "dead-embed" };
+  }
+  // Background validation never borrows a WebView: those slots belong to source
+  // discovery and to the server the user actually picked. WebView-only mirrors
+  // stay listed and resolve in the foreground when chosen.
+  if (!priority) return { success: false, error: "needs-webview" };
   try {
     const r = await scrapeExtractVideoUrl(iframeUrl, priority);
     if (!validateMediaUrl(r.url, provider)) return { success: false, error: `${provider} returned an invalid media URL` };

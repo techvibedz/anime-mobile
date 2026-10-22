@@ -648,9 +648,14 @@ const REL_CACHE_PREFIX = "@anime_relations_v8:";
 // in the wild (429 rate-limit, 5xx). Returns parsed JSON or null.
 async function anilistPost(query: string, variables: Record<string, unknown>): Promise<any | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
+    // Capped: this sits on the anime3rb server lookup path, and an AniList that
+    // hangs (instead of its current fast 403) must not stall the watch screen.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
       const res = await fetch("https://graphql.anilist.co", {
         method: "POST",
+        signal: controller.signal,
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ query, variables }),
       });
@@ -661,7 +666,10 @@ async function anilistPost(query: string, variables: Record<string, unknown>): P
       if (!res.ok) return null;
       return await res.json();
     } catch {
+      if (controller.signal.aborted) return null; // hung, not flaky — don't wait 3×
       await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    } finally {
+      clearTimeout(timer);
     }
   }
   return null;
@@ -703,6 +711,15 @@ async function getMalMatch(title: string): Promise<{ malId: number | null; title
   } catch {
     return empty;
   }
+}
+
+/** Season-aware MAL id for a title (null on miss). MAL's own prefix search
+ * first (~1s, and it kept answering while Jikan hung and AniList returned 403
+ * on 2026-10-21); Jikan as the fallback. Both pick via pickMalCandidate. */
+export async function getMalId(title: string): Promise<number | null> {
+  const prefix = await fetchMalPrefix(title).catch(() => null);
+  if (prefix?.id) return prefix.id;
+  return (await getMalMatch(title)).malId;
 }
 
 const relMem = new Map<string, RelatedAnimeEntry[]>();

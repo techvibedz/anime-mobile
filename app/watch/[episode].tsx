@@ -30,7 +30,7 @@ import {
   sleepMinutesLeft,
 } from "../../lib/playerExtras";
 import { askCompanion } from "../../lib/companion";
-import { prefetchNextEpisode, stopPrefetch } from "../../lib/prefetch";
+import { prefetchNextEpisode, prefetchStream, stopPrefetch } from "../../lib/prefetch";
 import { seasonNum, slugToTitle } from "../../lib/relations";
 import { saveProgress, getProgress } from "../../lib/history";
 import { recordEpisodeWatched } from "../../lib/completion";
@@ -59,6 +59,7 @@ import {
 } from "../../lib/videoProviders";
 import { _cancelBackground } from "../../lib/scraper/bus";
 import { isTopLevelWebViewError } from "../../lib/scraper/sourceDomains";
+import { isKnownDeadEmbed } from "../../lib/scraper/direct";
 import { cueAt, parseVtt, type SubtitleCue } from "../../lib/subtitles";
 import { remoteLog } from "../../lib/remoteLog";
 
@@ -81,6 +82,9 @@ const localServer = (videoUrl: string): ServerState => ({
 // Where a server should land when direct resolution is exhausted.
 const failStatus = (provider?: string): ServerStatus =>
   providerFailureMode(provider) as ServerStatus;
+
+// Servers that can only play as a WebView embed (no native media URL).
+const isEmbedOnly = (s: ServerState) => failStatus(s.server.provider) === "webview";
 
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 0.75];
 
@@ -779,7 +783,10 @@ export default function WatchScreen() {
       const srv = servers[idx]?.server;
       const embedUrl = getIframeUrl(srv);
       const attempts = retryCountRef.current[idx] ?? 0;
-      if (!srv || !embedUrl || attempts >= 3) { fail(); return; }
+      // A source that never produced a frame gets ONE fresh re-resolve, then the
+      // next server — three rounds of a dead edge kept users on a spinner for a
+      // minute. Mid-watch blips keep three in-place recoveries.
+      if (!srv || !embedUrl || attempts >= (hasStarted ? 3 : 1)) { fail(); return; }
       retryCountRef.current[idx] = attempts + 1;
       const seekTo = lastPosMs;
       const playerError = String((player as any)?.error?.message || (player as any)?.error || "")
@@ -874,6 +881,11 @@ export default function WatchScreen() {
       if (waitingForHostRef.current) { graceUntil = Date.now() + failMs; return; }
       if (Date.now() < graceUntil) return;
       try {
+        // Keep waiting while the player is loading. bufferedPosition is NOT a
+        // usable progress signal here: a long movie's MP4 index (moov) is ~9 MB
+        // on vid3rb's throttled CDN (~0.9 MB/s per file, parallel ranges 503),
+        // and bufferedPosition stays 0 until it is fully downloaded — gating on
+        // it killed healthy movie starts at 14s and restarted them from zero.
         if ((player.status as string) === "loading" && loadingExtensions < 3) {
           loadingExtensions += 1;
           graceUntil = Date.now() + 8000;
@@ -1457,7 +1469,14 @@ export default function WatchScreen() {
     if (servers.length === 0) return;
     const state = servers[activeIdx];
     if (state?.status !== "failed") return;
-    const next = servers.findIndex((s, i) => i !== activeIdx && (s.status === "idle" || s.status === "playing" || s.status === "webview"));
+    // Prefer a server already verified playable, then any untried one; never a
+    // known-dead upload.
+    const usable = (s: ServerState, i: number) => i !== activeIdx &&
+      (s.status === "idle" || s.status === "playing" || s.status === "webview") &&
+      !isKnownDeadEmbed(getIframeUrl(s.server));
+    let next = servers.findIndex((s, i) => usable(s, i) && !!s.videoUrl);
+    if (next === -1) next = servers.findIndex((s, i) => usable(s, i) && !isEmbedOnly(s));
+    if (next === -1) next = servers.findIndex(usable);
     if (next !== -1) {
       prepareServerHandoff();
       setActiveIdx(next);
@@ -1478,6 +1497,9 @@ export default function WatchScreen() {
 
   // Pick a server from the selection layout → resolve + play it directly.
   const pickServer = useCallback((idx: number) => {
+    // Release the picker's warm-up download first — vid3rb answers 503 to a
+    // second concurrent connection, and the cached bytes are what we want.
+    stopPrefetch();
     _cancelBackground();
     selectServer(idx);
     setPicked(true);
@@ -1486,13 +1508,23 @@ export default function WatchScreen() {
   // Servers ordered for the selection layout: anime3rb (recommended) first,
   // then by quality FHD → HD → SD, with provider rank as a final tiebreak.
   // `orig` keeps the index into `servers` so a tap maps back to the right one.
-  const orderedServers = useMemo(() =>
-    servers
+  const orderedServers = useMemo(() => {
+    const live = (s: ServerState) => !isKnownDeadEmbed(getIframeUrl(s.server));
+    // Embed-only (WebView) servers are a last resort: offered only when no
+    // native-player server exists for this episode.
+    const hasNative = servers.some((s) => live(s) && !isEmbedOnly(s));
+    return servers
       .map((s, orig) => ({ s, orig }))
+      // Deleted uploads (proven dead during validation) are never offered.
+      .filter(({ s }) => live(s) && (!hasNative || !isEmbedOnly(s)))
       .sort((a, b) => {
         const ra = a.s.server.source === "anime3rb" ? 0 : 1;
         const rb = b.s.server.source === "anime3rb" ? 0 : 1;
         if (ra !== rb) return ra - rb;
+        // Already verified playable (media URL in hand) → starts instantly.
+        const va = a.s.videoUrl ? 0 : 1;
+        const vb = b.s.videoUrl ? 0 : 1;
+        if (va !== vb) return va - vb;
         // Anime3rb remains first with its manually selectable quality entries.
         // Among alternate providers, surface HLS/ABR before fixed mirrors.
         const aa = providerSupportsAdaptivePlayback(a.s.server.provider);
@@ -1504,8 +1536,19 @@ export default function WatchScreen() {
         const pa = providerRank(a.s.server.provider);
         const pb = providerRank(b.s.server.provider);
         return pa - pb;
-      }),
-    [servers]);
+      });
+  }, [servers]);
+
+  // While the picker is open, warm the recommended (top anime3rb) stream into
+  // the disk cache so tapping it starts at once — a long movie's MP4 index
+  // alone is ~9 MB on vid3rb's throttled CDN.
+  const warmPickUrl = !picked
+    ? orderedServers.find(({ s }) => s.server.source === "anime3rb" && s.videoUrl)?.s
+    : undefined;
+  useEffect(() => {
+    if (!warmPickUrl?.videoUrl || !focusedRef.current) return;
+    void prefetchStream(warmPickUrl.videoUrl, getIframeUrl(warmPickUrl.server), warmPickUrl.server.provider);
+  }, [warmPickUrl?.videoUrl]);
 
   // Skip +/- 10s
   const skipBack = useCallback(() => {

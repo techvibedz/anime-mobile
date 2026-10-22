@@ -1,4 +1,6 @@
-// Mangalik (مانجا ليك) manga source adapter — https://mangalik.net
+// Mangalik (مانجا ليك) manga source adapter — https://lekmanga.site
+// (moved from mangalik.net 2026-10-22: the old domain now serves an empty
+// LiteSpeed "Index of /"; slugs and markup carried over unchanged).
 //
 // WordPress + Madara (same theme family as 3asq), but every page this adapter
 // needs ships fully server-rendered to a plain GET: the home/listing loops
@@ -27,7 +29,7 @@ import type {
   MangaSource,
 } from "../types";
 
-const SITE = "https://mangalik.net";
+const SITE = "https://lekmanga.site";
 
 const TYPE_LABELS: Record<string, string> = {
   manga: "مانجا",

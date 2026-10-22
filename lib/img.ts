@@ -18,7 +18,7 @@
 // Photon only serves these WordPress origins for us: witanime (every TLD) plus
 // the 3asq / mangalik manga CDNs (verified 2026-10-19: a 6.5 MB 1326x2048 3asq
 // cover comes back as a 38 KB 320px JPEG).
-const PHOTON_OK = /(^|\.)(witanime\.|3asq\.online$|mangalik\.net$)/i;
+const PHOTON_OK = /(^|\.)(witanime\.|3asq\.online$|mangalik\.net$|lekmanga\.site$)/i;
 
 // Snap to a small set of widths so slightly different card widths across screens
 // don't fragment the disk cache with near-duplicate downloads.

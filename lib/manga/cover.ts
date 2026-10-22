@@ -40,7 +40,9 @@ function isWordPressHost(host: string): boolean {
     host === "3asq.online" ||
     host.endsWith(".3asq.online") ||
     host === "mangalik.net" ||
-    host.endsWith(".mangalik.net")
+    host.endsWith(".mangalik.net") ||
+    host === "lekmanga.site" ||
+    host.endsWith(".lekmanga.site")
   );
 }
 

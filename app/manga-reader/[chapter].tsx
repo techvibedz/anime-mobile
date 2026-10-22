@@ -383,7 +383,7 @@ export default function MangaReaderScreen() {
     return () => sub.remove();
   }, []);
   const imageHeaders = useMemo(() => ({ Referer: chapterSource === "asq" ? chapterId
-    : chapterSource === "mangalik" ? `https://mangalik.net/manga/${encodeURIComponent(chapterMangaId)}/${encodeURIComponent(chapterId)}/`
+    : chapterSource === "mangalik" ? `https://lekmanga.site/manga/${encodeURIComponent(chapterMangaId)}/${encodeURIComponent(chapterId)}/`
     : `https://mangawy.org/series/${encodeURIComponent(chapterMangaId)}/chapter/${encodeURIComponent(chapterId)}` }), [chapterSource, chapterMangaId, chapterId]);
   const { width, height } = useWindowDimensions();
   const widthRounded = Math.round(width);

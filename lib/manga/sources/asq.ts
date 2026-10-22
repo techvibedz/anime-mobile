@@ -256,14 +256,13 @@ export function parseAsqChapter(html: string, base: string): MangaReaderData {
 const UA =
   "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 
-async function fetchAsqChapters(mangaUrl: string): Promise<string | null> {
-  const base = mangaUrl.endsWith("/") ? mangaUrl : `${mangaUrl}/`;
+async function fetchAsqChapterPage(base: string, page: number): Promise<string | null> {
   // Hard 10s cap: a stalled POST must never hold the whole detail page hostage
-  // (the rendered WebView fallback carries the chapter list inline anyway).
+  // (the rendered WebView fallback carries the first chapter page inline anyway).
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const res = await fetch(`${base}ajax/chapters/?t=1`, {
+    const res = await fetch(`${base}ajax/chapters/?t=${page}`, {
       method: "POST",
       credentials: "include",
       signal: controller.signal,
@@ -283,6 +282,33 @@ async function fetchAsqChapters(mangaUrl: string): Promise<string | null> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Highest page in the fragment's `.pagination` (1 when unpaginated). */
+export function asqChapterPageCount(html: string): number {
+  let max = 1;
+  for (const m of html.matchAll(/data-page="(\d+)"/g)) max = Math.max(max, Number(m[1]) || 1);
+  return Math.min(max, 80);
+}
+
+/** 3asq paginates the AJAX chapter list (50 per page, `?t=N`, newest first,
+ * verified live 2026-10-22 — One Piece is 12 pages). Fetch page 1, then the
+ * rest a few at a time, and stitch them back in page order. */
+async function fetchAsqChapters(mangaUrl: string): Promise<string | null> {
+  const base = mangaUrl.endsWith("/") ? mangaUrl : `${mangaUrl}/`;
+  const first = await fetchAsqChapterPage(base, 1);
+  if (!first) return null;
+  const count = asqChapterPageCount(first);
+  if (count <= 1) return first;
+  const rest: (string | null)[] = new Array(count - 1).fill(null);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, count - 1) }, async () => {
+    while (next < count - 1) {
+      const i = next++;
+      rest[i] = await fetchAsqChapterPage(base, i + 2);
+    }
+  }));
+  return [first, ...rest.filter((html): html is string => !!html)].join("\n");
 }
 
 export const asqSource: MangaSource = {

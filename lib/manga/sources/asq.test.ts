@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { madaraSearchPath } from "../madara";
 import {
+  asqChapterPageCount,
   parseAsqChapter,
   parseAsqChapters,
   parseAsqDetail,
@@ -392,6 +393,13 @@ async function main() {
   assert.deepEqual(blankDetail.genres, []);
   assert.deepEqual(blankDetail.chapters, []);
   assert.deepEqual(parseAsqChapter("", base), { pages: [] });
+
+  // Paginated AJAX chapter list (live 2026-10-22): the highest data-page wins,
+  // the ">>" link repeats page 2, and an unpaginated list is one page.
+  const PAGINATION = `<div class="pagination"><span class="page current page-1">1</span><span class="page page-2"><a href="/?t=2" data-page="2">2</a></span><span class="page page-3"><a href="/?t=3" data-page="3">3</a></span><span class="page space">...</span><span class="page page-12"><a href="/?t=12" data-page="12">12</a></span><span class="page page-2"><a href="/?t=2" data-page="2"> &gt;&gt; </a></span></div>`;
+  assert.equal(asqChapterPageCount(PAGINATION), 12);
+  assert.equal(asqChapterPageCount('<ul class="main version-chap"><li class="wp-manga-chapter"></li></ul>'), 1);
+  assert.equal(asqChapterPageCount('<a data-page="999">'), 80);
 
   console.log("asq source tests passed");
 }

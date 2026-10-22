@@ -544,7 +544,7 @@ export default function MangaReaderScreen() {
       const sameChapter =
         progress.chapterId === chapterId
           ? (progress.chapterSource ?? source) === chapterSource
-          : !!chapterNumber && progress.chapterNumber === chapterNumber;
+          : !!chapterNumber && chapterNumberKey(progress.chapterNumber) === chapterNumberKey(chapterNumber);
       if (!sameChapter) return;
       pendingPageRef.current = progress.page;
     }).catch(() => {}).finally(() => { if (alive) setProgressReady(true); });

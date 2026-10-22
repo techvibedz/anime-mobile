@@ -614,7 +614,11 @@ function ContinueCard({ item, onRemove }: { item: MangaProgress; onRemove: (item
     <View style={{ width: CONTINUE_W }}>
     <Pressable
       onPress={() =>
-        openMangaReader({
+        // Progress pulled from the account has a chapter number but no native
+        // id — the detail screen resolves it ("متابعة" opens the right chapter).
+        !item.chapterId
+          ? openMangaDetail({ source: item.source, id: item.id, title: item.title, cover: item.cover })
+          : openMangaReader({
           source: item.source,
           mangaId: item.id,
           mangaTitle: item.title,

@@ -164,17 +164,20 @@ export default function MangaDetailScreen() {
 
   const onPrimary = useCallback(() => {
     if (!detail || detail.chapters.length === 0) return;
-    if (progress?.chapterId) {
+    if (progress?.chapterId || progress?.chapterNumber) {
       // The saved chapter may now be served by another source; resolve it by
-      // native id + owning source, then by chapter number, before falling back
-      // to the last chapter.
+      // native id + owning source, then by chapter number (progress pulled from
+      // the account has no native id), before falling back to the last chapter.
       const chapterSource = progress.chapterSource ?? detail.source;
+      const numberKey = chapterNumberKey(progress.chapterNumber);
       const match =
-        detail.chapters.find(
-          (chapter) => chapter.id === progress.chapterId && chapter.source === chapterSource,
-        ) ??
-        (progress.chapterNumber
-          ? detail.chapters.find((chapter) => chapter.number === progress.chapterNumber)
+        (progress.chapterId
+          ? detail.chapters.find(
+              (chapter) => chapter.id === progress.chapterId && chapter.source === chapterSource,
+            )
+          : undefined) ??
+        (numberKey
+          ? detail.chapters.find((chapter) => chapterNumberKey(chapter.number) === numberKey)
           : undefined);
       if (match) {
         openChapter(match);
@@ -366,8 +369,10 @@ export default function MangaDetailScreen() {
             date={item.date}
             read={readSet.has(mangaChapterReadKey(item.source, item.id))}
             active={
-              progress?.chapterId === item.id &&
-              (progress.chapterSource ?? source) === item.source
+              progress?.chapterId
+                ? progress.chapterId === item.id && (progress.chapterSource ?? source) === item.source
+                : !!progress?.chapterNumber &&
+                  chapterNumberKey(progress.chapterNumber) === chapterNumberKey(item.number)
             }
             onPress={() => openChapter(item)}
           />

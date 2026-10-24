@@ -25,7 +25,7 @@ import { chapterNumberKey } from "../../lib/manga/aggregate";
 import { useReducedMotion } from "../../lib/motion";
 import { Ionicons } from "@expo/vector-icons";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { cancelAnimation, runOnJS, useAnimatedStyle, useSharedValue, withDecay, withTiming } from "react-native-reanimated";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -140,44 +140,68 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-// Below 1× the page shrinks to show space around it; above, up to 5×.
-const MIN_ZOOM = 0.5;
+// Pinch may dip below 1× / past 5× while the fingers are down (elastic feel);
+// on release it settles back inside [1×, 5×].
+const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
+const MIN_PINCH = 0.6;
+const MAX_PINCH = 6;
+const SETTLE = { duration: 220 };
 
-/** Pan bound on one axis: the scaled overflow plus half a screen of slack, so
- * the page edge can be dragged past the screen edge instead of hitting a wall. */
+/** Pan bound on one axis: how far the scaled content may slide before an edge
+ * of it would leave the screen (0 when it's smaller than the screen). */
 function panLimit(scale: number, content: number, view: number): number {
   "worklet";
-  return Math.max(0, (scale * content - view) / 2) + view / 2;
+  return Math.max(0, (scale * content - view) / 2);
+}
+
+/** Past the bound the content follows the finger at a fraction — rubber band. */
+function rubber(value: number, limit: number): number {
+  "worklet";
+  if (value > limit) return limit + (value - limit) * 0.35;
+  if (value < -limit) return -limit + (value + limit) * 0.35;
+  return value;
 }
 
 /** Pinch zoom anchored at the fingers + one-finger pan while zoomed. Shared by
  * the paged pages and the continuous list. `panAxis: "x"` leaves vertical drags
- * to the scrolling list underneath. */
+ * to the scrolling list underneath. `contentW/H` are the fitted content size at
+ * 1×; 0 means "same as the measured view". */
 function useZoomGestures({
-  width,
-  height,
   contentW,
   contentH,
   panAxis,
   scrollGesture,
   onInteract,
   onZoomChange,
+  onPinchingChange,
 }: {
-  width: number;
-  height: number;
   contentW: number;
   contentH: number;
   panAxis: "x" | "both";
   scrollGesture: unknown;
   onInteract: () => void;
   onZoomChange: (zoomed: boolean) => void;
+  onPinchingChange?: (pinching: boolean) => void;
 }) {
   const scale = useSharedValue(1);
   const tx = useSharedValue(0);
   const ty = useSharedValue(0);
-  const pinchStart = useSharedValue({ scale: 1, x: 0, y: 0, fx: 0, fy: 0 });
+  // Measured size of the gesture view — focal points are relative to it, so
+  // its real center (not the window's) is the transform origin.
+  const viewW = useSharedValue(0);
+  const viewH = useSharedValue(0);
+  const cW = useSharedValue(contentW);
+  const cH = useSharedValue(contentH);
+  useEffect(() => {
+    cW.value = contentW;
+    cH.value = contentH;
+  }, [cW, cH, contentW, contentH]);
+  // Incremental pinch: each frame is applied relative to the previous one, so
+  // finger drift pans and a finger lifting (focal jump) doesn't move the page.
+  const last = useSharedValue({ scale: 1, fx: 0, fy: 0, n: 0 });
   const panStart = useSharedValue({ x: 0, y: 0, tx: 0, ty: 0 });
+  const pinching = useSharedValue(false);
   // Worklets read this synchronously (React state lags behind the UI thread).
   const zoomFlag = useSharedValue(false);
   const zoomedRef = useRef(false);
@@ -189,12 +213,24 @@ function useZoomGestures({
     },
     [onZoomChange],
   );
+  const setPinching = useCallback((on: boolean) => onPinchingChange?.(on), [onPinchingChange]);
+
+  const onLayout = useCallback(
+    (event: { nativeEvent: { layout: { width: number; height: number } } }) => {
+      viewW.value = event.nativeEvent.layout.width;
+      viewH.value = event.nativeEvent.layout.height;
+    },
+    [viewW, viewH],
+  );
 
   const reset = useCallback(() => {
+    cancelAnimation(scale);
+    cancelAnimation(tx);
+    cancelAnimation(ty);
     zoomFlag.value = false;
-    scale.value = withTiming(1);
-    tx.value = withTiming(0);
-    ty.value = withTiming(0);
+    scale.value = withTiming(1, SETTLE);
+    tx.value = withTiming(0, SETTLE);
+    ty.value = withTiming(0, SETTLE);
     if (zoomedRef.current) setZoom(false);
   }, [scale, tx, ty, zoomFlag, setZoom]);
 
@@ -203,40 +239,70 @@ function useZoomGestures({
       Gesture.Pinch()
         .blocksExternalGesture(scrollGesture as never)
         .onStart((event) => {
-          pinchStart.value = { scale: scale.value, x: tx.value, y: ty.value, fx: event.focalX, fy: event.focalY };
+          cancelAnimation(scale);
+          cancelAnimation(tx);
+          cancelAnimation(ty);
+          pinching.value = true;
+          last.value = { scale: event.scale, fx: event.focalX, fy: event.focalY, n: event.numberOfPointers };
+          runOnJS(setPinching)(true);
           runOnJS(onInteract)();
         })
         .onUpdate((event) => {
-          const start = pinchStart.value;
-          const next = clamp(start.scale * event.scale, MIN_ZOOM, MAX_ZOOM);
-          const k = next / start.scale;
-          scale.value = next;
-          // Keep the point under the fingers fixed (transform origin = center).
-          const limX = panLimit(next, contentW, width);
-          const limY = panLimit(next, contentH, height);
-          tx.value = clamp(event.focalX - width / 2 - k * (start.fx - width / 2 - start.x), -limX, limX);
-          ty.value = clamp(event.focalY - height / 2 - k * (start.fy - height / 2 - start.y), -limY, limY);
-          if (Math.abs(next - 1) > 0.05 && !zoomFlag.value) {
+          const prev = last.value;
+          if (!pinching.value || event.numberOfPointers !== prev.n || prev.scale <= 0) {
+            last.value = { scale: event.scale, fx: event.focalX, fy: event.focalY, n: event.numberOfPointers };
+            return;
+          }
+          const s0 = scale.value;
+          const s1 = clamp(s0 * (event.scale / prev.scale), MIN_PINCH, MAX_PINCH);
+          const k = s1 / s0;
+          const hw = viewW.value / 2;
+          const hh = viewH.value / 2;
+          // The content point that was under the fingers last frame lands
+          // under the fingers now (origin = view center).
+          const nx = event.focalX - hw - k * (prev.fx - hw - tx.value);
+          const ny = event.focalY - hh - k * (prev.fy - hh - ty.value);
+          // Loose leash while pinching (exact bounds are applied on release).
+          const slackX = panLimit(s1, cW.value || viewW.value, viewW.value) + hw;
+          const slackY = panLimit(s1, cH.value || viewH.value, viewH.value) + hh;
+          scale.value = s1;
+          tx.value = clamp(nx, -slackX, slackX);
+          ty.value = clamp(ny, -slackY, slackY);
+          last.value = { scale: event.scale, fx: event.focalX, fy: event.focalY, n: event.numberOfPointers };
+          if (s1 > 1.02 && !zoomFlag.value) {
             zoomFlag.value = true;
             runOnJS(setZoom)(true);
           }
         })
-        .onEnd(() => {
-          // Released near 1× → snap back so list swiping works again.
-          if (Math.abs(scale.value - 1) <= 0.08) {
-            scale.value = withTiming(1);
-            tx.value = withTiming(0);
-            ty.value = withTiming(0);
-            if (zoomFlag.value) {
-              zoomFlag.value = false;
-              runOnJS(setZoom)(false);
-            }
-          } else if (!zoomFlag.value) {
-            zoomFlag.value = true;
-            runOnJS(setZoom)(true);
+        .onFinalize(() => {
+          if (!pinching.value) return;
+          pinching.value = false;
+          runOnJS(setPinching)(false);
+          // Settle inside [1×, 5×] and inside the pan bounds — no gaps.
+          let target = clamp(scale.value, MIN_ZOOM, MAX_ZOOM);
+          if (target < 1.05) target = 1;
+          let nx = tx.value;
+          let ny = ty.value;
+          if (target !== scale.value) {
+            // Rescale about the last finger position so it doesn't jump away.
+            const k = target / scale.value;
+            const hw = viewW.value / 2;
+            const hh = viewH.value / 2;
+            nx = last.value.fx - hw - k * (last.value.fx - hw - nx);
+            ny = last.value.fy - hh - k * (last.value.fy - hh - ny);
+          }
+          const limX = panLimit(target, cW.value || viewW.value, viewW.value);
+          const limY = panLimit(target, cH.value || viewH.value, viewH.value);
+          scale.value = withTiming(target, SETTLE);
+          tx.value = withTiming(clamp(nx, -limX, limX), SETTLE);
+          ty.value = withTiming(clamp(ny, -limY, limY), SETTLE);
+          const on = target > 1;
+          if (on !== zoomFlag.value) {
+            zoomFlag.value = on;
+            runOnJS(setZoom)(on);
           }
         }),
-    [scrollGesture, pinchStart, scale, tx, ty, zoomFlag, setZoom, onInteract, contentW, contentH, width, height],
+    [scrollGesture, last, pinching, scale, tx, ty, viewW, viewH, cW, cH, zoomFlag, setZoom, setPinching, onInteract],
   );
 
   // Manual activation on the LIVE scale: at 1× the pan fails at once so the
@@ -251,41 +317,59 @@ function useZoomGestures({
           if (touch) panStart.value = { ...panStart.value, x: touch.absoluteX, y: touch.absoluteY };
         })
         .onTouchesMove((event, state) => {
-          if (Math.abs(scale.value - 1) <= 0.01) {
+          if (pinching.value) return;
+          if (scale.value <= 1.01) {
             state.fail();
-            return;
-          }
-          if (panAxis === "both") {
-            state.activate();
             return;
           }
           const touch = event.allTouches[0];
           if (!touch) return;
           const dx = Math.abs(touch.absoluteX - panStart.value.x);
           const dy = Math.abs(touch.absoluteY - panStart.value.y);
+          if (panAxis === "both") {
+            if (dx > 4 || dy > 4) state.activate();
+            return;
+          }
           if (dx > 10 && dx > dy) state.activate();
           else if (dy > 10) state.fail();
         })
         .onStart(() => {
+          cancelAnimation(tx);
+          cancelAnimation(ty);
           panStart.value = { ...panStart.value, tx: tx.value, ty: ty.value };
           runOnJS(onInteract)();
         })
         .onUpdate((event) => {
-          const limX = panLimit(scale.value, contentW, width);
-          tx.value = clamp(panStart.value.tx + event.translationX, -limX, limX);
+          if (pinching.value) return;
+          const limX = panLimit(scale.value, cW.value || viewW.value, viewW.value);
+          tx.value = rubber(panStart.value.tx + event.translationX, limX);
           if (panAxis === "both") {
-            const limY = panLimit(scale.value, contentH, height);
-            ty.value = clamp(panStart.value.ty + event.translationY, -limY, limY);
+            const limY = panLimit(scale.value, cH.value || viewH.value, viewH.value);
+            ty.value = rubber(panStart.value.ty + event.translationY, limY);
+          }
+        })
+        .onEnd((event, success) => {
+          // A second finger cancels the pan — the pinch owns the transform then.
+          if (!success || pinching.value) return;
+          const limX = panLimit(scale.value, cW.value || viewW.value, viewW.value);
+          tx.value = Math.abs(tx.value) > limX
+            ? withTiming(clamp(tx.value, -limX, limX), SETTLE)
+            : withDecay({ velocity: event.velocityX, clamp: [-limX, limX] });
+          if (panAxis === "both") {
+            const limY = panLimit(scale.value, cH.value || viewH.value, viewH.value);
+            ty.value = Math.abs(ty.value) > limY
+              ? withTiming(clamp(ty.value, -limY, limY), SETTLE)
+              : withDecay({ velocity: event.velocityY, clamp: [-limY, limY] });
           }
         }),
-    [panAxis, panStart, scale, tx, ty, onInteract, contentW, contentH, width, height],
+    [panAxis, panStart, pinching, scale, tx, ty, viewW, viewH, cW, cH, onInteract],
   );
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: tx.value }, { translateY: ty.value }, { scale: scale.value }],
   }));
 
-  return { pinch, pan, animatedStyle, reset };
+  return { pinch, pan, animatedStyle, reset, onLayout };
 }
 
 async function loadReaderPrefs(): Promise<ReaderPrefs> {
@@ -399,6 +483,9 @@ export default function MangaReaderScreen() {
   const [chrome, setChrome] = useState(true);
   const [index, setIndex] = useState(0);
   const [zoomed, setZoomed] = useState(false);
+  // Two fingers down: the list must not scroll under the pinch, or the page
+  // slides away from the fingers.
+  const [pinching, setPinching] = useState(false);
   const [listOpen, setListOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [jumpOpen, setJumpOpen] = useState(false);
@@ -568,6 +655,7 @@ export default function MangaReaderScreen() {
   // and no way out — always drop zoom on any list remount trigger.
   useEffect(() => {
     setZoomed(false);
+    setPinching(false);
   }, [widthRounded, height, prefs.mode, prefs.direction]);
 
   // Restore the saved page once pages arrive — but never yank the list after
@@ -859,10 +947,11 @@ export default function MangaReaderScreen() {
       {pages && prefsLoaded && progressReady ? (
         prefs.mode === "vertical" ? (
           <View style={s.listWrap} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-            <ZoomLayer width={width} height={height} scrollGesture={listNative} onInteract={hideChrome} onZoomChange={handleZoomChange}>
+            <ZoomLayer resetKey={`${chapterSource}:${chapterId}:${widthRounded}x${Math.round(height)}`} scrollGesture={listNative} onInteract={hideChrome} onZoomChange={handleZoomChange} onPinchingChange={setPinching}>
             <GestureDetector gesture={listNative}>
             <FlatList
               key="manga-vertical"
+              scrollEnabled={!pinching}
               ref={verticalRef}
               data={pages}
               extraData={ratioTick}
@@ -923,7 +1012,7 @@ export default function MangaReaderScreen() {
               viewabilityConfig={pagedViewabilityConfig}
               horizontal
               pagingEnabled
-              scrollEnabled={!zoomed}
+              scrollEnabled={!zoomed && !pinching}
               bounces={!zoomed}
               decelerationRate="fast"
               keyExtractor={(uri, i) => `p:${i}:${uri}`}
@@ -943,6 +1032,7 @@ export default function MangaReaderScreen() {
                   scrollGesture={listNative}
                   onTapZone={handlePagedTap}
                   onZoomChange={handleZoomChange}
+                  onPinchingChange={setPinching}
                   onInteract={hideChrome}
                 />
               )}
@@ -971,7 +1061,7 @@ export default function MangaReaderScreen() {
               onViewableItemsChanged={onViewableItemsChanged}
               viewabilityConfig={pagedViewabilityConfig}
               pagingEnabled
-              scrollEnabled={!zoomed}
+              scrollEnabled={!zoomed && !pinching}
               bounces={!zoomed}
               decelerationRate="fast"
               keyExtractor={(uri, i) => `v:${i}:${uri}`}
@@ -991,6 +1081,7 @@ export default function MangaReaderScreen() {
                   scrollGesture={listNative}
                   onTapZone={handlePagedTap}
                   onZoomChange={handleZoomChange}
+                  onPinchingChange={setPinching}
                   onInteract={hideChrome}
                 />
               )}
@@ -1315,6 +1406,7 @@ const PagedPage = memo(function PagedPage({
   scrollGesture,
   onTapZone,
   onZoomChange,
+  onPinchingChange,
   onInteract,
 }: {
   uri: string;
@@ -1329,6 +1421,7 @@ const PagedPage = memo(function PagedPage({
   scrollGesture: unknown;
   onTapZone: (zone: "left" | "right" | "center" | "top" | "bottom") => void;
   onZoomChange: (zoomed: boolean) => void;
+  onPinchingChange: (pinching: boolean) => void;
   onInteract: () => void;
 }) {
   const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? 1.5);
@@ -1347,15 +1440,14 @@ const PagedPage = memo(function PagedPage({
     return { dw, dh };
   }, [ratio, width, height, fit]);
 
-  const { pinch, pan, animatedStyle, reset } = useZoomGestures({
-    width,
-    height,
+  const { pinch, pan, animatedStyle, reset, onLayout } = useZoomGestures({
     contentW: fitted.dw,
     contentH: fitted.dh,
     panAxis: "both",
     scrollGesture,
     onInteract,
     onZoomChange,
+    onPinchingChange,
   });
 
   // Leaving the page always resets its transform — no sticky zoom.
@@ -1389,7 +1481,7 @@ const PagedPage = memo(function PagedPage({
 
   return (
     <GestureDetector gesture={composed}>
-      <View style={{ width, height, overflow: "hidden", backgroundColor: M.night }} collapsable={false}>
+      <View style={{ width, height, overflow: "hidden", backgroundColor: M.night }} collapsable={false} onLayout={onLayout}>
         <Animated.View style={[MANGA_FILL, animatedStyle]}>
           <MangaPageImage key={uri} uri={uri} page={page} headers={headers} contentFit={fit === "stretch" ? "fill" : "contain"}
             fullResolution={naturalWidth > 0 && naturalWidth * naturalWidth * ratio < 16_000_000 && naturalWidth * ratio < 8192}
@@ -1411,17 +1503,23 @@ const PagedPage = memo(function PagedPage({
 
 /** Continuous-mode zoom: pinch scales the whole scrolling strip, horizontal
  * drags pan it, vertical drags still scroll the list underneath. */
-function ZoomLayer({ width, height, scrollGesture, onInteract, onZoomChange, children }: {
-  width: number; height: number; scrollGesture: unknown; onInteract: () => void;
-  onZoomChange: (zoomed: boolean) => void; children: ReactNode;
+function ZoomLayer({ resetKey, scrollGesture, onInteract, onZoomChange, onPinchingChange, children }: {
+  resetKey: string; scrollGesture: unknown; onInteract: () => void;
+  onZoomChange: (zoomed: boolean) => void; onPinchingChange: (pinching: boolean) => void; children: ReactNode;
 }) {
-  const { pinch, pan, animatedStyle } = useZoomGestures({
-    width, height, contentW: width, contentH: height, panAxis: "x", scrollGesture, onInteract, onZoomChange,
+  // Content = the layer itself (0 → measured view size).
+  const { pinch, pan, animatedStyle, reset, onLayout } = useZoomGestures({
+    contentW: 0, contentH: 0, panAxis: "x", scrollGesture, onInteract, onZoomChange, onPinchingChange,
   });
+  // New chapter / rotation / mode → start unzoomed (the parent drops its
+  // zoomed flag on the same triggers).
+  useEffect(() => {
+    reset();
+  }, [resetKey, reset]);
   const gesture = useMemo(() => Gesture.Simultaneous(pinch, pan), [pinch, pan]);
   return (
     <GestureDetector gesture={gesture}>
-      <View style={s.zoomLayer} collapsable={false}>
+      <View style={s.zoomLayer} collapsable={false} onLayout={onLayout}>
         <Animated.View style={[MANGA_FILL, animatedStyle]}>{children}</Animated.View>
       </View>
     </GestureDetector>

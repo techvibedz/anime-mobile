@@ -50,7 +50,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
       return href('witanime');
     },
     searchWitanimeDirect: async () => [], searchWitanimeDirectList: async () => [],
-    getAltTitles: async () => [], tm_seasonNum: () => 1, fetchHtml: async () => '',
+    getAltTitles: async () => [], getAniListAltTitles: async () => [], tm_seasonNum: () => 1, fetchHtml: async () => '',
     fetchSourceHtml: async () => '',
     window: { pantoufa: { fetchHtml: async () => '' } },
     fetchVideoServers: async (url) => {

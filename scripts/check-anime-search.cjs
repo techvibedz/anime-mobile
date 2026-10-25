@@ -38,7 +38,7 @@ function api(overrides = {}, cached = null) {
     searchRequests: cache.createRequestCache(0), SEARCH_CACHE_PREFIX: '@search_v4:', SEARCH_CACHE_TTL: 1,
     _swrInFlight: new Set(), readCache: async () => cached, writeCache: async (_key, value) => written.push(value),
     searchWitanimeDirectList: async () => ({ results: [] }), searchAnime4upDirectList: async () => [],
-    searchAnime3rbDirectList: async () => [], getAltTitles: async () => [],
+    searchAnime3rbDirectList: async () => [], getAltTitles: async () => [], getAniListAltTitles: async () => [],
     remoteLog: (...event) => logs.push(event),
     // Previous orchestration uses these; they establish the report's old failure.
     searchAnime3rbCatalogFuzzy: async () => [], searchAnime3rbCatalog: async () => 'https://anime3rb.com/titles/jojo-1',

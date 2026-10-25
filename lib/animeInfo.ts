@@ -1045,6 +1045,44 @@ export function peekMalRating(title: string | null | undefined): number | null |
  * disables the check: the caller falls back to title-only matching. */
 export type AnimeYearType = { year: number | null; isMovie: boolean | null };
 
+/** Alternative names from AniList (romaji / English / native / synonyms) for
+ * the best match of `title` — the second opinion when Jikan is slow or
+ * unreachable (it timed out at 21–55 s on 2026-10-25 while AniList answered in
+ * ~1 s), so the anime3rb title bridge never depends on one service. Season-
+ * aware: for "X Season 2" the entry whose own titles carry season 2 wins.
+ * Empty on any miss; misses aren't cached (likely transient). */
+const ALT_AL_QUERY = `query ($s: String) { Page(perPage: 8) { media(search: $s, type: ANIME) { title { romaji english native } synonyms } } }`;
+const altAniListMem = new Map<string, string[]>();
+export async function getAniListAltTitles(title: string): Promise<string[]> {
+  const q = (title || "").trim();
+  if (!q || !/[a-z]/i.test(q)) return [];
+  const key = q.toLowerCase();
+  const hit = altAniListMem.get(key);
+  if (hit) return hit;
+  try {
+    const json = await anilistPost(ALT_AL_QUERY, { s: q });
+    const medias: any[] = json?.data?.Page?.media || [];
+    const wanted = seasonNum(q);
+    let best: { score: number; names: string[] } | null = null;
+    for (const m of medias) {
+      const names = [m?.title?.romaji, m?.title?.english, m?.title?.native, ...(Array.isArray(m?.synonyms) ? m.synonyms : [])]
+        .filter((n: unknown): n is string => typeof n === "string" && !!n.trim());
+      if (!names.length) continue;
+      const own = Math.max(0, ...names.map((n) => seasonNum(n)));
+      if (wanted > 0 && (own || 1) !== wanted) continue;
+      const score = Math.max(...names.map((n) => fuzzyScore(q, n)));
+      if (!best || score > best.score) best = { score, names };
+    }
+    if (!best || best.score < 0.55) return [];
+    const seen = new Set<string>();
+    const out = best.names.map((n) => n.trim()).filter((n) => !seen.has(n.toLowerCase()) && !!seen.add(n.toLowerCase()));
+    altAniListMem.set(key, out);
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 const YT_CACHE_PREFIX = "@anime_yt_v1:";
 const ytMem = new Map<string, AnimeYearType>();
 const YEAR_TYPE_QUERY = `query ($s: String) { Page(perPage: 5) { media(search: $s, type: ANIME) { title { romaji english } seasonYear format } } }`;

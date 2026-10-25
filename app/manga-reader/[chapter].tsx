@@ -20,6 +20,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
 import { MangaPageImage } from "../../components/MangaPageImage";
+import { cachedImageSize, isTileHost, planTiles, probeImageSize, type ImageSize } from "../../lib/manga/tiles";
 import { normFuzzy } from "../../lib/fuzzy";
 import { chapterNumberKey } from "../../lib/manga/aggregate";
 import { useReducedMotion } from "../../lib/motion";
@@ -1537,10 +1538,50 @@ const VerticalPage = memo(function VerticalPage({ uri, page, headers, onDisplaye
 }) {
   const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? recentRatio);
   useEffect(() => { setRatio(ratioCache.get(uri) ?? recentRatio); }, [uri, ratioTick]);
+  // Giant strips (hijala) are probed for their real size first, then drawn as
+  // stacked full-density tiles (lib/manga/tiles.ts) instead of one bitmap the
+  // GPU can't hold. Fit-to-screen modes shrink the strip anyway — no tiles.
+  const tileable = (fit === "width" || fit === "smart" || fit === "original") && isTileHost(uri);
+  const [size, setSize] = useState<ImageSize | null | undefined>(() => (tileable ? cachedImageSize(uri) : null));
+  useEffect(() => {
+    if (!tileable) { setSize(null); return; }
+    const known = cachedImageSize(uri);
+    setSize(known);
+    if (known) return;
+    let alive = true;
+    void probeImageSize(uri, headers).then((probed) => {
+      if (!alive) return;
+      if (probed) {
+        rememberRatio(uri, probed.height / probed.width);
+        noteNaturalWidth(uri, probed.width);
+        setRatio(probed.height / probed.width);
+      }
+      setSize(probed);
+    });
+    return () => { alive = false; };
+  }, [uri, tileable, headers]);
+  const tiles = useMemo(() => (size ? planTiles(uri, size) : []), [uri, size]);
   const dims = ratio > 0
     ? verticalDims(fit, screenWidth, screenHeight, ratio, naturalWidthCache.get(uri) ?? 0, dpr)
     : { width: screenWidth, height: screenWidth * 1.45, contentFit: "contain" as const };
   const decodeSize = useMemo(() => verticalDecodeSize(screenWidth, dpr), [screenWidth, dpr]);
+  const tileDisplayed = useCallback(() => onDisplayed(uri), [onDisplayed, uri]);
+  if (tileable && size === undefined) {
+    // Probing (one 64 KB range request) — hold the box, don't start the strip.
+    return <View style={{ width: dims.width, height: dims.height, alignSelf: "center", backgroundColor: M.night }} />;
+  }
+  if (tiles.length && size) {
+    return (
+      <View style={{ width: dims.width, height: dims.height, alignSelf: "center", backgroundColor: M.night }}>
+        {tiles.map((tile) => (
+          <View key={tile.uri} style={{ width: dims.width, height: (dims.height * tile.height) / size.height }}>
+            <MangaPageImage uri={tile.uri} page={page} headers={headers} contentFit="fill" onDisplayed={tileDisplayed}
+              decodeSize={decodeSize} onMeasure={() => {}} />
+          </View>
+        ))}
+      </View>
+    );
+  }
   return (
     <View style={{ width: dims.width, height: dims.height, alignSelf: "center", backgroundColor: M.night }}>
       <MangaPageImage key={uri} uri={uri} page={page} headers={headers} contentFit={dims.contentFit} onDisplayed={onDisplayed}

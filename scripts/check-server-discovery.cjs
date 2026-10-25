@@ -34,6 +34,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
   const context = vm.createContext({
     exports: {}, URL, Date: lateUp4 ? { now: () => clock } : Date, Promise, setTimeout, clearTimeout, console, ...providers, ...cache,
     completeVideoServerRequests: cache.createRequestCache(0),
+    completeVideoServerHubs: new Map(),
     // The cross-source Witanime lookup remembers the anime page a title search
     // resolved to (the site rate-limits /search with HTTP 429), so the
     // orchestration needs the same cache hooks the app's storage provides.
@@ -80,12 +81,29 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText + '\nglobalThis.run = fetchCompleteVideoServers;', context);
   const partial = [];
-  const result = await context.run({ episodeUrl: href(primarySource), animeTitle: noTitle ? undefined : 'Show', episodeNumber: 7,
-    url4up: lateUp4 ? href('anime4up') : undefined,
+  const request = { episodeUrl: href(primarySource), animeTitle: noTitle ? undefined : 'Show', episodeNumber: 7,
+    url4up: lateUp4 ? href('anime4up') : undefined };
+  const running = context.run({ ...request,
     onCandidates: (p) => { partial.push(...p.data.servers.map((s) => s.source)); events.push('candidates'); },
     onPartial: () => events.push('playable'),
   });
+  // Reopening the episode mid-discovery joins the running lookup — that screen
+  // must still receive every progressive update (replayed + live), or its
+  // picker sits empty until the whole discovery finishes.
+  const rejoined = [];
+  let rejoinedPlayable = 0;
+  const rejoin = lateUp4 ? null : Promise.resolve().then(() => context.run({ ...request,
+    onCandidates: (p) => rejoined.push(...p.data.servers.map((s) => s.source)),
+    onPartial: () => { rejoinedPlayable++; },
+  }));
+  const result = await running;
   const expected = missingWit ? ['anime3rb', 'anime4up'] : ['anime3rb', 'anime4up', 'witanime'];
+  if (rejoin) {
+    assert.equal(await rejoin, result, 'reopen must join the running lookup');
+    for (const source of expected) assert.ok(rejoined.includes(source), `${source} must reach a screen that joined mid-discovery`);
+    assert.ok(rejoinedPlayable > 0, 'playable servers must reach a screen that joined mid-discovery');
+    assert.equal(context.completeVideoServerHubs.size, 0, 'progress listeners must be released once the lookup settles');
+  }
   assert.deepEqual([...new Set(result.data.servers.map((s) => s.source))].sort(), expected);
   if (lateUp4) await new Promise((r) => setTimeout(r, 60));
   for (const source of expected) assert.ok(partial.includes(source), `${source} should appear progressively`);

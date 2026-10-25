@@ -134,6 +134,16 @@ const SERVERS_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 h — embed URLs are stable
 const XSOURCE_CACHE_KEY = "@xsource_v2";
 const serverRequests = createRequestCache<VideoServersPayload>(SERVERS_CACHE_TTL);
 const completeVideoServerRequests = createRequestCache<VideoServersPayload>(30_000);
+// Progress fan-out for in-flight complete-server lookups. Reopening an episode
+// joins the request already running for it; without this, the progressive
+// candidates/partials only reached the screen that STARTED it (now closed), so
+// the reopened picker sat empty until the whole ~2-minute discovery finished.
+// Every subscriber gets each update, and a late joiner gets a replay.
+type ServerProgressHub = {
+  listeners: Set<{ onCandidates?: (p: VideoServersPayload) => void; onPartial?: (p: VideoServersPayload) => void }>;
+  history: { kind: "candidates" | "partial"; payload: VideoServersPayload }[];
+};
+const completeVideoServerHubs = new Map<string, ServerProgressHub>();
 const videoResolutionRequests = createRequestCache<ResolveVideoResult>(90_000);
 
 async function readCacheEntry<T>(key: string, ttlMs: number): Promise<{ data: T; ts: number } | null> {
@@ -1595,7 +1605,31 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     options.animeTitle || "",
     options.episodeNumber ?? "",
   ]);
-  return completeVideoServerRequests.run(key, async () => {
+  let hub = completeVideoServerHubs.get(key);
+  if (!hub) {
+    hub = { listeners: new Set(), history: [] };
+    completeVideoServerHubs.set(key, hub);
+  }
+  const progress = hub;
+  const listener = { onCandidates: options.onCandidates, onPartial: options.onPartial };
+  // Late joiner: replay what the running lookup already surfaced.
+  for (const { kind, payload } of progress.history) {
+    try {
+      if (kind === "candidates") listener.onCandidates?.(payload);
+      else listener.onPartial?.(payload);
+    } catch {}
+  }
+  progress.listeners.add(listener);
+  const broadcast = (kind: "candidates" | "partial", payload: VideoServersPayload) => {
+    progress.history.push({ kind, payload });
+    for (const l of progress.listeners) {
+      try {
+        if (kind === "candidates") l.onCandidates?.(payload);
+        else l.onPartial?.(payload);
+      } catch {}
+    }
+  };
+  const request = completeVideoServerRequests.run(key, async () => {
     const discoveryDeadline = Date.now() + 90_000;
     const discovered = new Map<string, (VideoServer & { source?: string })[]>();
     const primaryIsUp4 = /anime4up/i.test(episodeUrl);
@@ -1678,7 +1712,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       const servers = selectWarmupServers(payload.data.servers).filter((server) => !warming.has(server.iframeUrl));
       servers.forEach((server) => warming.add(server.iframeUrl));
       if (servers.length) void resolveDirectServerList(servers, 25_000, !!options.force, (playable) => {
-        options.onPartial?.({ ...payload, data: { ...payload.data, servers: playable, serverCount: playable.length } });
+        broadcast("partial", { ...payload, data: { ...payload.data, servers: playable, serverCount: playable.length } });
       }).catch(() => {});
     };
     let witPromise = initialTitle || options.animeHref ? loadWit(initialTitle) : null;
@@ -1698,7 +1732,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       if (servers.length === 0) return;
       for (const server of servers) discovered.set(server.iframeUrl, [server]);
       warm({ success: true, data: { episodeTitle: metadata?.data.episodeTitle || "", animeTitle: initialTitle || metadata?.data.animeTitle || "", animeHref: options.animeHref || "", servers, serverCount: servers.length, navigation: { prev: null, next: null } } });
-      options.onCandidates?.({
+      broadcast("candidates", {
         success: true,
         data: {
           episodeTitle: metadata?.data.episodeTitle || (episodeNumber != null ? `الحلقة ${episodeNumber}` : ""),
@@ -1749,7 +1783,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       const signature = serverCandidateSignature(servers);
       if (signature === lastCandidateSignature) return;
       lastCandidateSignature = signature;
-      options.onCandidates?.({
+      broadcast("candidates", {
         success: true,
         data: {
           episodeTitle: metadata?.data.episodeTitle || (episodeNumber != null ? `الحلقة ${episodeNumber}` : ""),
@@ -1798,7 +1832,7 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
       const signature = serverCandidateSignature(playable);
       if (signature === lastPlayableSignature) return;
       lastPlayableSignature = signature;
-      options.onPartial?.({
+      broadcast("partial", {
         success: true,
         data: {
           episodeTitle: metadata?.data.episodeTitle || (episodeNumber != null ? `الحلقة ${episodeNumber}` : ""),
@@ -1861,6 +1895,14 @@ export function fetchCompleteVideoServers(options: CompleteVideoServersOptions):
     force: !!options.force,
     valid: (result) => result.data.servers.length > 0,
   });
+  const release = () => {
+    progress.listeners.delete(listener);
+    if (progress.listeners.size === 0 && completeVideoServerHubs.get(key) === progress) {
+      completeVideoServerHubs.delete(key);
+    }
+  };
+  request.then(release, release);
+  return request;
 }
 
 /* ── /search ────────────────────────────────── */

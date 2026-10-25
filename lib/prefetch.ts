@@ -30,6 +30,10 @@ let generation = 0;
 
 /** Release the hidden player and clear its timer. Safe to call any time. */
 export function stopPrefetch(): void {
+  // Also void any start still awaiting settings/resolution: leaving the watch
+  // screen mid-warm-up used to install the hidden player AFTER this ran, and it
+  // kept the vid3rb file's only connection busy (503) when the episode reopened.
+  generation++;
   if (!active) return;
   const { player, timer } = active;
   active = null;

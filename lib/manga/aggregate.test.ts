@@ -154,6 +154,28 @@ async function main() {
   assert.equal(merged.synopsis, "من 3asq");
   assert.equal(merged.latest, "الفصل 101");
 
+  // Split parts: hijala posts 41 as "41" + "41.2"; mangalik owns the whole 41,
+  // so hijala's half must not replay. Extras (.5) and gap chapters survive,
+  // and when the splitting source owns "N" its parts stay together.
+  const split = mergeDetails([
+    { source: "hijala", detail: detail("hijala", "tbate", "TBATE", [
+      { id: "h-43", number: "43" }, { id: "h-42.2", number: "42.2" }, { id: "h-42", number: "42" },
+      { id: "h-41.5", number: "41.5" }, { id: "h-41.2", number: "41.2" }, { id: "h-41", number: "41" },
+      { id: "h-40.2", number: "40.2" }, { id: "h-40.1", number: "40.1" }, { id: "h-39.1", number: "39.1" },
+    ]) },
+    { source: "mangalik", detail: detail("mangalik", "tbate", "TBATE", [
+      { id: "42", number: "42" }, { id: "41", number: "41" }, { id: "40", number: "40" }, { id: "39", number: "39" },
+    ]) },
+  ]);
+  assert.deepEqual(split.chapters.map((chapter) => `${chapter.number}:${chapter.source}`), [
+    "43:hijala", "42:mangalik", "41.5:hijala", "41:mangalik", "40:mangalik", "39.1:hijala", "39:mangalik",
+  ]);
+  const ownSplit = mergeDetails([
+    { source: "mangawy", detail: detail("mangawy", "x", "X", [{ id: "40", number: "40" }]) },
+    { source: "hijala", detail: detail("hijala", "x", "X", [{ id: "h-41.2", number: "41.2" }, { id: "h-41", number: "41" }]) },
+  ]);
+  assert.deepEqual(ownSplit.chapters.map((chapter) => `${chapter.number}:${chapter.source}`), ["41.2:hijala", "41:hijala", "40:mangawy"]);
+
   // ── filters ───────────────────────────────────────────────────────────────
   const filterPool = [
     card({ source: "asq", id: "1", title: "A", type: "مانجا", status: "مستمر", latest: "الفصل 5" }),

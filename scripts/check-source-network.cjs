@@ -35,7 +35,7 @@ function stalledBody(_url, { signal }) {
 }
 
 async function main() {
-  for (const host of ["witanime.site", "w1.anime4up.rest", "anime3rb.com", "3asq.online", "mangalik.net", "mangawy.org"]) {
+  for (const host of ["witanime.site", "w1.anime4up.rest", "anime3rb.com", "3asq.online", "mangalik.net", "hijala.com", "mangawy.org"]) {
     assert.equal(domains.isVerificationSourceUrl(`https://${host}/`), true);
   }
   assert.equal(domains.isVerificationSourceUrl("https://mangawy.org.evil.example/"), false);
@@ -186,7 +186,7 @@ async function main() {
   const adapter = { browseAll: async () => ++attempts === 1 ? [] : [{ title: "One Piece" }] };
   const api = load("lib/manga/api.ts", {
     "@react-native-async-storage/async-storage": storage, "../requestCache": cache,
-    "./sources/asq": { asqSource: adapter }, "./sources/mangawy": { mangawySource: adapter }, "./sources/mangalik": { mangalikSource: adapter },
+    "./sources/asq": { asqSource: adapter }, "./sources/mangawy": { mangawySource: adapter }, "./sources/mangalik": { mangalikSource: adapter }, "./sources/hijala": { hijalaSource: adapter },
   });
   assert.equal((await api.browseMangaAll("asq", 1)).length, 0);
   assert.equal((await api.browseMangaAll("asq", 1)).length, 1);

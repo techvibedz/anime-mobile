@@ -468,6 +468,7 @@ export default function MangaReaderScreen() {
   }, []);
   const imageHeaders = useMemo(() => ({ Referer: chapterSource === "asq" ? chapterId
     : chapterSource === "mangalik" ? `https://lekmanga.site/manga/${encodeURIComponent(chapterMangaId)}/${encodeURIComponent(chapterId)}/`
+    : chapterSource === "hijala" ? `https://hijala.com/${encodeURIComponent(chapterId)}/`
     : `https://mangawy.org/series/${encodeURIComponent(chapterMangaId)}/chapter/${encodeURIComponent(chapterId)}` }), [chapterSource, chapterMangaId, chapterId]);
   const { width, height } = useWindowDimensions();
   const widthRounded = Math.round(width);

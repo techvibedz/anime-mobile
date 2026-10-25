@@ -127,7 +127,7 @@ export function looksLikeCfChallenge(html: string): boolean {
 export function isVerificationSourceUrl(rawUrl: string): boolean {
   if (identifySource(rawUrl)) return true;
   try {
-    return /(^|\.)(3asq\.online|mangalik\.net|lekmanga\.site|mangawy\.org|vik(?:i|1)ngfile\.(?:com|site))$/i.test(new URL(rawUrl).hostname);
+    return /(^|\.)(3asq\.online|mangalik\.net|lekmanga\.site|hijala\.com|mangawy\.org|vik(?:i|1)ngfile\.(?:com|site))$/i.test(new URL(rawUrl).hostname);
   } catch {
     return false;
   }

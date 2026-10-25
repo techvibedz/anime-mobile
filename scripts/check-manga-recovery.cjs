@@ -265,7 +265,7 @@ assert.equal(position.userInteractedRef.current, true);
     } },
   });
   const results = await aggregate.searchMergedManga("One Piece", { genres: ["أكشن", "مغامرة"], type: "مانجا", status: "مستمر", page: 2 });
-  assert.equal(calls.length, 6, "each source must combine title and each selected genre");
+  assert.equal(calls.length, 8, "each source must combine title and each selected genre");
   for (const call of calls) {
     assert.equal(call.query, "One Piece");
     assert.equal(call.options.genres.length, 1);
@@ -294,7 +294,7 @@ assert.equal(position.userInteractedRef.current, true);
   const api=load("lib/manga/api.ts",{
     "@react-native-async-storage/async-storage":{getItem:async()=>null,setItem:async()=>{}},
     "../requestCache":{...requestCache,withTimeout:(promise,ms)=>{bounds.push(ms);return promise;}},
-    "./sources/asq":{asqSource:adapter},"./sources/mangawy":{mangawySource:adapter},"./sources/mangalik":{mangalikSource:adapter},
+    "./sources/asq":{asqSource:adapter},"./sources/mangawy":{mangawySource:adapter},"./sources/mangalik":{mangalikSource:adapter},"./sources/hijala":{hijalaSource:adapter},
   });
   assert.equal((await api.searchManga("asq","One Piece")).length,0);
   assert.equal((await api.searchManga("asq","One Piece")).length,1,"a transient empty response must be retried rather than cached");

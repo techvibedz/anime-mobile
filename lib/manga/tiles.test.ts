@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { isTileHost, parseImageSize, planTiles, TILE_RATIO } from "./tiles";
+import { isTileHost, joinColumnPages, pageColumns, parseImageSize, planPage, planTiles, TILE_RATIO, tileUrl } from "./tiles";
 
 function bytes(...parts: (number[] | string)[]): Uint8Array {
   const out: number[] = [];
@@ -35,6 +35,57 @@ function main() {
   // Percent-encoded Arabic filenames pass through untouched.
   assert.ok(planTiles("https://hijala.com/wp-content/uploads/manga/449caab6/%D8%A8%D8%AF%D9%88%D9%86.webp", { width: 720, height: 13500 })[0]
     .uri.startsWith("https://i0.wp.com/hijala.com/wp-content/uploads/manga/449caab6/%D8%A8%D8%AF%D9%88%D9%86.webp?ssl=1&crop="));
+
+  // Blogger-hosted strips are tiled through wsrv.nl (Photon ignores crops there).
+  const blogger = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEgz6nOV/s0/01_001.jpg";
+  assert.equal(isTileHost(blogger), true);
+  assert.equal(tileUrl(blogger, 345, 100, 800), `https://wsrv.nl/?url=${encodeURIComponent(blogger)}&cx=0&cy=100&cw=345&ch=800&q=95`);
+
+  // Split columns (Fight Class 3 ch.144: every page cut into a left + right half).
+  const dir = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvX";
+  const raw = [`${dir}a/s0/01_001.jpg`, `${dir}b/s0/01_002.jpg`, `${dir}c/s0/02_001.jpg`, `${dir}d/s0/02_002.jpg`];
+  // Blogger gives every file its own hash directory — the run still joins.
+  const bloggerJoined = joinColumnPages(raw);
+  assert.equal(bloggerJoined.length, 2);
+  assert.deepEqual(pageColumns(bloggerJoined[0]), [raw[0], raw[1]]);
+  assert.deepEqual(pageColumns(bloggerJoined[1]), [raw[2], raw[3]]);
+  // Different hosts or extensions never join.
+  assert.equal(joinColumnPages([`${dir}a/s0/01_001.jpg`, "https://hijala.com/x/01_002.jpg"]).length, 2);
+  assert.equal(joinColumnPages(["https://hijala.com/x/01_001.jpg", "https://hijala.com/x/01_002.png"]).length, 2);
+  const h = "https://hijala.com/wp-content/uploads/manga/x1";
+  const split = [`${h}/00.webp`, `${h}/01_001.webp`, `${h}/01_002.webp`, `${h}/02_001.webp`, `${h}/02_002.webp`, `${h}/03_001.webp`, `${h}/04.webp`];
+  const joined = joinColumnPages(split);
+  assert.equal(joined.length, 5);
+  assert.equal(joined[0], `${h}/00.webp`);
+  assert.deepEqual(pageColumns(joined[1]), [`${h}/01_001.webp`, `${h}/01_002.webp`]);
+  assert.deepEqual(pageColumns(joined[2]), [`${h}/02_001.webp`, `${h}/02_002.webp`]);
+  assert.equal(joined[3], `${h}/03_001.webp`); // a lone _001 stays a page
+  assert.deepEqual(pageColumns(`${h}/04.webp`), [`${h}/04.webp`]);
+  // Three-way splits and encoded names survive the round trip.
+  const three = joinColumnPages([`${h}/05_001.jpg`, `${h}/05_002.jpg`, `${h}/05_003.jpg`]);
+  assert.deepEqual(pageColumns(three[0]), [`${h}/05_001.jpg`, `${h}/05_002.jpg`, `${h}/05_003.jpg`]);
+
+  // Two 345x14525 halves → one 690x14525 page, rows of crops across both columns.
+  const page = planPage(joined[1], [{ width: 345, height: 14525 }, { width: 345, height: 14525 }]);
+  assert.ok(page);
+  assert.equal(page.width, 690);
+  assert.equal(page.height, 14525);
+  assert.equal(page.rows.length, Math.ceil(14525 / 690 / TILE_RATIO));
+  assert.equal(page.rows.reduce((sum, row) => sum + row.height, 0), 14525);
+  for (const row of page.rows) {
+    assert.equal(row.cells.length, 2);
+    assert.ok(row.cells[0].uri.includes("01_001.webp") && row.cells[1].uri.includes("01_002.webp"));
+    assert.ok(row.height / 690 <= TILE_RATIO + 0.01);
+  }
+  // A short split page (two 1632x1841 halves) stays one row of whole images.
+  const short = planPage(joined[1], [{ width: 1632, height: 1841 }, { width: 1632, height: 1841 }]);
+  assert.deepEqual(short?.rows, [{ height: 1841, cells: [{ uri: `${h}/01_001.webp`, width: 1632 }, { uri: `${h}/01_002.webp`, width: 1632 }] }]);
+  // Mismatched heights / unknown sizes → no plan (the reader falls back).
+  assert.equal(planPage(joined[1], [{ width: 345, height: 14525 }, { width: 345, height: 9000 }]), null);
+  assert.equal(planPage(joined[1], [{ width: 345, height: 14525 }, null]), null);
+  // A plain short page needs no plan; a plain tall strip gets single-column rows.
+  assert.equal(planPage(`${h}/04.webp`, [{ width: 800, height: 1200 }]), null);
+  assert.equal(planPage(strip, [{ width: 690, height: 16360 }])?.rows.length, tiles.length);
 
   // Header parsing.
   const png = bytes([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13], "IHDR", [0, 0, 0x02, 0xb2, 0, 0, 0x3f, 0xe8]);

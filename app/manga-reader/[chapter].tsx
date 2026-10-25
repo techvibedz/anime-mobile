@@ -20,7 +20,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
 import { MangaPageImage } from "../../components/MangaPageImage";
-import { cachedImageSize, isTileHost, planTiles, probeImageSize, type ImageSize } from "../../lib/manga/tiles";
+import { cachedImageSize, isTileHost, pageColumns, planPage, probeImageSize, type ImageSize, type PageLayout } from "../../lib/manga/tiles";
 import { normFuzzy } from "../../lib/fuzzy";
 import { chapterNumberKey } from "../../lib/manga/aggregate";
 import { useReducedMotion } from "../../lib/motion";
@@ -1428,6 +1428,9 @@ const PagedPage = memo(function PagedPage({
 }) {
   const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? 1.5);
   const [naturalWidth, setNaturalWidth] = useState(() => naturalWidthCache.get(uri) ?? 0);
+  // Split-column pages (left/right halves) render side by side here too.
+  const columns = useMemo(() => pageColumns(uri), [uri]);
+  const { layout: columnLayout } = usePageLayout(uri, columns.length > 1, headers, setRatio);
 
   // Fitted (visible) image box at scale 1 — the pan bounds are measured from it.
   const fitted = useMemo(() => {
@@ -1485,6 +1488,14 @@ const PagedPage = memo(function PagedPage({
     <GestureDetector gesture={composed}>
       <View style={{ width, height, overflow: "hidden", backgroundColor: M.night }} collapsable={false} onLayout={onLayout}>
         <Animated.View style={[MANGA_FILL, animatedStyle]}>
+          {columns.length > 1 ? (
+            <View style={[MANGA_FILL, { alignItems: "center", justifyContent: "center" }]}>
+              {columnLayout && (
+                <PageGrid layout={columnLayout} pageUri={uri} width={fitted.dw} height={fitted.dh} page={page} headers={headers}
+                  dpr={PixelRatio.get() || 2} onDisplayed={onDisplayed} />
+              )}
+            </View>
+          ) : (
           <MangaPageImage key={uri} uri={uri} page={page} headers={headers} contentFit={fit === "stretch" ? "fill" : "contain"}
             fullResolution={naturalWidth > 0 && naturalWidth * naturalWidth * ratio < 16_000_000 && naturalWidth * ratio < 8192}
             onDisplayed={onDisplayed}
@@ -1497,6 +1508,7 @@ const PagedPage = memo(function PagedPage({
                 setNaturalWidth(w);
               }
             }} />
+          )}
         </Animated.View>
       </View>
     </GestureDetector>
@@ -1528,6 +1540,89 @@ function ZoomLayer({ resetKey, scrollGesture, onInteract, onZoomChange, onPinchi
   );
 }
 
+/** Real sizes for a page entry's columns → its grid layout (lib/manga/tiles).
+ * `pending` while probing; the measured ratio is reported via `onRatio` so the
+ * page box takes its exact height before any pixels arrive. */
+function usePageLayout(
+  uri: string,
+  enabled: boolean,
+  headers: Record<string, string>,
+  onRatio: (ratio: number) => void,
+): { layout: PageLayout | null; pending: boolean } {
+  const columns = useMemo(() => pageColumns(uri), [uri]);
+  const cached = useCallback(() => {
+    const known = columns.map((col) => cachedImageSize(col));
+    return known.every(Boolean) ? (known as ImageSize[]) : undefined;
+  }, [columns]);
+  const [sizes, setSizes] = useState<(ImageSize | null)[] | undefined>(() => (enabled ? cached() : []));
+  useEffect(() => {
+    if (!enabled) { setSizes([]); return; }
+    const known = cached();
+    setSizes(known);
+    if (known) return;
+    let alive = true;
+    void Promise.all(columns.map((col) => probeImageSize(col, headers))).then((probed) => {
+      if (alive) setSizes(probed);
+    });
+    return () => { alive = false; };
+  }, [enabled, columns, cached, headers]);
+  const layout = useMemo<PageLayout | null>(() => {
+    if (!sizes || !sizes.length) return null;
+    const planned = planPage(uri, sizes);
+    if (planned || columns.length < 2) return planned;
+    // Columns whose sizes couldn't be read (or don't match): still side by
+    // side — never stacked — at their known widths, unknowns as equal shares.
+    const height = Math.max(...sizes.map((size) => size?.height ?? 0)) || 1450 * columns.length;
+    return { width: sizes.reduce((sum, size) => sum + (size?.width ?? 1000), 0), height,
+      rows: [{ height, cells: columns.map((col, i) => ({ uri: col, width: sizes[i]?.width ?? 1000 })) }] };
+  }, [uri, columns, sizes]);
+  useEffect(() => {
+    if (!layout) {
+      const single = sizes?.length === 1 ? sizes[0] : null;
+      if (single) { rememberRatio(uri, single.height / single.width); noteNaturalWidth(uri, single.width); onRatio(single.height / single.width); }
+      return;
+    }
+    const ratio = layout.height / layout.width;
+    rememberRatio(uri, ratio);
+    noteNaturalWidth(uri, layout.width);
+    onRatio(ratio);
+  }, [uri, layout, sizes, onRatio]);
+  return { layout, pending: enabled && sizes === undefined };
+}
+
+const PageCellImage = memo(function PageCellImage({ uri, width, page, headers, dpr, onDisplayed }: {
+  uri: string; width: number; page: number; headers: Record<string, string>; dpr: number; onDisplayed: () => void;
+}) {
+  const decodeSize = useMemo(() => verticalDecodeSize(width, dpr), [width, dpr]);
+  return <MangaPageImage uri={uri} page={page} headers={headers} contentFit="fill" onDisplayed={onDisplayed} decodeSize={decodeSize} onMeasure={() => {}} />;
+});
+
+/** A page entry drawn as rows × columns of crops filling `width × height`.
+ * direction:"ltr" — an Arabic-locale device would otherwise flip the row and
+ * swap the left/right halves. */
+function PageGrid({ layout, pageUri, width, height, page, headers, dpr, onDisplayed }: {
+  layout: PageLayout; pageUri: string; width: number; height: number; page: number;
+  headers: Record<string, string>; dpr: number; onDisplayed: (uri: string) => void;
+}) {
+  const displayed = useCallback(() => onDisplayed(pageUri), [onDisplayed, pageUri]);
+  return (
+    <View style={{ width, height, direction: "ltr" }}>
+      {layout.rows.map((row, r) => (
+        <View key={r} style={{ width, height: (height * row.height) / layout.height, flexDirection: "row" }}>
+          {row.cells.map((cell) => {
+            const cellWidth = (width * cell.width) / layout.width;
+            return (
+              <View key={cell.uri} style={{ width: cellWidth, height: "100%" }}>
+                <PageCellImage uri={cell.uri} width={cellWidth} page={page} headers={headers} dpr={dpr} onDisplayed={displayed} />
+              </View>
+            );
+          })}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 /** Continuous-mode page. Intrinsic size comes from the <Image>'s own onLoad
  * event (no `useImage` — holding a decoded full-res ref per windowed cell is
  * an OOM risk on mid-range devices), with the persisted ratio cache providing
@@ -1538,53 +1633,31 @@ const VerticalPage = memo(function VerticalPage({ uri, page, headers, onDisplaye
 }) {
   const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? recentRatio);
   useEffect(() => { setRatio(ratioCache.get(uri) ?? recentRatio); }, [uri, ratioTick]);
-  // Giant strips (hijala) are probed for their real size first, then drawn as
-  // stacked full-density tiles (lib/manga/tiles.ts) instead of one bitmap the
-  // GPU can't hold. Fit-to-screen modes shrink the strip anyway — no tiles.
-  const tileable = (fit === "width" || fit === "smart" || fit === "original") && isTileHost(uri);
-  const [size, setSize] = useState<ImageSize | null | undefined>(() => (tileable ? cachedImageSize(uri) : null));
-  useEffect(() => {
-    if (!tileable) { setSize(null); return; }
-    const known = cachedImageSize(uri);
-    setSize(known);
-    if (known) return;
-    let alive = true;
-    void probeImageSize(uri, headers).then((probed) => {
-      if (!alive) return;
-      if (probed) {
-        rememberRatio(uri, probed.height / probed.width);
-        noteNaturalWidth(uri, probed.width);
-        setRatio(probed.height / probed.width);
-      }
-      setSize(probed);
-    });
-    return () => { alive = false; };
-  }, [uri, tileable, headers]);
-  const tiles = useMemo(() => (size ? planTiles(uri, size) : []), [uri, size]);
+  // Giant strips (hijala) and split-column pages (`01_001` + `01_002`) are
+  // probed for their real sizes, then drawn as a grid of full-density tiles
+  // (lib/manga/tiles.ts) instead of one bitmap the GPU can't hold or two
+  // stacked half-pages. Fit-to-screen modes shrink a plain strip anyway.
+  const columns = useMemo(() => pageColumns(uri), [uri]);
+  const fitTiles = fit === "width" || fit === "smart" || fit === "original";
+  const { layout, pending } = usePageLayout(uri, columns.length > 1 || (fitTiles && isTileHost(columns[0])), headers, setRatio);
   const dims = ratio > 0
     ? verticalDims(fit, screenWidth, screenHeight, ratio, naturalWidthCache.get(uri) ?? 0, dpr)
     : { width: screenWidth, height: screenWidth * 1.45, contentFit: "contain" as const };
   const decodeSize = useMemo(() => verticalDecodeSize(screenWidth, dpr), [screenWidth, dpr]);
-  const tileDisplayed = useCallback(() => onDisplayed(uri), [onDisplayed, uri]);
-  if (tileable && size === undefined) {
-    // Probing (one 64 KB range request) — hold the box, don't start the strip.
+  if (pending) {
+    // Probing (one 64 KB range request per column) — hold the box.
     return <View style={{ width: dims.width, height: dims.height, alignSelf: "center", backgroundColor: M.night }} />;
   }
-  if (tiles.length && size) {
+  if (layout) {
     return (
       <View style={{ width: dims.width, height: dims.height, alignSelf: "center", backgroundColor: M.night }}>
-        {tiles.map((tile) => (
-          <View key={tile.uri} style={{ width: dims.width, height: (dims.height * tile.height) / size.height }}>
-            <MangaPageImage uri={tile.uri} page={page} headers={headers} contentFit="fill" onDisplayed={tileDisplayed}
-              decodeSize={decodeSize} onMeasure={() => {}} />
-          </View>
-        ))}
+        <PageGrid layout={layout} pageUri={uri} width={dims.width} height={dims.height} page={page} headers={headers} dpr={dpr} onDisplayed={onDisplayed} />
       </View>
     );
   }
   return (
     <View style={{ width: dims.width, height: dims.height, alignSelf: "center", backgroundColor: M.night }}>
-      <MangaPageImage key={uri} uri={uri} page={page} headers={headers} contentFit={dims.contentFit} onDisplayed={onDisplayed}
+      <MangaPageImage key={uri} uri={columns[0]} page={page} headers={headers} contentFit={dims.contentFit} onDisplayed={onDisplayed}
         decodeSize={fit === "width" || fit === "smart" ? decodeSize : undefined}
         onMeasure={(event) => {
           const { width: w, height: h } = event.source;

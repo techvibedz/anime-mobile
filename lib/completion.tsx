@@ -112,6 +112,15 @@ function notify() {
   }
 }
 
+/** Drop this device's completion records (account switch / sign-out). */
+export async function resetLocalCompletion(): Promise<void> {
+  completionCache = {};
+  recheckDone = false;
+  await completionWrites.catch(() => {});
+  await AsyncStorage.removeItem(KEY).catch(() => {});
+  notify();
+}
+
 /** All completion records for this anime, by any source href or folded title. */
 function matchCompletionRecords(
   map: Record<string, AnimeCompletion>,

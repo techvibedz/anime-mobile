@@ -40,6 +40,13 @@ async function loadFavorites(): Promise<FavoriteAnime[]> {
   return favCache;
 }
 
+/** Drop this device's favorites (account switch / sign-out). */
+export async function resetLocalFavorites(): Promise<void> {
+  favCache = [];
+  await AsyncStorage.removeItem(KEY).catch(() => {});
+  emitFavoritesChanged();
+}
+
 async function pushFavoriteToCloud(fav: FavoriteAnime) {
   if (!isSupabaseConfigured) return;
   const user = await getSessionUser();

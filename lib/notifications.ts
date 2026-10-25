@@ -163,6 +163,14 @@ export async function clearNotifications() {
   await writeList([]);
 }
 
+/** Drop the in-app notification center (account switch / sign-out). The seen
+ *  set goes too, so it re-seeds silently against the next account's list. */
+export async function resetLocalNotifications(): Promise<void> {
+  await writeList([]);
+  await AsyncStorage.removeItem(SEEN_KEYS_KEY).catch(() => {});
+  lastSyncAt = 0;
+}
+
 type RawEpisode = { title: string; href: string; image: string; animeTitle: string; animeHref: string };
 
 /** Resolve a stable per-anime key for an episode (anime URL, else normalized title). */

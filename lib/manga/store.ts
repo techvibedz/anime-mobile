@@ -117,6 +117,19 @@ export function flushMangaStore(): void {
   if (hadPendingProgressEmit) emit();
 }
 
+/** Drop this device's manga library, progress and read marks (account switch /
+ *  sign-out). The preferred source is a device setting and stays. */
+export async function resetLocalManga(): Promise<void> {
+  if (progressEmitTimer) { clearTimeout(progressEmitTimer); progressEmitTimer = null; }
+  for (const timer of persistTimers.values()) clearTimeout(timer);
+  persistTimers.clear();
+  libCache = [];
+  progressCache = {};
+  readCache = {};
+  await AsyncStorage.multiRemove([LIB_KEY, PROGRESS_KEY, READ_KEY]).catch(() => {});
+  emit();
+}
+
 // ── preferred source ─────────────────────────────────────────────────────────
 
 export async function getPreferredMangaSource(): Promise<MangaSourceId | null> {

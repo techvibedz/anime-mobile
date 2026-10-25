@@ -6,6 +6,9 @@ import * as Linking from "expo-linking";
 import { supabase, isSupabaseConfigured } from "./supabase";
 import { registerPushTokenAsync, unregisterPushTokenAsync } from "./push";
 import { remoteLog, errText, setLogUser } from "./remoteLog";
+import { claimLocalData, releaseLocalData } from "./accountData";
+import { flushHistoryCloudPushes } from "./history";
+import { flushMangaStore } from "./manga/store";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -44,6 +47,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // forever — a single-user "stuck on loading" with everyone else fine.
     // ponytail: 12s ceiling + local-clear on any failure clears the poisoned
     // token and routes the AuthGate to the welcome screen instead of hanging.
+    // A different account than the one whose data is on this phone wipes that
+    // data BEFORE the user is exposed — every cloud sync keys off `user`, so
+    // nothing of the previous account can merge into this one. Serialized so a
+    // getSession + INITIAL_SESSION pair can't interleave.
+    let claimChain: Promise<void> = Promise.resolve();
+    const applySession = (sess: Session | null) => {
+      const next = sess?.user ?? null;
+      claimChain = claimChain
+        .then(() => (next ? claimLocalData(next.id) : undefined))
+        .catch(() => {})
+        .then(() => {
+          setSession(sess);
+          setUser(next);
+          setLogUser(next);
+        });
+      return claimChain;
+    };
     const fail = () => {
       void supabase.auth.signOut({ scope: "local" }).catch(() => {});
       void remoteLog("error", "auth", "getSession timed out (12s) — cleared local session");
@@ -55,17 +75,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTimeout(() => reject(new Error("auth-getSession-timeout")), 12000),
       ),
     ])
-      .then(({ data }) => {
-        setSession(data.session);
-        setUser(data.session?.user ?? null);
-        setLogUser(data.session?.user ?? null);
-        setReady(true);
-      })
+      .then(({ data }) => applySession(data.session))
+      .then(() => setReady(true))
       .catch(fail);
     const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
-      setSession(sess);
-      setUser(sess?.user ?? null);
-      setLogUser(sess?.user ?? null);
+      void applySession(sess);
     });
 
     // Global deep-link handler. On Android the OS often hijacks the OAuth
@@ -181,7 +195,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     if (user?.id) await unregisterPushTokenAsync(user.id);
+    // Last progress reaches the account before the device copy is wiped.
+    flushMangaStore();
+    await Promise.race([
+      flushHistoryCloudPushes(),
+      new Promise((resolve) => setTimeout(resolve, 4000)),
+    ]).catch(() => {});
     await supabase.auth.signOut();
+    await releaseLocalData();
     setLogUser(null);
   }, [user?.id]);
 

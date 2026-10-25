@@ -196,19 +196,29 @@ let lastCloudPushAt = 0;
 let cloudPushTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingCloud = new Map<string, WatchEntry>();
 
-function flushCloudPushes() {
+function flushCloudPushes(): Promise<void> {
   if (cloudPushTimer) { clearTimeout(cloudPushTimer); cloudPushTimer = null; }
-  if (pendingCloud.size === 0) return;
+  if (pendingCloud.size === 0) return Promise.resolve();
   lastCloudPushAt = Date.now();
   const batch = [...pendingCloud.values()];
   pendingCloud.clear();
-  for (const entry of batch) void pushToCloud(entry).catch(() => {});
+  return Promise.all(batch.map((entry) => pushToCloud(entry).catch(() => {}))).then(() => {});
 }
 
 /** Send any pending history pushes right now (called when the app backgrounds —
  *  the coalescing timer would otherwise lose the final save to an app-kill). */
-export function flushHistoryCloudPushes(): void {
-  flushCloudPushes();
+export function flushHistoryCloudPushes(): Promise<void> {
+  return flushCloudPushes();
+}
+
+/** Drop this device's history (account switch / sign-out). Pending pushes are
+ *  discarded too, so the previous account's episodes never reach the next one. */
+export async function resetLocalHistory(): Promise<void> {
+  if (cloudPushTimer) { clearTimeout(cloudPushTimer); cloudPushTimer = null; }
+  pendingCloud.clear();
+  historyCache = [];
+  await AsyncStorage.removeItem(KEY).catch(() => {});
+  for (const cb of historyListeners) cb();
 }
 
 function scheduleCloudPush(entry: WatchEntry) {

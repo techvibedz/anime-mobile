@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
-import { supabase, isSupabaseConfigured } from "./supabase";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { supabase, isSupabaseConfigured, readStoredSession } from "./supabase";
 import { registerPushTokenAsync, unregisterPushTokenAsync } from "./push";
 import { remoteLog, errText, setLogUser } from "./remoteLog";
 import { claimLocalData, releaseLocalData } from "./accountData";
@@ -11,6 +12,22 @@ import { flushHistoryCloudPushes } from "./history";
 import { flushMangaStore } from "./manga/store";
 
 WebBrowser.maybeCompleteAuthSession();
+
+// Android re-delivers the LAUNCH intent when the app is reopened from recents,
+// so getInitialURL() can hand back an auth-callback link from days ago. Feeding
+// its long-rotated refresh token to setSession made the server reject it and
+// signed the user out. Each callback is applied once; expired ones never.
+const HANDLED_AUTH_LINK_KEY = "@auth_handled_link_v1";
+async function claimAuthLink(fingerprint: string): Promise<boolean> {
+  try {
+    if ((await AsyncStorage.getItem(HANDLED_AUTH_LINK_KEY)) === fingerprint) return false;
+    await AsyncStorage.setItem(HANDLED_AUTH_LINK_KEY, fingerprint);
+  } catch {}
+  return true;
+}
+
+// True only while the user's own sign-out runs — any other SIGNED_OUT is logged.
+let userSigningOut = false;
 
 interface AuthState {
   user: User | null;
@@ -42,12 +59,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setReady(true);
       return;
     }
-    // `ready` flipping to true ONLY here strand a user whose persisted session
-    // is corrupted (or whose refresh-token call hangs) on the root spinner
-    // forever — a single-user "stuck on loading" with everyone else fine.
-    // ponytail: 12s ceiling + local-clear on any failure clears the poisoned
-    // token and routes the AuthGate to the welcome screen instead of hanging.
-    // A different account than the one whose data is on this phone wipes that
+    // `ready` must never wait on getSession alone — a hung refresh would strand
+    // the user on the root spinner (see slowStart below). A different account than the one whose data is on this phone wipes that
     // data BEFORE the user is exposed — every cloud sync keys off `user`, so
     // nothing of the previous account can merge into this one. Serialized so a
     // getSession + INITIAL_SESSION pair can't interleave.
@@ -64,21 +77,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       return claimChain;
     };
-    const fail = () => {
-      void supabase.auth.signOut({ scope: "local" }).catch(() => {});
-      void remoteLog("error", "auth", "getSession timed out (12s) — cleared local session");
-      setReady(true);
-    };
-    Promise.race([
-      supabase.auth.getSession(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("auth-getSession-timeout")), 12000),
-      ),
-    ])
+    // getSession() refreshes an expired access token over the network (auth-js
+    // retries for up to ~30s). It used to race a 12s timer that then CLEARED the
+    // session — anyone opening the app after an hour on a slow link was signed
+    // out. Now a slow start shows the session already on disk and lets the
+    // refresh finish in the background; only the server can end a session.
+    const slowStart = setTimeout(() => {
+      void readStoredSession()
+        .then((stored) => applySession(stored))
+        .finally(() => setReady(true));
+      void remoteLog("warn", "auth", "getSession slow (12s) — using stored session");
+    }, 12000);
+    supabase.auth.getSession()
       .then(({ data }) => applySession(data.session))
-      .then(() => setReady(true))
-      .catch(fail);
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+      .catch(() => readStoredSession().then((stored) => applySession(stored)))
+      .finally(() => {
+        clearTimeout(slowStart);
+        setReady(true);
+      });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
+      if (event === "SIGNED_OUT" && !userSigningOut) {
+        void remoteLog("warn", "auth", "session ended without user sign-out");
+      }
       void applySession(sess);
     });
 
@@ -94,6 +114,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const access_token = params.get("access_token");
       const refresh_token = params.get("refresh_token");
       const code = params.get("code");
+      const expiresAt = Number(params.get("expires_at"));
+      if (access_token && expiresAt && expiresAt * 1000 < Date.now()) return;
+      const fingerprint = refresh_token || code;
+      if (!fingerprint || !(await claimAuthLink(fingerprint))) return;
       try {
         if (access_token && refresh_token) {
           await supabase.auth.setSession({ access_token, refresh_token });
@@ -189,6 +213,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!access_token || !refresh_token) {
       return { error: "Could not parse auth tokens from response" };
     }
+    // The same callback may also arrive via the deep-link listener — apply once.
+    if (!(await claimAuthLink(refresh_token))) return {};
     const { error: setErr } = await supabase.auth.setSession({ access_token, refresh_token });
     return { error: setErr?.message };
   }, []);
@@ -201,7 +227,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       flushHistoryCloudPushes(),
       new Promise((resolve) => setTimeout(resolve, 4000)),
     ]).catch(() => {});
-    await supabase.auth.signOut();
+    userSigningOut = true;
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      userSigningOut = false;
+    }
     await releaseLocalData();
     setLogUser(null);
   }, [user?.id]);

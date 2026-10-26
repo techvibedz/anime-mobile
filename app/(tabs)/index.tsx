@@ -41,7 +41,7 @@ import { PantoufaWordmark } from "../../components/PantoufaWordmark";
 import { Shimmer } from "../../components/Shimmer";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
-import { reconcileCompletionFromEpisodes } from "../../lib/completion";
+import { reconcileCompletionFromEpisodes, useCompletionLookup } from "../../lib/completion";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { PosterCard } from "../../components/PosterCard";
 import { StateView } from "../../components/StateView";
@@ -252,6 +252,13 @@ export default function HomeScreen() {
   const [featured, setFeatured] = useState<FeaturedItem[]>([]);
   const [sections, setSections] = useState<HomeSection[]>([]);
   const [history, setHistory] = useState<WatchEntry[]>([]);
+  // Anime the user marked "completed" on its detail page never sit in
+  // Continue Watching — they told us they're done with it.
+  const completionLookup = useCompletionLookup();
+  const continueItems = useMemo(
+    () => history.filter((e) => !completionLookup.get({ hrefs: [e.animeHref], titles: [e.animeTitle] })?.marked),
+    [history, completionLookup],
+  );
   const [unread, setUnread] = useState(0);
   // True once a connectivity probe confirms the device is offline AND we have no
   // content to show — drives the offline home state (funnels to Downloads).
@@ -528,7 +535,7 @@ export default function HomeScreen() {
             Promoted onto a frosted panel that OVERLAPS the hero's lower edge —
             the privileged "get back to it" surface floating over the cinematic
             plate. Same data + handlers as before, new hierarchy. */}
-        {history.length > 0 && (
+        {continueItems.length > 0 && (
           <View style={ss.shelf}>
             <View style={ss.shelfHeader}>
               <View style={ss.sectionTitleRow}>
@@ -537,7 +544,7 @@ export default function HomeScreen() {
               </View>
             </View>
             <RtlRow contentContainerStyle={{ paddingHorizontal: PAD, gap: 14, paddingBottom: 2 }}>
-              {history.slice(0, 10).map((entry) => (
+              {continueItems.slice(0, 10).map((entry) => (
                 <ContinueCard
                   key={entry.episodeHref}
                   entry={entry}

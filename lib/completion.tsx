@@ -32,6 +32,11 @@ export interface AnimeCompletion {
   caughtUp: boolean;
   /** Caught up AND the series has finished airing (watched the real finale). */
   finished: boolean;
+  /** The user marked it completed by hand (detail page). Overrides the
+   *  history-derived state: caughtUp + finished stay true until unmarked. */
+  marked?: boolean;
+  /** Poster, for the completed shelf when history has none (marked anime). */
+  image?: string;
   updatedAt: number;
 }
 
@@ -62,7 +67,8 @@ function repairBlob(rec: AnimeCompletion): AnimeCompletion | null {
   if (!isBlobRecord(rec, normAnimeKey, animeTitleKey)) return null;
   const own = normAnimeKey(rec.key);
   const hrefs = rec.hrefs.filter((h) => normAnimeKey(h) === own);
-  return { key: rec.key, hrefs: hrefs.length ? hrefs : [rec.key], titles: [], lastEpNum: 0, caughtUp: false, finished: false, updatedAt: Date.now() };
+  const marked = !!rec.marked;
+  return { key: rec.key, hrefs: hrefs.length ? hrefs : [rec.key], titles: [], lastEpNum: 0, caughtUp: marked, finished: marked, marked, image: rec.image, updatedAt: Date.now() };
 }
 let completionLoading: Promise<Record<string, AnimeCompletion>> | null = null;
 
@@ -143,8 +149,10 @@ async function pushToCloud(rec: AnimeCompletion) {
     hrefs: rec.hrefs,
     titles: rec.titles,
     last_ep_num: rec.lastEpNum,
-    caught_up: rec.caughtUp,
-    finished: rec.finished,
+    caught_up: rec.caughtUp || !!rec.marked,
+    finished: rec.finished || !!rec.marked,
+    marked_completed: !!rec.marked,
+    image: rec.image ?? null,
     updated_at: new Date(rec.updatedAt).toISOString(),
   }, { onConflict: "user_id,anime_key" });
   if (error) console.warn("[completion] cloud sync failed:", error.message);
@@ -194,6 +202,9 @@ export async function recordAnimeCompletion(rec: {
     ? matches.find((r) => r.lastEpNum === rec.lastEpNum && r.caughtUp)
     : undefined;
   if (durable) rec = { ...rec, caughtUp: true, finished: rec.finished ?? durable.finished };
+  // A hand-made "completed" mark wins over whatever history says.
+  const marked = matches.some((r) => r.marked);
+  if (marked) rec = { ...rec, caughtUp: true, finished: true };
   const state = {
     // The detail page is authoritative: it records the episode list the user
     // actually sees. Keeping a higher stored number (a feed item from another
@@ -206,6 +217,7 @@ export async function recordAnimeCompletion(rec: {
     // this episode count keeps it — checking only the anchor copy downgraded
     // the confirmed sibling to "caught up" (Tokyo Revengers: Seiya Kessen-hen).
     finished: rec.caughtUp && (rec.finished ?? matches.some((r) => r.lastEpNum === rec.lastEpNum && r.finished)),
+    marked,
   };
   const next: AnimeCompletion = {
     key,
@@ -217,10 +229,11 @@ export async function recordAnimeCompletion(rec: {
     hrefs: uniq([...hrefs, ...(existing?.hrefs || [])]),
     titles: uniq([...(existing?.titles || []), ...titles]),
     ...state,
+    image: existing?.image,
     updatedAt: Date.now(),
   };
   const sameState = (r: AnimeCompletion) =>
-    r.caughtUp === state.caughtUp && r.finished === state.finished && r.lastEpNum === state.lastEpNum;
+    r.caughtUp === state.caughtUp && r.finished === state.finished && r.lastEpNum === state.lastEpNum && !!r.marked === marked;
   if (existing && matches.every(sameState) && existing.hrefs[0] === next.hrefs[0] &&
     existing.hrefs.length === next.hrefs.length && existing.titles.length === next.titles.length) {
     if (rec.finished === undefined && next.caughtUp && !next.finished)
@@ -236,6 +249,55 @@ export async function recordAnimeCompletion(rec: {
   for (const changed of updated) pushToCloud(changed).catch(() => {});
   if (rec.finished === undefined && next.caughtUp && !next.finished)
     void confirmFinished(map, updated, titles[0] || next.titles[0], next.lastEpNum);
+}
+
+/**
+ * The detail page's "I've finished this" toggle — for anime watched before the
+ * app (or elsewhere), so they count as completed on the account. Marks EVERY
+ * matching copy (same as the automatic state). Unmarking hands the anime back
+ * to the history-derived state the page passes in.
+ */
+export async function setAnimeMarkedCompleted(opts: {
+  hrefs: (string | null | undefined)[];
+  titles: (string | null | undefined)[];
+  image?: string | null;
+  lastEpNum: number;
+  marked: boolean;
+  /** History-derived state, applied when unmarking. */
+  caughtUp: boolean;
+  lastTracked?: boolean;
+}): Promise<void> {
+  const hrefs = uniq(opts.hrefs);
+  const titles = uniq(opts.titles);
+  const key = normAnimeKey(hrefs[0] || "") || animeTitleKey(titles[0]);
+  if (!key) return;
+  const map = await getCompletionMap();
+  let targets = matchCompletionRecords(map, hrefs, titles);
+  if (targets.length === 0) {
+    targets = [{ key, hrefs, titles, lastEpNum: opts.lastEpNum, caughtUp: false, finished: false, updatedAt: 0 }];
+  }
+  const now = Date.now();
+  const changed: AnimeCompletion[] = [];
+  for (const rec of targets) {
+    const next: AnimeCompletion = {
+      ...rec,
+      lastEpNum: Math.max(rec.lastEpNum, opts.lastEpNum),
+      marked: opts.marked,
+      // Unmark clears the state; recordAnimeCompletion below recomputes it.
+      caughtUp: opts.marked,
+      finished: opts.marked,
+      image: rec.image || opts.image || undefined,
+      updatedAt: now,
+    };
+    map[rec.key] = next;
+    changed.push(next);
+  }
+  await saveCompletionMap(map);
+  notify();
+  for (const rec of changed) pushToCloud(rec).catch(() => {});
+  if (!opts.marked && opts.lastEpNum > 0) {
+    await recordAnimeCompletion({ hrefs, titles, lastEpNum: opts.lastEpNum, caughtUp: opts.caughtUp, lastTracked: opts.lastTracked });
+  }
 }
 
 /** Hydrate the local cache from Supabase (called after sign-in). */
@@ -255,8 +317,10 @@ export async function pullCompletionFromCloud(): Promise<void> {
       hrefs: Array.isArray(row.hrefs) ? row.hrefs : [],
       titles: Array.isArray(row.titles) ? row.titles : [],
       lastEpNum: row.last_ep_num || 0,
-      caughtUp: !!row.caught_up,
-      finished: !!row.finished,
+      caughtUp: !!row.caught_up || !!row.marked_completed,
+      finished: !!row.finished || !!row.marked_completed,
+      marked: !!row.marked_completed,
+      image: row.image || undefined,
       updatedAt: new Date(row.updated_at).getTime(),
     };
     const repaired = repairBlob(cloud);
@@ -273,6 +337,7 @@ export async function pullCompletionFromCloud(): Promise<void> {
     if (!local || (cloud.updatedAt >= local.updatedAt && cloud.lastEpNum >= local.lastEpNum)) {
       map[cloud.key] = {
         ...cloud,
+        image: cloud.image || local?.image,
         hrefs: uniq([...(local?.hrefs || []), ...cloud.hrefs]),
         titles: uniq([...(local?.titles || []), ...cloud.titles]),
       };
@@ -330,6 +395,7 @@ export async function getCompletedAnime(
   const posters = [
     ...groups.map((g) => ({ title: g.animeTitle, href: g.animeHref, image: g.image })),
     ...extraPosters,
+    ...Object.values(map).filter((r) => r.image).map((r) => ({ title: r.titles[0] || "", href: r.hrefs[0] || r.key, image: r.image })),
   ];
   return buildCompletedList(Object.values(map), posters, normAnimeKey, animeTitleKey);
 }
@@ -400,7 +466,7 @@ export async function reconcileCompletionFromEpisodes(
 
   for (const [key, newest] of newestByKey) {
     const rec = map[key];
-    if (!rec) continue;
+    if (!rec || rec.marked) continue;
     const latest = Math.max(newest, rec.lastEpNum);
     let watchedNewest = false;
     let tracked = false;
@@ -483,7 +549,7 @@ export async function recordEpisodeWatched(opts: {
       ...rec,
       lastEpNum: Math.max(rec.lastEpNum, opts.epNum),
       caughtUp: true,
-      finished: rec.finished && opts.epNum === rec.lastEpNum,
+      finished: !!rec.marked || (rec.finished && opts.epNum === rec.lastEpNum),
       updatedAt: Date.now(),
     };
     if (next.caughtUp === rec.caughtUp && next.finished === rec.finished && next.lastEpNum === rec.lastEpNum) {

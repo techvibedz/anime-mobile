@@ -28,7 +28,7 @@ import type { AnimeDetail, Episode, RelatedAnimeCard } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, isEpisodeTracked, animeTitleKey, normHref, toggleWatched, subscribeHistory, type CompletedSets } from "../../lib/history";
-import { recordAnimeCompletion } from "../../lib/completion";
+import { recordAnimeCompletion, setAnimeMarkedCompleted, useAnimeCompletion } from "../../lib/completion";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
 import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, fetchSeasonInfo, peekMalRating } from "../../lib/animeInfo";
 import { seasonLabelAr } from "../../lib/seasonLabel";
@@ -112,6 +112,8 @@ export default function AnimeDetailScreen() {
   const [mayLike, setMayLike] = useState<RelatedAnimeCard[]>([]);
   const [mayLikeLoading, setMayLikeLoading] = useState(true);
   const [titleCopied, setTitleCopied] = useState(false);
+  const [completedToast, setCompletedToast] = useState<string | null>(null);
+  const completedToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [posterOpen, setPosterOpen] = useState(false);
   const [shareCardOpen, setShareCardOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -384,6 +386,34 @@ export default function AnimeDetailScreen() {
     setPickerOpen(false);
   }, [data, animeHref]);
 
+  // "I've finished this" — for anime watched before the app / elsewhere. Saved
+  // to the account (anime_completion) and hides the anime from Continue Watching.
+  const completion = useAnimeCompletion([animeHref, merged?.anime4up], [data?.title]);
+  const isCompleted = !!completion?.finished;
+  const isMarked = !!completion?.marked;
+  const toggleCompleted = useCallback(() => {
+    if (!data || !animeHref) return;
+    const flash = (msg: string) => {
+      setCompletedToast(msg);
+      if (completedToastTimer.current) clearTimeout(completedToastTimer.current);
+      completedToastTimer.current = setTimeout(() => setCompletedToast(null), 1800);
+    };
+    // Finished through watch history, not by hand: nothing to undo here.
+    if (isCompleted && !isMarked) { flash(t.completedFromHistory); return; }
+    const marked = !isMarked;
+    flash(marked ? t.markedCompleted : t.unmarkedCompleted);
+    void setAnimeMarkedCompleted({
+      hrefs: [animeHref, merged?.anime4up],
+      titles: [data.title],
+      image: data.poster,
+      lastEpNum: maxNum,
+      marked,
+      caughtUp,
+      lastTracked,
+    }).catch(() => {});
+  }, [data, animeHref, merged?.anime4up, isCompleted, isMarked, maxNum, caughtUp, lastTracked]);
+  useEffect(() => () => { if (completedToastTimer.current) clearTimeout(completedToastTimer.current); }, []);
+
   // Long-press the title to copy it instantly — no manual text selection.
   const copyTitle = useCallback(() => {
     if (!data?.title) return;
@@ -522,6 +552,12 @@ export default function AnimeDetailScreen() {
                   <Text style={[ss.metaPillText, ss.seasonPillText]}>{seasonLabel}</Text>
                 </View>
               ) : null}
+              {isCompleted ? (
+                <View style={[ss.metaPill, ss.completedPill]}>
+                  <Ionicons name="checkmark-done" size={12} color={C.mint} />
+                  <Text style={[ss.metaPillText, ss.completedPillText]}>{t.completedBadge}</Text>
+                </View>
+              ) : null}
               <MalBadge score={malScore} />
               {data.rating && (
                 <View style={ss.ratingPill}>
@@ -623,6 +659,15 @@ export default function AnimeDetailScreen() {
         <GlassCircleBtn icon="chevron-forward" onPress={() => router.back()} />
       </View>
 
+      {completedToast && (
+        <View pointerEvents="none" style={[ss.completedToastWrap, { bottom: insets.bottom + 84 }]}>
+          <View style={ss.completedToastPill}>
+            <Ionicons name="checkmark-done" size={14} color={C.mint} style={ss.completedToastIcon} />
+            <Text style={ss.completedToastText}>{completedToast}</Text>
+          </View>
+        </View>
+      )}
+
       {/* ── Floating action bar — playback is always one tap away ── */}
       <View style={[ss.actionBar, { paddingBottom: insets.bottom + 10 }]}>
         <GlassFill intensity={26} />
@@ -637,6 +682,15 @@ export default function AnimeDetailScreen() {
         </Pressable>
         <Pressable style={ss.actionIcon} onPress={toggleBookmark}>
           <Ionicons name={bookmarked ? "heart" : "heart-outline"} size={20} color={bookmarked ? C.accent : C.text} />
+        </Pressable>
+        <Pressable
+          style={[ss.actionIcon, isCompleted && ss.actionIconCompleted]}
+          onPress={toggleCompleted}
+          accessibilityRole="button"
+          accessibilityState={{ checked: isCompleted }}
+          accessibilityLabel={isMarked ? t.unmarkCompleted : t.markCompleted}
+        >
+          <Ionicons name={isCompleted ? "checkmark-done-circle" : "checkmark-done-circle-outline"} size={21} color={isCompleted ? C.mint : C.text} />
         </Pressable>
         <Pressable style={ss.actionIcon} onPress={() => setShareCardOpen(true)}>
           <Ionicons name="share-outline" size={19} color={C.text} />
@@ -1575,6 +1629,16 @@ const ss = StyleSheet.create({
   metaPillText: { color: C.textSecondary, fontSize: 12, lineHeight: 18, fontFamily: "Cairo_600SemiBold" },
   seasonPill: { backgroundColor: C.accentSoft },
   seasonPillText: { color: C.accent },
+  completedPill: { backgroundColor: C.mintSoft },
+  completedPillText: { color: C.mint },
+  completedToastWrap: { position: "absolute", left: 0, right: 0, alignItems: "center", zIndex: 20 },
+  completedToastPill: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: R.pill,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.mintGlow,
+  },
+  completedToastIcon: { marginHorizontal: 6 },
+  completedToastText: { color: C.mint, fontSize: 12, lineHeight: 20, fontFamily: "Cairo_600SemiBold" },
   synopsisNote: { color: C.textMuted, fontSize: 11, marginTop: 4, fontFamily: "Cairo_500Medium", textAlign: "right" },
   ratingPill: {
     flexDirection: "row", alignItems: "center", gap: 4,
@@ -1608,6 +1672,7 @@ const ss = StyleSheet.create({
     borderRadius: R.md, backgroundColor: C.surface,
     borderWidth: 1, borderColor: C.borderSoft,
   },
+  actionIconCompleted: { backgroundColor: C.mintSoft, borderColor: C.mintGlow },
 
   // Synopsis
   synopsis: { color: C.textSecondary, fontSize: 14, lineHeight: 26, marginTop: 24, fontFamily: "Cairo_500Medium", textAlign: "right" },

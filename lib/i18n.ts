@@ -147,6 +147,11 @@ export const ar = {
   caughtUpBadge: "آخر حلقة",
   latestEpBadge: "الأحدث",
   titleCopied: "تم نسخ العنوان",
+  markCompleted: "وضع علامة: شاهدته كاملًا",
+  unmarkCompleted: "إزالة علامة المكتمل",
+  markedCompleted: "أُضيف إلى المكتملة",
+  unmarkedCompleted: "أُزيل من المكتملة",
+  completedFromHistory: "مكتمل حسب سجل مشاهدتك",
   viewPoster: "عرض صورة الأنمي بالحجم الكامل",
   shareAnime: (title: string) => `شاهد "${title}" على بانتوفة`,
 

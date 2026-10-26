@@ -93,10 +93,13 @@ export function buildCompletedList(
     seen.add(id);
     const hrefKeys = new Set(rec.hrefs.map(normalizeHref).filter(Boolean));
     const titleKeys = new Set(rec.titles.map(normalizeTitle).filter(Boolean));
-    const poster = posters.find((p) => {
+    const matches = (p: { title: string; href: string }) => {
       const t = normalizeTitle(p.title || "");
       return hrefKeys.has(normalizeHref(p.href || "")) || (!!t && titleKeys.has(t));
-    });
+    };
+    // Some history rows carry no image; a later source (the record's own
+    // poster, My List) that has one must win over an empty first match.
+    const poster = posters.find((p) => matches(p) && p.image) ?? posters.find(matches);
     out.push({
       key: id,
       title: poster?.title || rec.titles[0] || rec.key,

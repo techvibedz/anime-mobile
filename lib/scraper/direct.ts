@@ -2381,6 +2381,30 @@ function a3rbSeasonOf(label: string): number {
 // for hundreds of ms on phones.
 type A3rbSlugInfo = { norm: string; toks: string[]; season: number; compact: string };
 const a3rbSlugInfo = new Map<string, A3rbSlugInfo>();
+// Deriving every slug's info (normalisation, tokens, compact key) is ~6.5k
+// regex-heavy passes — done in one go it froze the JS thread for seconds on
+// the first search after launch (taps and scrolling stalled with it). Callers
+// await this time-sliced warm-up first, so the scans below only read the
+// memoised info.
+const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+const A3RB_SLICE_MS = 8;
+let a3rbInfoWarm: { slugs: string[]; done: Promise<void> } | null = null;
+function warmA3rbInfo(slugs: string[]): Promise<void> {
+  if (a3rbInfoWarm?.slugs === slugs) return a3rbInfoWarm.done;
+  const done = (async () => {
+    let sliceAt = Date.now();
+    for (let i = 0; i < slugs.length; i++) {
+      a3rbInfo(slugs[i]);
+      if ((i & 31) === 0 && Date.now() - sliceAt > A3RB_SLICE_MS) {
+        await yieldToUi();
+        sliceAt = Date.now();
+      }
+    }
+  })();
+  a3rbInfoWarm = { slugs, done };
+  return done;
+}
+
 function a3rbInfo(slug: string): A3rbSlugInfo {
   let info = a3rbSlugInfo.get(slug);
   if (!info) {
@@ -2492,6 +2516,7 @@ export async function searchAnime3rbCatalog(title: string, want: A3rbWant = null
   if (!title) return null;
   const slugs = await fetchA3rbCatalog();
   if (!slugs.length) return null;
+  await warmA3rbInfo(slugs);
   const slug = a3rbCatalogMatch(title, slugs);
   if (!slug) return null;
   // Confirm against the real page's own title before trusting the match.
@@ -2547,10 +2572,17 @@ export async function searchAnime3rbCatalogFuzzy(
   if (!title) return [];
   const slugs = await fetchA3rbCatalog();
   if (!slugs.length) return [];
+  await warmA3rbInfo(slugs);
   const wantSeason = a3rbSeasonOf(title.toLowerCase());
   const want = normFuzzy(title);
   const scored: { slug: string; score: number }[] = [];
-  for (const slug of slugs) {
+  let sliceAt = Date.now();
+  for (let i = 0; i < slugs.length; i++) {
+    if ((i & 63) === 0 && Date.now() - sliceAt > A3RB_SLICE_MS) {
+      await yieldToUi();
+      sliceAt = Date.now();
+    }
+    const slug = slugs[i];
     const info = a3rbInfo(slug);
     const score = fuzzyScoreNormalized(want, info.norm);
     if (score < 0.62) continue;

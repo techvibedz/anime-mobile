@@ -21,7 +21,8 @@
 //     shares ONE search between a background warm-up and a tap.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { fetchEpisodes, searchAnime, type SearchResult } from "./api";
+import { fetchEpisodes, hasFreshEpisodes, searchAnime, type SearchResult } from "./api";
+import { whenScrollIdle } from "./scrollIdle";
 import { getAltTitles, fetchAniListIdForTitle } from "./animeInfo";
 import {
   aniListLookupTitles,
@@ -290,23 +291,47 @@ async function doResolve(entry: AniListResolveEntry): Promise<string | null> {
 
 /* ── Background warm-up ── */
 
+/** Load every already-resolved href for these cards into memory in ONE disk
+ *  read, so a tap on any of them (not just the warmed ones) opens the real
+ *  page synchronously. */
+export async function hydrateResolvedHrefs(ids: readonly number[]): Promise<void> {
+  const missing = ids.filter((id) => !cacheMem.has(id));
+  if (missing.length === 0) return;
+  try {
+    const rows = await AsyncStorage.multiGet(missing.map((id) => CACHE_PREFIX + id));
+    rows.forEach(([, raw], i) => {
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { href?: string; ts?: number };
+      if (parsed?.href && typeof parsed.ts === "number" && Date.now() - parsed.ts < CACHE_TTL) cacheMem.set(missing[i], parsed.href);
+    });
+  } catch {}
+}
+
 /**
  * Resolve a rail's first cards ahead of a tap, one at a time, so opening one
- * is a cache hit and its detail page loads straight away. The detail payload
- * is warmed too (read-through cached by fetchEpisodes). Serial and capped on
- * purpose: every resolve is a three-source search and anime3rb rate-limits
- * per IP, so the warm-up must never crowd out what the user is doing.
- * `isActive` is checked between cards (stop when the screen loses focus).
+ * is a cache hit; the first few also get their detail payload warmed — but
+ * only when nothing fresh is on disk (re-fetching a cached page would start a
+ * background re-scrape). Serial, capped and paused while the user scrolls:
+ * every resolve is a three-source search, anime3rb rate-limits per IP, and a
+ * scrape landing mid-fling is visible stutter. `isActive` is checked between
+ * steps (stop when the screen loses focus).
  */
 export async function prewarmEntries(
   entries: readonly AniListResolveEntry[],
   isActive: () => boolean,
-  cap = 5,
+  cap = 6,
+  detailCap = 3,
 ): Promise<void> {
-  for (const entry of entries.slice(0, cap)) {
+  await hydrateResolvedHrefs(entries.map((e) => e.anilistId));
+  const list = entries.slice(0, cap);
+  for (let i = 0; i < list.length; i++) {
+    await whenScrollIdle();
     if (!isActive()) return;
-    const href = await resolveEntryToSource(entry).catch(() => null);
-    if (!href || !isActive()) continue;
+    const href = await resolveEntryToSource(list[i]).catch(() => null);
+    if (!href || i >= detailCap) continue;
+    await whenScrollIdle();
+    if (!isActive()) return;
+    if (await hasFreshEpisodes(href)) continue;
     await fetchEpisodes(href).catch(() => null);
   }
 }

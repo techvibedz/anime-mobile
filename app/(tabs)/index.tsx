@@ -33,6 +33,8 @@ import type { RecItem } from "../../lib/animeInfo";
 import { pickTasteSeeds, rankRecommendations, type RankedRec } from "../../lib/recommend";
 import { AniListPosterCard } from "../../components/AniListPosterCard";
 import { prewarmEntries } from "../../lib/anilistResolve";
+import { msSinceScroll, noteScrollActivity, whenScrollIdle } from "../../lib/scrollIdle";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebarActions } from "../../components/Sidebar";
 import { PantoufaWordmark } from "../../components/PantoufaWordmark";
@@ -80,6 +82,9 @@ const HOME_SECTION_IDS = ["recently_updated", "latest_movies", "top_animes", "to
    Owns its OWN paging index + 5s auto-advance timer, so a hero tick or swipe
    re-renders only the carousel — not the entire home feed. Full-bleed: the art
    runs under the status bar and the floating top bar. */
+// Set by the feed's onScroll: true while the hero is scrolled out of view.
+const heroOffscreen = { current: false };
+
 const HeroCarousel = memo(function HeroCarousel({ featured, topInset }: { featured: FeaturedItem[]; topInset: number }) {
   const { width: SW } = useWindowDimensions();
   const heroRef = useRef<ScrollView>(null);
@@ -96,6 +101,9 @@ const HeroCarousel = memo(function HeroCarousel({ featured, topInset }: { featur
     // Paused while backgrounded; restarts on foreground (below).
     if (AppState.currentState !== "active") return;
     heroTimer.current = setInterval(() => {
+      // Don't page (scrollTo + re-render) while the feed is being scrolled or
+      // the hero is scrolled out of view — that work only costs frames.
+      if (heroOffscreen.current || msSinceScroll() < 1500) return;
       setHeroIndex((prev) => {
         const next = (prev + 1) % featured.length;
         heroRef.current?.scrollTo({ x: next * SW, animated: true });
@@ -432,6 +440,8 @@ export default function HomeScreen() {
   const topBarSolid = useRef(new Animated.Value(0)).current;
   const topBarShown = useRef(false);
   const onFeedScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    noteScrollActivity();
+    heroOffscreen.current = e.nativeEvent.contentOffset.y > HERO_H;
     const show = e.nativeEvent.contentOffset.y > HERO_H - 320; // before the hero title reaches the bar
     if (show === topBarShown.current) return;
     topBarShown.current = show;
@@ -746,39 +756,62 @@ const seedKeyOf = (e: { animeTitle: string; animeHref: string }) =>
   normAnimeKey(e.animeHref) || animeTitleKey(e.animeTitle);
 const FOR_YOU_SEEDS = 6;
 
+// The last ranked rail, shown instantly on the next mount / app start while a
+// fresh ranking is computed behind it (it used to appear only after every
+// seed's AniList lookup finished — up to ~40s).
+const FOR_YOU_KEY = "@for_you_rail_v1";
+const FOR_YOU_REFRESH_MS = 10 * 60 * 1000;
+let forYouMem: RankedRec[] | null = null;
+let forYouComputed: { seedKey: string; at: number } | null = null;
+
 const ForYouRail = memo(function ForYouRail({ history, width }: { history: WatchEntry[]; width: number }) {
-  const [items, setItems] = useState<RankedRec[]>([]);
+  const [items, setItems] = useState<RankedRec[]>(() => forYouMem ?? []);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  useEffect(() => {
+    if (forYouMem) return;
+    let alive = true;
+    AsyncStorage.getItem(FOR_YOU_KEY).then((raw) => {
+      const cached = raw ? (JSON.parse(raw) as RankedRec[]) : null;
+      if (!alive || !Array.isArray(cached) || cached.length === 0 || forYouMem) return;
+      forYouMem = cached;
+      setItems((prev) => (prev.length ? prev : cached));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   // Full per-anime history (not just Continue Watching, which hides finished
   // and dismissed anime). Re-read when the continue list changes — that is
-  // the signal something new was watched.
-  const [groups, setGroups] = useState<AnimeHistoryGroup[]>([]);
+  // the signal something new was watched. null = not read yet.
+  const [groups, setGroups] = useState<AnimeHistoryGroup[] | null>(null);
   useEffect(() => {
     let alive = true;
-    getHistoryByAnime().then((g) => { if (alive) setGroups(g); }).catch(() => {});
+    getHistoryByAnime().then((g) => { if (alive) setGroups(g); }).catch(() => { if (alive) setGroups([]); });
     return () => { alive = false; };
   }, [history]);
 
   const seeds = useMemo(
-    () => pickTasteSeeds(groups.map((g) => ({ animeTitle: g.animeTitle, animeHref: g.animeHref, watched: g.watched, updatedAt: g.updatedAt })), seedKeyOf, FOR_YOU_SEEDS),
+    () => pickTasteSeeds((groups ?? []).map((g) => ({ animeTitle: g.animeTitle, animeHref: g.animeHref, watched: g.watched, updatedAt: g.updatedAt })), seedKeyOf, FOR_YOU_SEEDS),
     [groups],
   );
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
   // Refetch only when the seed SET changes — not on every progress tick.
-  const seedKey = seeds.map((s) => s.animeTitle).join("|");
+  const seedKey = groups === null ? null : seeds.map((s) => s.animeTitle).join("|");
   const seedsRef = useRef(seeds);
   seedsRef.current = seeds;
 
   useFocusEffect(useCallback(() => {
+    if (seedKey === null) return; // history not read yet — keep the cached rail
     const picked = seedsRef.current;
-    if (picked.length === 0) { setItems([]); return; }
+    if (picked.length === 0) { forYouMem = null; setItems([]); return; }
+    // Fresh enough for this exact seed set — nothing to do on a refocus.
+    if (forYouComputed?.seedKey === seedKey && Date.now() - forYouComputed.at < FOR_YOU_REFRESH_MS && itemsRef.current.length > 0) return;
     let alive = true;
     const timer = setTimeout(() => { void (async () => {
-      const [batches, favorites] = await Promise.all([
-        Promise.all(picked.map((s) => fetchAnimeRecommendations(s.animeTitle, s.animeHref).catch(() => [] as RecItem[]))),
-        getFavorites().catch(() => []),
-      ]);
+      await whenScrollIdle();
       if (!alive) return;
+      const favorites = await getFavorites().catch(() => []);
       // Nothing the user already watched / bookmarked may come back as a rec.
       const keys = new Set<string>();
       const canons = new Set<string>();
@@ -788,22 +821,38 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
         if (k) keys.add(k);
         canons.add(canonTitle(title));
       };
-      for (const g of groupsRef.current) remember(g.animeTitle);
+      for (const g of groupsRef.current ?? []) remember(g.animeTitle);
       for (const f of favorites) remember(f.title);
       const excluded = (item: RecItem) =>
         [item.title, item.titleEnglish].some((title) => {
           if (!title) return false;
           return keys.has(animeTitleKey(title)) || canons.has(canonTitle(title));
         });
-      const ranked = rankRecommendations(batches, { excluded, cap: 15, weights: picked.map((s) => s.weight) });
-      if (alive) setItems(ranked);
-    })().catch(() => {}); }, 5000);
+      const weights = picked.map((s) => s.weight);
+      const batches: RecItem[][] = picked.map(() => []);
+      const rank = () => rankRecommendations(batches, { excluded, cap: 15, weights });
+      // Seeds stream in: with nothing on screen yet the rail appears with the
+      // first seeds' recs instead of waiting for the slowest lookup.
+      await Promise.all(picked.map((s, i) =>
+        fetchAnimeRecommendations(s.animeTitle, s.animeHref).catch(() => [] as RecItem[]).then((batch) => {
+          batches[i] = batch;
+          if (alive && batch.length > 0 && itemsRef.current.length === 0) setItems(rank());
+        }),
+      ));
+      if (!alive) return;
+      const ranked = rank();
+      forYouComputed = { seedKey, at: Date.now() };
+      forYouMem = ranked;
+      setItems(ranked);
+      AsyncStorage.setItem(FOR_YOU_KEY, JSON.stringify(ranked)).catch(() => {});
+    })().catch(() => {}); }, itemsRef.current.length > 0 ? 2500 : 600);
     return () => { alive = false; clearTimeout(timer); };
   }, [seedKey]));
 
-  // Resolve the first cards in the background (serial, capped) so a tap opens
-  // a cached source page and its detail payload is already warm. Paused while
-  // home is not focused; a tap during the warm-up joins the in-flight resolve.
+  // Resolve the first cards in the background (serial, capped, paused while
+  // scrolling) so a tap opens a cached source page and its detail payload is
+  // already warm. Paused while home is not focused; a tap during the warm-up
+  // joins the in-flight resolve.
   useFocusEffect(useCallback(() => {
     if (items.length === 0) return;
     let alive = true;

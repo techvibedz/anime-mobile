@@ -5,6 +5,9 @@ import {
   orderDailyPool,
   pickIndexOfTheDay,
   pickOfTheDay,
+  localDayNumber,
+  dailyIndex,
+  dailyCandidates,
 } from "./dailyPick";
 
 async function main() {
@@ -85,6 +88,27 @@ async function main() {
     1,
     "cap must apply",
   );
+
+  // All-time pool: a full cycle shows every title exactly once (no repeats).
+  assert.equal(localDayNumber(new Date(2026, 0, 2)) - localDayNumber(new Date(2026, 0, 1)), 1, "consecutive local days");
+  assert.equal(localDayNumber(new Date(2026, 0, 1, 23, 59)), localDayNumber(new Date(2026, 0, 1, 0, 1)), "same local day, any hour");
+  for (const n of [1, 7, 145]) {
+    for (const start of [0, 20_000, 20_000 + 3 * n]) {
+      const base = start - (start % n);
+      const seen = new Set<number>();
+      for (let d = 0; d < n; d++) seen.add(dailyIndex(n, base + d));
+      assert.equal(seen.size, n, `cycle of ${n} days must cover all ${n} titles once`);
+    }
+  }
+  assert.equal(dailyIndex(145, 20_390), dailyIndex(145, 20_390), "deterministic");
+  const run = Array.from({ length: 10 }, (_, d) => dailyIndex(145, 20_300 + d));
+  assert.ok(run.some((v, i) => i > 0 && Math.abs(v - run[i - 1]) !== 1), "order must not just walk the list");
+  const cands = dailyCandidates(145, 20_390, 6);
+  assert.equal(cands.length, 6, "six candidates");
+  assert.equal(cands[0], dailyIndex(145, 20_390), "today first");
+  assert.equal(new Set(cands).size, 6, "distinct candidates");
+  assert.deepEqual(dailyCandidates(0, 1), [], "empty pool");
+  assert.deepEqual(dailyCandidates(1, 99, 6), [0], "single pool");
 
   console.log("daily pick tests passed");
 }

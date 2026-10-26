@@ -14,8 +14,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { getNotificationsEnabled, getNotificationScope, getDailyAnimeNotif, type NotificationScope } from "./settings";
 import { supabase, isSupabaseConfigured, getSessionUser } from "./supabase";
-import { fetchSeasonAnime, currentSeason } from "./seasons";
-import { localDayKey, orderDailyPool, pickOfTheDay } from "./dailyPick";
+import { dailyIndex, localDayNumber } from "./dailyPick";
+import { getDailyPool } from "./dailyPool";
 import { t } from "./i18n";
 
 let Notifications: typeof import("expo-notifications") | null = null;
@@ -159,10 +159,10 @@ export async function syncDailyAnimeReminders(): Promise<void> {
     if (!(await hasNotificationPermission())) return;
     await setupNotifications();
 
-    const { season, year } = currentSeason();
-    // Same shared pool as the home card (watchable + popularity order + cap),
-    // so a notification can never name a different anime than the card.
-    const list = orderDailyPool(await fetchSeasonAnime(season, year));
+    // Same all-time pool + day order as the home card, so the notification
+    // names the card's anime (the card may move on when the sources don't
+    // carry a pick; the notification stays best-effort).
+    const list = await getDailyPool();
     if (!list.length) return; // offline / empty catalogue → nothing to schedule
 
     const ids: string[] = [];
@@ -172,7 +172,7 @@ export async function syncDailyAnimeReminders(): Promise<void> {
       day.setDate(day.getDate() + i);
       const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), 20, 0, 0, 0);
       if (at.getTime() <= now) continue; // skip today once 20:00 has passed
-      const pick = pickOfTheDay(list, localDayKey(day));
+      const pick = list[dailyIndex(list.length, localDayNumber(day))];
       if (!pick) continue;
       ids.push(
         await Notifications!.scheduleNotificationAsync({

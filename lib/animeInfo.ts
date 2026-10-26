@@ -911,6 +911,8 @@ async function resolveMediaForTitle(title: string, href?: string | null): Promis
 /** AniList community recommendations for a watched title. Resolves the title
  *  to AniList first (slug-sharpened, MAL-bridged), caches per seed for a week,
  *  and returns [] on any miss. */
+const REC_MISS_TTL = 6 * 60 * 60 * 1000;
+
 export async function fetchAnimeRecommendations(title: string, href?: string | null): Promise<RecItem[]> {
   if (!title || !title.trim()) return [];
   const slug = slugToTitle(href).toLowerCase();
@@ -925,23 +927,32 @@ export async function fetchAnimeRecommendations(title: string, href?: string | n
       const raw = await AsyncStorage.getItem(REC_CACHE_PREFIX + key);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Date.now() - parsed.ts < CACHE_TTL) {
+        // Misses are remembered for 6h: an unresolvable seed otherwise
+        // re-ran the slow MAL bridge (Jikan queue) on every home focus and
+        // held the whole "For You" rail back for ~40s.
+        if (Date.now() - parsed.ts < (parsed.miss ? REC_MISS_TTL : CACHE_TTL)) {
           recMem.set(key, parsed.data);
           return parsed.data as RecItem[];
         }
       }
     } catch {}
+    const rememberMiss = () => {
+      recMem.set(key, []);
+      AsyncStorage.setItem(REC_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), data: [], miss: true })).catch(() => {});
+      return [] as RecItem[];
+    };
     try {
       const media = await resolveMediaForTitle(title, href);
-      if (!media) return [];
+      if (!media) return rememberMiss();
       const json = await anilistPost(RECOMMENDATIONS_QUERY, { id: media.id });
+      // null = request failed (rate limit / offline): retry next time.
+      if (!json) return [];
       const items = parseRecommendations(json?.data?.Media?.recommendations?.nodes);
-      if (items.length > 0) {
-        recMem.set(key, items);
-        try {
-          await AsyncStorage.setItem(REC_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), data: items }));
-        } catch {}
-      }
+      if (items.length === 0) return rememberMiss();
+      recMem.set(key, items);
+      try {
+        await AsyncStorage.setItem(REC_CACHE_PREFIX + key, JSON.stringify({ ts: Date.now(), data: items }));
+      } catch {}
       return items;
     } catch {
       return [];

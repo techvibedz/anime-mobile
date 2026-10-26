@@ -1,8 +1,16 @@
-// "أنمي اليوم" — a deterministic daily pick from the current season's AniList
-// catalogue, verified against its source page BEFORE it is shown. When no
-// seasonal candidate verifies (new season not yet on the sources), it falls
-// back to an anime taken straight from the sources' own top list, so the card
-// never just disappears. Tapping always opens a pre-resolved source href.
+// "أنمي اليوم" — one great anime a day from an all-time best-of pool
+// (lib/dailyPool: finished, highly rated, widely watched first entries).
+// The order is a no-repeat daily shuffle (lib/dailyPick), so a title only
+// returns after the whole pool has been shown, and every install names the
+// same anime on the same day.
+//
+// Speed: the card is built from AniList data alone, so it shows as soon as
+// the cached pool is read — no source search or scrape on the critical path,
+// and today's pick is kept in memory + on disk (a refocus does no work). The
+// source page is resolved in the background (paused while scrolling); a tap
+// before that finishes opens the detail page at once on a placeholder href
+// that resolves behind its skeleton. A pick the sources don't carry is
+// replaced by the next day's candidate.
 
 import { useCallback, useRef, useState } from "react";
 import { Pressable, Share, StyleSheet, Text, View } from "react-native";
@@ -13,256 +21,168 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Rise } from "./Rise";
 import { C, R, TAr } from "../lib/theme";
 import { t } from "../lib/i18n";
-import { currentSeason, fetchSeasonAnime, type CatalogAnime } from "../lib/seasons";
-import { localDayKey, orderDailyPool, pickIndexOfTheDay } from "../lib/dailyPick";
-import { peekResolvedHref, resolveEntryToSource, forgetResolvedHref } from "../lib/anilistResolve";
+import { dailyCandidates, localDayKey, localDayNumber } from "../lib/dailyPick";
+import { getDailyPool, type DailyAnime } from "../lib/dailyPool";
+import { arGenre } from "../lib/anilistLabels";
 import {
-  fetchEpisodes,
-  fetchHome,
-  type AnimeDetail,
-  type AnimeItem,
-  type EpisodeItem,
-} from "../lib/api";
+  pendingAniListHref,
+  peekResolvedHrefSync,
+  resolveEntryToSource,
+  type AniListResolveEntry,
+} from "../lib/anilistResolve";
+import { fetchEpisodes, hasFreshEpisodes } from "../lib/api";
+import { whenScrollIdle } from "../lib/scrollIdle";
+import { checkOnline } from "../lib/net";
 import { posterUrl } from "../lib/img";
 
 const POSTER_W = 110;
 const POSTER_H = 165;
-// Kept apart from anilistResolve's 10-day cache: that one may hold UNVERIFIED
-// hrefs, only a source page that actually loaded belongs in this one. A single
-// fixed key (payload carries its dayKey) so old days can never pile up.
-const VERIFIED_KEY = "@daily_pick_verified_v1";
-// Fallback candidates within the popular pool; each one is a "try a new one".
-const MAX_CANDIDATES = 8;
-// Total verification budget before the source-native fallback takes over.
-const SCAN_DEADLINE_MS = 40_000;
-// The first hidden-WebView job of a process pays a one-time browser-init cost
-// on the UI thread; a below-the-fold daily card must not trigger it while the
-// user is tapping the freshly loaded feed. Later focuses keep the plain 5s.
-const FOCUS_RUN_DELAY_MS = 5_000;
-const COLD_START_RUN_AT_MS = 15_000;
-const appStartedAt = Date.now();
+// Today's pick (display data + resolved href). One fixed key; the payload
+// carries its dayKey so old days never pile up.
+const PICK_KEY = "@daily_pick_v2";
+// How many candidates (today's, then the following days') to try when the
+// sources don't carry a pick.
+const MAX_CANDIDATES = 6;
+// Background resolve starts after the feed has settled.
+const RESOLVE_DELAY_MS = 2500;
 
 type DailyPick = {
-  id: string | number;
+  id: number;
   title: string;
-  poster?: string | null;
-  score?: number | null;
-  episodes?: number | null;
+  titleEnglish: string | null;
+  format: string | null;
+  poster: string | null;
+  /** 0–10, one decimal. */
+  score: number | null;
+  episodes: number | null;
   genres: string[];
-  href: string;
+  /** Source page once resolved; null while pending. */
+  href: string | null;
+  /** Remaining fallback candidate ids, in order. */
+  next: number[];
 };
 
-function toSeasonalPick(anime: CatalogAnime, detail: AnimeDetail, href: string): DailyPick {
+type StoredPick = { dayKey: string; pick: DailyPick };
+let memPick: StoredPick | null = null;
+
+function toPick(a: DailyAnime, next: number[]): DailyPick {
   return {
-    id: anime.id,
-    title: detail.title,
-    // Source poster only when absolute — a relative/garbage string renders
-    // blank in expo-image, so fall back to the AniList image then.
-    poster: /^https?:\/\//i.test(detail.poster || "") ? detail.poster : anime.image,
-    score: anime.score,
-    episodes: detail.totalEpisodes || anime.episodes,
-    genres: detail.genres?.length ? detail.genres : anime.genres,
-    href,
+    id: a.id,
+    title: a.title,
+    titleEnglish: a.titleEnglish,
+    format: a.format,
+    poster: a.image,
+    score: a.score != null ? Math.round(a.score) / 10 : null,
+    episodes: a.episodes,
+    genres: a.genres.slice(0, 3).map(arGenre),
+    href: peekResolvedHrefSync(a.id),
+    next,
   };
 }
 
-function parseScore(raw?: string | null): number | null {
-  const n = parseFloat(String(raw ?? "").replace(/[^\d.]/g, ""));
-  return Number.isFinite(n) ? n : null;
+const entryOf = (p: DailyPick): AniListResolveEntry => ({
+  anilistId: p.id,
+  title: p.title,
+  titleEnglish: p.titleEnglish,
+  format: p.format,
+  image: p.poster,
+});
+
+function store(dayKey: string, pick: DailyPick) {
+  memPick = { dayKey, pick };
+  AsyncStorage.setItem(PICK_KEY, JSON.stringify(memPick)).catch(() => {});
 }
 
 export function AnimeOfTheDay() {
-  const [pick, setPick] = useState<DailyPick | null>(null);
-  const [dayKey, setDayKey] = useState(() => localDayKey());
+  const [pick, setPick] = useState<DailyPick | null>(() => (memPick?.dayKey === localDayKey() ? memPick.pick : null));
   const lastPushRef = useRef(0); // synchronous navigation double-push guard
-
-  // A tab left mounted (or the app resumed the next day) must not keep showing
-  // yesterday's pick — recompute the day whenever the home screen regains focus.
-  useFocusEffect(
-    useCallback(() => {
-      const today = localDayKey();
-      setDayKey((prev) => (prev === today ? prev : today));
-    }, []),
-  );
 
   useFocusEffect(useCallback(() => {
     let alive = true;
-    setPick(null);
-    const { season, year } = currentSeason();
+    // Recomputed on every focus, so an app left open overnight rolls over.
+    const dayKey = localDayKey();
 
-    const verifyHref = async (href: string): Promise<AnimeDetail | null> => {
-      const res = await fetchEpisodes(href).catch(() => null);
-      // Verification means playable, not merely parseable: a www redirect to
-      // the anime3rb homepage passes the marker/title check but has no
-      // episodes, so a title alone must never count as verified.
-      return res?.success && res.data.title && res.data.episodes.length > 0 ? res.data : null;
+    const show = (p: DailyPick) => {
+      if (!alive) return;
+      store(dayKey, p);
+      setPick(p);
+    };
+
+    // Background: make sure today's pick opens on the sources; fall through
+    // to the next candidate when it doesn't. Warms the detail page too.
+    const ensurePlayable = async (start: DailyPick) => {
+      let cur: DailyPick | null = start;
+      while (alive && cur) {
+        if (!cur.href) {
+          await whenScrollIdle();
+          if (!alive) return;
+          const href = await resolveEntryToSource(entryOf(cur)).catch(() => null);
+          if (!alive) return;
+          if (!href) {
+            // Offline / sources down is not "not on the sources": keep today's
+            // pick (a tap resolves it on the detail page) instead of burning
+            // through the next days' candidates.
+            if (!(await checkOnline())) return;
+            if (!alive) return;
+            const nextId: number | undefined = cur.next[0];
+            const pool: DailyAnime[] = nextId != null ? await getDailyPool() : [];
+            const a: DailyAnime | undefined = pool.find((x) => x.id === nextId);
+            cur = a ? toPick(a, cur.next.slice(1)) : null;
+            if (cur) show(cur);
+            continue;
+          }
+          cur = { ...cur, href };
+          show(cur);
+        }
+        await whenScrollIdle();
+        if (alive && cur.href && !(await hasFreshEpisodes(cur.href))) await fetchEpisodes(cur.href).catch(() => null);
+        return;
+      }
     };
 
     const run = async () => {
-      // Watchable seasonal entries, most popular first — the same shared pool
-      // the daily notification uses, so both name the same anime.
-      const pool = orderDailyPool(
-        await fetchSeasonAnime(season, year).catch(() => [] as CatalogAnime[]),
-      );
-      if (!alive) return;
-
-      const deadline = Date.now() + SCAN_DEADLINE_MS;
-      // Soft deadline: a single slow scrape must not blow the whole budget.
-      // The underlying scrape job can't be cancelled, but we stop waiting.
-      const raceDeadline = <T,>(p: Promise<T>): Promise<T | null> => {
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        return Promise.race([
-          p.finally(() => { if (timer) clearTimeout(timer); }),
-          new Promise<null>((resolve) => {
-            timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
-          }),
-        ]);
-      };
-
-      // 1) Today's already-verified pick — re-verify, then show with no search.
-      if (pool.length > 0) {
+      let today = memPick?.dayKey === dayKey ? memPick.pick : null;
+      if (!today) {
         try {
-          const raw = await AsyncStorage.getItem(VERIFIED_KEY);
-          if (raw) {
-            const cached = JSON.parse(raw) as { dayKey?: string; anilistId?: number; href?: string };
-            if (cached.dayKey === dayKey && typeof cached.anilistId === "number" && cached.href) {
-              const detail = await raceDeadline(verifyHref(cached.href));
-              if (!alive) return;
-              const anime = pool.find((a) => a.id === cached.anilistId);
-              if (detail && anime) {
-                setPick(toSeasonalPick(anime, detail, cached.href));
-                return;
-              }
-            }
-            // Stale day, corrupt entry, or no longer verifiable → drop and search.
-            await AsyncStorage.removeItem(VERIFIED_KEY).catch(() => {});
-          }
-        } catch {
-          await AsyncStorage.removeItem(VERIFIED_KEY).catch(() => {});
-        }
-
-        // 2) Scan the popular pool. Starting at the day index and walking
-        // BACKWARD reaches the most popular end first (then wraps around), so
-        // retries are likelier to exist in the sources than the initial pick.
-        const n = pool.length;
-        const start = pickIndexOfTheDay(n, dayKey);
-        const count = Math.min(MAX_CANDIDATES, n);
-        for (let i = 0; i < count; i++) {
-          if (!alive || Date.now() > deadline) break;
-          const candidate = pool[(start - i + n) % n];
-          const cachedHref = await peekResolvedHref(candidate.id);
-          const href =
-            cachedHref ??
-            (await raceDeadline(
-              resolveEntryToSource({
-                anilistId: candidate.id,
-                title: candidate.title,
-                format: candidate.format,
-                image: candidate.image,
-              }).catch(() => null),
-            ));
-          if (!alive) return;
-          if (!href) continue;
-          const detail = await raceDeadline(verifyHref(href));
-          if (!alive) return;
-          if (!detail) {
-            // A cached href that no longer loads is poisoned cache data — drop
-            // it so the next mount resolves fresh instead of retrying it.
-            if (cachedHref) void forgetResolvedHref(candidate.id);
-            continue;
-          }
-          setPick(toSeasonalPick(candidate, detail, href));
-          AsyncStorage.setItem(
-            VERIFIED_KEY,
-            JSON.stringify({ dayKey, anilistId: candidate.id, href }),
-          ).catch(() => {});
-          return;
-        }
+          const raw = await AsyncStorage.getItem(PICK_KEY);
+          const saved = raw ? (JSON.parse(raw) as StoredPick) : null;
+          if (saved?.dayKey === dayKey && saved.pick?.id) today = saved.pick;
+        } catch {}
       }
-
-      // 3) Guaranteed fallback: an anime taken straight from the sources' own
-      // home feed. It already lives on the sources, so no verification is
-      // needed — the card shows something watchable no matter how new the
-      // season is on AniList or which rail survived the scrape.
+      if (!today) {
+        const pool = await getDailyPool();
+        if (!alive || pool.length === 0) return;
+        const ids = dailyCandidates(pool.length, localDayNumber(), MAX_CANDIDATES).map((i) => pool[i].id);
+        today = toPick(pool.find((x) => x.id === ids[0])!, ids.slice(1));
+      }
       if (!alive) return;
-      const home = await fetchHome().catch(() => null);
-      if (!alive || !home?.data) return;
-      const sections = home.data.sections ?? [];
-      const absoluteImage = (src?: string | null) =>
-        /^https?:\/\//i.test(src || "") ? src! : null;
-
-      // 3a) A source-native ANIME card (top list preferred).
-      const animeSection =
-        sections.find((sec) => sec.type === "anime" && /top[_-]?anime/i.test(sec.id)) ??
-        sections.find((sec) => sec.type === "anime");
-      const animeItem = animeSection?.items.find(
-        (it): it is AnimeItem =>
-          !!it && !("animeHref" in it) &&
-          typeof (it as AnimeItem).href === "string" && (it as AnimeItem).href.length > 0,
-      );
-      if (animeItem) {
-        setPick({
-          id: `source:${animeItem.href}`,
-          title: animeItem.title,
-          poster: absoluteImage(animeItem.image),
-          score: parseScore(animeItem.rating),
-          episodes: null,
-          genres: [],
-          href: animeItem.href,
-        });
-        return;
-      }
-
-      // 3b) Episode-only home (witanime scrape failed, anime4up recent feed
-      // survived): open the episode's parent anime page instead.
-      for (const sec of sections) {
-        const ep = sec.items.find(
-          (it): it is EpisodeItem =>
-            !!it && typeof (it as EpisodeItem).animeHref === "string" &&
-            (it as EpisodeItem).animeHref.length > 0,
-        );
-        if (!ep) continue;
-        setPick({
-          id: `source:${ep.animeHref}`,
-          title: ep.animeTitle || ep.title,
-          poster: absoluteImage(ep.image),
-          score: null,
-          episodes: null,
-          genres: [],
-          href: ep.animeHref,
-        });
-        return;
-      }
-
-      // 3c) Last resort: the featured hero.
-      const featured = home.data.featured?.[0];
-      if (featured?.href) {
-        setPick({
-          id: `source:${featured.href}`,
-          title: featured.title,
-          poster: absoluteImage(featured.image),
-          score: null,
-          episodes: null,
-          genres: featured.genres ?? [],
-          href: featured.href,
-        });
-      }
+      show(today);
+      await new Promise((r) => setTimeout(r, RESOLVE_DELAY_MS));
+      if (alive) await ensurePlayable(today);
     };
 
-    const delay = Math.max(FOCUS_RUN_DELAY_MS, COLD_START_RUN_AT_MS - (Date.now() - appStartedAt));
-    const timer = setTimeout(() => { void run().catch(() => {}); }, delay);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [dayKey]));
+    // Same day and already resolved: nothing to do on a refocus.
+    if (memPick?.dayKey === dayKey && memPick.pick.href) {
+      setPick(memPick.pick);
+      return () => { alive = false; };
+    }
+    void run().catch(() => {});
+    return () => { alive = false; };
+  }, []));
 
   const openWatch = useCallback(() => {
     if (!pick) return;
     const now = Date.now();
     if (now - lastPushRef.current < 600) return;
     lastPushRef.current = now;
-    router.push(`/anime/${encodeURIComponent(pick.href)}`);
+    const href = pick.href ?? peekResolvedHrefSync(pick.id);
+    if (href) {
+      router.push(`/anime/${encodeURIComponent(href)}`);
+      return;
+    }
+    const entry = entryOf(pick);
+    void resolveEntryToSource(entry);
+    router.push(`/anime/${encodeURIComponent(pendingAniListHref(entry))}`);
   }, [pick]);
 
   const share = useCallback(() => {
@@ -306,7 +226,7 @@ export function AnimeOfTheDay() {
             {pick.score != null && (
               <View style={s.scorePill}>
                 <Ionicons name="star" size={9} color={C.gold} />
-                <Text style={s.scoreText}>{pick.score}</Text>
+                <Text style={s.scoreText}>{pick.score.toFixed(1)}</Text>
               </View>
             )}
             {pick.episodes != null && <Text style={s.metaText}>{t.episodeCount(pick.episodes)}</Text>}

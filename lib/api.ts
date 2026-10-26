@@ -734,6 +734,14 @@ function fetchEpisodesFreshOnce(animeUrl: string, priority = false): Promise<Epi
   return p;
 }
 
+/** True when a fresh detail payload is already on disk. Warm-ups check this
+ *  first: calling fetchEpisodes on a cached-but-not-brand-new entry starts a
+ *  background re-scrape, which a speculative warm-up must never cause. */
+export async function hasFreshEpisodes(animeUrl: string): Promise<boolean> {
+  const entry = await readCacheEntry<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL).catch(() => null);
+  return !!entry?.data?.success && (entry.data.data?.episodes?.length ?? 0) > 0;
+}
+
 export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPayload) => void, options: { forceRefresh?: boolean } = {}): Promise<EpisodesPayload> {
   // Re-clean the title AND synopsis on every return path so entries
   // cached/uploaded by an older build display cleanly too. Crucial for the

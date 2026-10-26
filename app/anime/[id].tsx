@@ -36,6 +36,7 @@ import { translateToArabic } from "../../lib/translate";
 import type { AnimeInfoField, RelatedAnimeEntry } from "../../lib/animeInfo";
 import { MalBadge, MalCardBadge } from "../../components/MalRating";
 import { AniListPosterCard } from "../../components/AniListPosterCard";
+import { isPendingAniListHref, pendingAniListEntry, resolveEntryToSource } from "../../lib/anilistResolve";
 import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
 import { GlassFill } from "../../components/GlassFill";
@@ -132,11 +133,31 @@ export default function AnimeDetailScreen() {
     });
   }, []);
   const bookmarked = bookmarkList !== null;
-  const animeHref = id ? decodeURIComponent(id) : "";
+  // An AniList card (For You rail, Related tab) opens this page instantly on a
+  // placeholder href; resolve it to a real source page behind the skeleton.
+  // Everything below keys on `animeHref`, which stays "" until resolved.
+  const routeHref = id ? decodeURIComponent(id) : "";
+  const pendingEntry = useMemo(() => pendingAniListEntry(routeHref), [routeHref]);
+  const isPending = isPendingAniListHref(routeHref);
+  const [resolvedHref, setResolvedHref] = useState<string | null>(null);
+  const animeHref = isPending ? resolvedHref ?? "" : routeHref;
   const isMainSource = /witanime/i.test(animeHref);
   const refreshDetailRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
   const dataRef = useRef(data);
   dataRef.current = data;
+
+  useEffect(() => {
+    if (!isPending) return;
+    setResolvedHref(null);
+    if (!pendingEntry) { setError(t.notFound); setLoading(false); return; }
+    let alive = true;
+    void resolveEntryToSource(pendingEntry).then((href) => {
+      if (!alive) return;
+      if (href) setResolvedHref(href);
+      else { setError(t.notFound); setLoading(false); }
+    });
+    return () => { alive = false; };
+  }, [isPending, pendingEntry]);
 
   useEffect(() => {
     setData(null);
@@ -147,7 +168,7 @@ export default function AnimeDetailScreen() {
     setLoading(true);
     setSeasonLabel(null);
     setFallbackSynopsis("");
-  }, [id]);
+  }, [animeHref]);
 
   // Focus, resume and polling share one refresh; late callbacks from a page
   // that lost focus cannot put cached episodes back over the active page.
@@ -206,17 +227,17 @@ export default function AnimeDetailScreen() {
   // happens asynchronously after sign-in, so a one-time mount check can race it
   // and leave an already-favorited anime showing an empty heart.
   useFocusEffect(useCallback(() => {
-    if (!id) return;
+    if (!animeHref) return;
     let active = true;
     const refresh = () => {
-      favoriteListOf(decodeURIComponent(id)).then((list) => {
+      favoriteListOf(animeHref).then((list) => {
         if (active) setBookmarkList(list);
       });
     };
     refresh();
     const unsubscribe = subscribeFavorites(refresh);
     return () => { active = false; unsubscribe(); };
-  }, [id]));
+  }, [animeHref]));
 
   // Resolve the lightweight MyAnimeList score for the header badge once the
   // title is known, and prefetch the slower full facts so the Info tab is
@@ -347,23 +368,21 @@ export default function AnimeDetailScreen() {
   // Tapping the heart: if not saved, open the picker so the user chooses Watching vs Planned.
   // If already saved, remove from list.
   const toggleBookmark = useCallback(async () => {
-    if (!data || !id) return;
-    const href = decodeURIComponent(id);
+    if (!data || !animeHref) return;
     if (bookmarked) {
-      await removeFavorite(href);
+      await removeFavorite(animeHref);
       setBookmarkList(null);
     } else {
       setPickerOpen(true);
     }
-  }, [data, id, bookmarked]);
+  }, [data, animeHref, bookmarked]);
 
   const saveToList = useCallback(async (list: FavoriteList) => {
-    if (!data || !id) return;
-    const href = decodeURIComponent(id);
-    const ok = await addFavorite({ title: data.title, href, image: data.poster, list });
+    if (!data || !animeHref) return;
+    const ok = await addFavorite({ title: data.title, href: animeHref, image: data.poster, list });
     if (ok) setBookmarkList(list);
     setPickerOpen(false);
-  }, [data, id]);
+  }, [data, animeHref]);
 
   // Long-press the title to copy it instantly — no manual text selection.
   const copyTitle = useCallback(() => {
@@ -396,7 +415,7 @@ export default function AnimeDetailScreen() {
     router.push(`/watch/${encodeURIComponent(href)}`);
   }, [play, data]);
 
-  if (loading) return <DetailSkeleton />;
+  if (loading) return <DetailSkeleton poster={pendingEntry?.image} />;
 
   if (error || !data) {
     return (
@@ -1458,12 +1477,17 @@ function InfoTab({ data, isMainSource }: { data: AnimeDetail; isMainSource: bool
 
 /* ── Skeleton ─────────────────────────────────── */
 
-function DetailSkeleton() {
+// `poster` — the AniList card's art while a placeholder href resolves.
+function DetailSkeleton({ poster }: { poster?: string | null }) {
   return (
     <View style={ss.root}>
       <Shimmer style={{ width: "100%", height: BANNER_H }} borderRadius={0} />
       <View style={{ paddingHorizontal: PAD, marginTop: -88, flexDirection: "row-reverse", alignItems: "flex-end" }}>
-        <Shimmer style={{ width: 112, height: 168 }} borderRadius={R.lg} />
+        {poster ? (
+          <Image source={{ uri: poster }} style={{ width: 112, height: 168, borderRadius: R.lg }} contentFit="cover" cachePolicy="memory-disk" transition={0} />
+        ) : (
+          <Shimmer style={{ width: 112, height: 168 }} borderRadius={R.lg} />
+        )}
         <View style={{ flex: 1, marginRight: 14, alignItems: "flex-end" }}>
           <Shimmer style={{ width: "80%" as any, height: 26, marginBottom: 10 }} />
           <Shimmer style={{ width: "50%" as any, height: 14, marginBottom: 10 }} />

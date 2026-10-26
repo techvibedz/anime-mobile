@@ -32,6 +32,7 @@ import { fetchAnimeRecommendations } from "../../lib/animeInfo";
 import type { RecItem } from "../../lib/animeInfo";
 import { pickTasteSeeds, rankRecommendations, type RankedRec } from "../../lib/recommend";
 import { AniListPosterCard } from "../../components/AniListPosterCard";
+import { prewarmEntries } from "../../lib/anilistResolve";
 import { syncEpisodeNotifications, reportRecentEpisodes, getUnreadCount } from "../../lib/notifications";
 import { useSidebarActions } from "../../components/Sidebar";
 import { PantoufaWordmark } from "../../components/PantoufaWordmark";
@@ -739,8 +740,8 @@ const AnimeCardView = memo(function AnimeCardView({ item, rank }: { item: AnimeI
    weighted by episodes watched + recency (lib/recommend pickTasteSeeds), the
    top 6 are resolved against AniList, and their community recommendations are
    merged with per-seed normalisation so no single anime owns the rail.
-   Tapping a card resolves it to a source page via the shared
-   AniListPosterCard. Hidden entirely when there's nothing to show. */
+   Tapping a card opens its detail page at once via the shared
+   AniListPosterCard; the first cards are pre-resolved in the background. Hidden entirely when there's nothing to show. */
 const seedKeyOf = (e: { animeTitle: string; animeHref: string }) =>
   normAnimeKey(e.animeHref) || animeTitleKey(e.animeTitle);
 const FOR_YOU_SEEDS = 6;
@@ -799,6 +800,16 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
     })().catch(() => {}); }, 5000);
     return () => { alive = false; clearTimeout(timer); };
   }, [seedKey]));
+
+  // Resolve the first cards in the background (serial, capped) so a tap opens
+  // a cached source page and its detail payload is already warm. Paused while
+  // home is not focused; a tap during the warm-up joins the in-flight resolve.
+  useFocusEffect(useCallback(() => {
+    if (items.length === 0) return;
+    let alive = true;
+    const timer = setTimeout(() => { void prewarmEntries(items, () => alive); }, 1500);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [items]));
 
   if (items.length === 0) return null;
   return (

@@ -21,7 +21,7 @@
 //     shares ONE search between a background warm-up and a tap.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { searchAnime, type SearchResult } from "./api";
+import { fetchEpisodes, searchAnime, type SearchResult } from "./api";
 import { getAltTitles, fetchAniListIdForTitle } from "./animeInfo";
 import {
   aniListLookupTitles,
@@ -86,6 +86,35 @@ export async function forgetResolvedHref(anilistId: number): Promise<void> {
     await AsyncStorage.removeItem(CACHE_PREFIX + anilistId);
   } catch {}
 }
+
+/** Memory-only cache peek — synchronous, so a tap can navigate in the same
+ *  frame when the card was resolved earlier this session. */
+export function peekResolvedHrefSync(anilistId: number): string | null {
+  return cacheMem.get(anilistId) ?? null;
+}
+
+/* ── Pending detail route ──
+   A tap on an unresolved card opens the detail page at once on the
+   placeholder href `anilist:<id>`; the page resolves it to a source while its
+   skeleton shows. The entry itself (titles, format) is handed over here. */
+
+const PENDING_PREFIX = "anilist:";
+const pendingEntries = new Map<number, AniListResolveEntry>();
+
+/** Remember the entry and return the placeholder href for the detail route. */
+export function pendingAniListHref(entry: AniListResolveEntry): string {
+  pendingEntries.set(entry.anilistId, entry);
+  return PENDING_PREFIX + entry.anilistId;
+}
+
+/** The entry behind a placeholder href, or null for a real source href. */
+export function pendingAniListEntry(href: string): AniListResolveEntry | null {
+  if (!href.startsWith(PENDING_PREFIX)) return null;
+  const id = Number(href.slice(PENDING_PREFIX.length));
+  return Number.isFinite(id) ? pendingEntries.get(id) ?? null : null;
+}
+
+export const isPendingAniListHref = (href: string) => href.startsWith(PENDING_PREFIX);
 
 /* ── Resolution ── */
 
@@ -199,6 +228,10 @@ async function doResolve(entry: AniListResolveEntry): Promise<string | null> {
   const pool: SearchResult[] = [];
   const seenHrefs = new Set<string>();
   let hit: string | null = null;
+  // Fires the moment `hit` is set, so a wave can return without waiting for
+  // its slowest source (each source may take up to its 60s timeout).
+  let signalHit = () => {};
+  const hitSignal = new Promise<void>((resolve) => { signalHit = resolve; });
 
   const consider = (results: SearchResult[], lookupEntry: AniListLookupEntry, canons: Set<string>) => {
     if (hit) return;
@@ -209,19 +242,23 @@ async function doResolve(entry: AniListResolveEntry): Promise<string | null> {
     // OWN names can open immediately. Everything weaker waits for the wave to
     // finish and gets AniList-verified by selectHit.
     for (const r of pool) {
-      if (evaluateCandidate(r, lookupEntry, canons, wantFmt)?.canonKnown) { hit = r.href; return; }
+      if (evaluateCandidate(r, lookupEntry, canons, wantFmt)?.canonKnown) { hit = r.href; signalHit(); return; }
     }
   };
 
-  // Search queries in parallel and navigate the INSTANT a streamed partial
+  // Search queries in parallel and return the INSTANT a streamed partial
   // yields an own-name match. `hit` doubles as the abort flag: still-running
-  // search jobs just get their late partials ignored.
+  // search jobs finish in the background (filling the search cache) and their
+  // late partials are ignored.
   const searchWave = async (queries: string[], lookupEntry: AniListLookupEntry, canons: Set<string>) => {
-    await Promise.all(queries.map((q) =>
-      searchAnime(q, (results) => consider(results, lookupEntry, canons))
-        .then((res) => consider(res.data.results, lookupEntry, canons))
-        .catch(() => {}),
-    ));
+    await Promise.race([
+      Promise.all(queries.map((q) =>
+        searchAnime(q, (results) => consider(results, lookupEntry, canons))
+          .then((res) => consider(res.data.results, lookupEntry, canons))
+          .catch(() => {}),
+      )),
+      hitSignal,
+    ]);
   };
 
   // Wave 1 — names AniList already gave us (no Jikan wait).
@@ -249,4 +286,27 @@ async function doResolve(entry: AniListResolveEntry): Promise<string | null> {
     if (hit) return hit;
   }
   return selectHit(enriched, wantFmt, pool, enrichedCanons);
+}
+
+/* ── Background warm-up ── */
+
+/**
+ * Resolve a rail's first cards ahead of a tap, one at a time, so opening one
+ * is a cache hit and its detail page loads straight away. The detail payload
+ * is warmed too (read-through cached by fetchEpisodes). Serial and capped on
+ * purpose: every resolve is a three-source search and anime3rb rate-limits
+ * per IP, so the warm-up must never crowd out what the user is doing.
+ * `isActive` is checked between cards (stop when the screen loses focus).
+ */
+export async function prewarmEntries(
+  entries: readonly AniListResolveEntry[],
+  isActive: () => boolean,
+  cap = 5,
+): Promise<void> {
+  for (const entry of entries.slice(0, cap)) {
+    if (!isActive()) return;
+    const href = await resolveEntryToSource(entry).catch(() => null);
+    if (!href || !isActive()) continue;
+    await fetchEpisodes(href).catch(() => null);
+  }
 }

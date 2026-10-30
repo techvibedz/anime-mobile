@@ -286,6 +286,10 @@ export default function HomeScreen() {
   const [episodePopup, setEpisodePopup] = useState<EpisodeItem | null>(null);
   const openEpisodePopup = useCallback((ep: EpisodeItem) => setEpisodePopup(ep), []);
   const closeEpisodePopup = useCallback(() => setEpisodePopup(null), []);
+  // Continue Watching tap → same sheet: resume or open the anime page.
+  const [continuePopup, setContinuePopup] = useState<WatchEntry | null>(null);
+  const openContinuePopup = useCallback((entry: WatchEntry) => setContinuePopup(entry), []);
+  const closeContinuePopup = useCallback(() => setContinuePopup(null), []);
 
   // Stable handler so the memoized ContinueCard doesn't re-render every time
   // the home screen state changes (focus refresh, popup open/close, badge).
@@ -549,6 +553,7 @@ export default function HomeScreen() {
                   key={entry.episodeHref}
                   entry={entry}
                   onRemove={handleRemoveContinue}
+                  onOpen={openContinuePopup}
                 />
               ))}
             </RtlRow>
@@ -616,13 +621,32 @@ export default function HomeScreen() {
       {/* Episode tap → slide-up bottom sheet (watch directly or open anime page).
           Mounted only while open so the entrance animation fires each time. */}
       {episodePopup && <EpisodeActionSheet episode={episodePopup} onClose={closeEpisodePopup} />}
+      {continuePopup && (
+        <EpisodeActionSheet
+          episode={{
+            title: continueEpisodeLabel(continuePopup),
+            href: continuePopup.episodeHref,
+            image: continuePopup.image || "",
+            animeTitle: continuePopup.animeTitle || "",
+            animeHref: continueAnimeUrl(continuePopup),
+            isNew: false,
+          }}
+          onClose={closeContinuePopup}
+          onWatch={() => resumeEntry(continuePopup)}
+          watchLabel={t.resume}
+        />
+      )}
     </View>
   );
 }
 
 /* ── Episode tap sheet ──────────────────────── */
 
-function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClose: () => void }) {
+function EpisodeActionSheet({ episode, onClose, onWatch, watchLabel }: {
+  episode: EpisodeItem; onClose: () => void;
+  // Continue Watching overrides the play action to resume from history.
+  onWatch?: () => void; watchLabel?: string;
+}) {
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
   // Slide-up + backdrop-fade. RN core Animated (Reanimated crashes over OTA).
@@ -675,6 +699,7 @@ function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClos
               style={ss.sheetBtnPrimary}
               onPress={() => {
                 onClose();
+                if (onWatch) { onWatch(); return; }
                 const params: Record<string, string> = {};
                 if (episode.image) params.img = encodeURIComponent(episode.image);
                 if (episode.animeTitle) params.animeTitle = episode.animeTitle;
@@ -695,7 +720,7 @@ function EpisodeActionSheet({ episode, onClose }: { episode: EpisodeItem; onClos
               }}
             >
               <Ionicons name="play" size={16} color={C.textOnAccent} />
-              <Text style={ss.sheetBtnPrimaryText}>{t.watchEpisode}</Text>
+              <Text style={ss.sheetBtnPrimaryText}>{watchLabel || t.watchEpisode}</Text>
             </Pressable>
 
             <Pressable
@@ -977,7 +1002,43 @@ function episodeNumberFor(entry: WatchEntry): number | null {
   return extractEpisodeNumber(entry.episodeTitle);
 }
 
-const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: WatchEntry; onRemove: (href: string) => void }) {
+// Pass anime URL so prev/next + back-to-anime work. Falls back to
+// slug-deriving from the episode URL if animeHref is missing or points to an
+// episode page (old cached entries).
+function continueAnimeUrl(entry: WatchEntry): string {
+  const rawAnime = entry.animeHref || entry.episodeHref;
+  return rawAnime && rawAnime.includes('/anime/')
+    ? rawAnime
+    : (toAnimeUrl(rawAnime) ?? '');
+}
+
+// Sheet heading: old rows stored the anime name as the episode title, so fall
+// back to "Episode N" rather than printing the name twice.
+function continueEpisodeLabel(entry: WatchEntry): string {
+  const raw = (entry.episodeTitle || "").trim();
+  const name = (entry.animeTitle || "").trim();
+  if (raw && raw.toLowerCase() !== name.toLowerCase()) return raw;
+  const n = episodeNumberFor(entry);
+  return n !== null ? `${t.episode} ${n}` : (raw || name);
+}
+
+function resumeEntry(entry: WatchEntry) {
+  const params: Record<string, string> = {};
+  if (entry.url4up) params.url4up = encodeURIComponent(entry.url4up);
+  if (entry.image) params.img = encodeURIComponent(entry.image);
+  if (entry.animeTitle) params.animeTitle = entry.animeTitle;
+  const epNum = episodeNumberFor(entry);
+  if (epNum != null) params.epNum = String(epNum);
+  const animeUrl = continueAnimeUrl(entry);
+  if (animeUrl) params.anime = animeUrl;
+  // Defer one frame so the sheet close paints before the watch mount.
+  requestAnimationFrame(() => router.push({
+    pathname: `/watch/${encodeURIComponent(entry.episodeHref)}`,
+    params,
+  }));
+}
+
+const ContinueCard = memo(function ContinueCard({ entry, onRemove, onOpen }: { entry: WatchEntry; onRemove: (href: string) => void; onOpen: (entry: WatchEntry) => void }) {
   const pct = progressPercent(entry);
   const remainMs = entry.durationMs - entry.positionMs;
   const remainMin = Math.max(1, Math.round(remainMs / 60000));
@@ -997,25 +1058,7 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove }: { entry: Wa
   const support = [epHasName ? "" : epTitle, t.minLeft(remainMin)].filter(Boolean).join(" · ");
   return (
     <Pressable
-      onPress={() => {
-        const params: Record<string, string> = {};
-        if (entry.url4up) params.url4up = encodeURIComponent(entry.url4up);
-        if (entry.image) params.img = encodeURIComponent(entry.image);
-        if (entry.animeTitle) params.animeTitle = entry.animeTitle;
-        if (epNum != null) params.epNum = String(epNum);
-        // Pass anime URL so prev/next + back-to-anime work. Falls back
-        // to slug-deriving from the episode URL if animeHref is missing
-        // or points to an episode page (old cached entries).
-        const rawAnime = entry.animeHref || entry.episodeHref;
-        const animeUrl = rawAnime && rawAnime.includes('/anime/')
-          ? rawAnime
-          : (toAnimeUrl(rawAnime) ?? '');
-        if (animeUrl) params.anime = animeUrl;
-        router.push({
-          pathname: `/watch/${encodeURIComponent(entry.episodeHref)}`,
-          params,
-        });
-      }}
+      onPress={() => onOpen(entry)}
       style={({ pressed }) => ({ width: EP_W, opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] })}
     >
       <View style={ss.epCard}>

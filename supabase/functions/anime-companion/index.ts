@@ -11,28 +11,39 @@
 // can hide the feature instead of surfacing an error.
 //
 // Deploy: supabase functions deploy anime-companion   (JWT verification ON)
-// Env:  AI_BASE_URL (e.g. https://api.openai.com/v1), AI_API_KEY, AI_MODEL
+// Env:  AI_BASE_URL (e.g. https://api.openai.com/v1), AI_API_KEY, and either
+//       AI_MODELS (comma-separated chain, best first) or AI_MODEL (+ _FALLBACK/_FALLBACK2)
 //       plus the auto-provided SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-// Per attempt. Worst case is 2 attempts (primary + fallback, or primary + its
-// truncation retry) = 36s here, plus ≤4s grounding, inside the 45s client
-// deadline. 18s (not 10-15) because the providers get slow under load.
-const AI_TIMEOUT_MS = 18_000;
-// Whole-chain wall clock (grounding + up to 3 attempts) stays under the
-// client's 45s deadline with margin for the grounding calls before it.
-const AI_BUDGET_MS = 32_000;
+// Measured on the production key (Gemini free tier, 2026-10-31): the smart
+// Flash models answer in 7-30s depending on load, Flash-Lite in ~1.5s. Calling
+// them one after another (old 18s per-attempt timeout) made the smart model
+// time out, the fallback run out the 32s budget, and the user got nothing.
+// Now the models RACE with staggered starts (hedging): the smart model gets a
+// head start, the next one joins if it is still silent, and the fast model is
+// the safety net. First good answer wins; the rest are aborted.
+// The free tier allows only ~20 requests/day PER MODEL, so a hedge costs real
+// quota: the second smart model joins only once the first is clearly slow
+// (smart answers usually land in 4-7s), the fast tier at 10s.
+const HEDGE_DELAYS_MS = [0, 7_000, 10_000, 12_000];
+// Whole AI phase hard stop — well inside the client's 30s deadline.
+const AI_BUDGET_MS = 21_000;
+// Grounding (AniList/TVmaze/Wikipedia/Jikan) is an upgrade, never a wait: we
+// take whatever has arrived by this point and go.
+const GROUND_BUDGET_MS = 2_800;
+// A model that answered 429/503 is skipped for a while so later questions
+// don't burn their head start on it. Daily-quota 429s skip it far longer.
+const MODEL_COOLDOWN_MS = 60_000;
+const MODEL_DAILY_COOLDOWN_MS = 60 * 60 * 1000;
 // Slightly low: directness and factual density over creative rambling.
 const AI_TEMPERATURE = 0.35;
-// The visible Arabic answer shares this budget with provider-side thinking
-// tokens. The smart Flash tier spends ~1.2-1.5k on thinking before writing, so
-// 1100 truncated it; 2600 fits thinking + a detailed 6-9 bullet recap. A
-// truncated PRIMARY answer gets one retry at AI_RETRY_MAX_TOKENS.
-const AI_MAX_TOKENS = 2600;
-const AI_RETRY_MAX_TOKENS = 3500;
+// Thinking is disabled (reasoning_effort "none"), so this is all visible text:
+// plenty for a detailed recap, and a hard cap on runaway answers.
+const AI_MAX_TOKENS = 1800;
 
 // Soft per-user rate limit: 12 requests / 10 minutes. Module-level so it
 // survives between requests on a warm isolate; a cold start resets it, which
@@ -62,32 +73,40 @@ function err(status: number, error: string): Response {
 }
 
 // The hard spoiler rule lives here (not only in the context block) so every
-// mode inherits it. Voice: a direct Arabic anime encyclopedia — answer first,
-// dense specifics, zero small talk (no greetings, filler, emojis or trailing
-// "want more?" questions), so it never reads like a chatty toy.
+// mode inherits it. Voice: a sharp anime expert friend — understands any
+// dialect, works out what is REALLY being asked, answers that first with
+// concrete names/causes, zero small talk. Thinking is off for speed, so the
+// prompt spells out the reasoning steps the model should do silently.
 const SYSTEM_PROMPT = [
-  "أنت «رفيق بانتوفة»: مساعد أنمي عربي دقيق ومباشر.",
+  "أنت «رفيق بانتوفة»: خبير أنمي ومانجا عربي، ذكي ودقيق، يعرف القصص والشخصيات والقدرات والعلاقات والخلفيات بعمق.",
+  "",
   "قواعد صارمة لا تُخرَق:",
-  "1) لا تكشف أبدًا أي أحداث أو شخصيات أو مفاجآت أو وفيات تحدث بعد الحلقة الحالية (حد الحرق)، مهما حدث.",
-  "2) إذا سُئلت عن أحداث لاحقة، اذكر بإيجاز أن السؤال يتجاوز حد الحرق، ثم توقف.",
-  "3) ابقَ في موضوع هذا الأنمي والحديث العام عن الأنمي فقط.",
-  "4) ارفض بإيجاز أي محتوى غير لائق أو غير قانوني.",
-  "5) أجب بالعربية فقط.",
-  "6) التزم بالموسم والاسم البديل المذكورين في السياق حرفيًا؛ لا تخلط أحداث هذا الجزء مع السلسلة الأصلية أو أي موسم آخر، وإن لم تتأكد من أحداث هذا الموسم تحديدًا فاذكر ذلك بصراحة بدل التخمين.",
-  "7) قدّم تفاصيل الحلقة بثقة اعتمادًا على معرفتك بالأنمي. إذا لم يتوفر عنوان الحلقة في السياق فلا تذكر ذلك إطلاقًا ولا تقل إن معلوماتك ناقصة أو إن المصدر لا يحتوي تفاصيل — أجب بأفضل ما تعرفه. لا ترفض السؤال ولا تعتذر، ولا تخترع أحداثًا لا تعرفها؛ وإذا شككت في تفصيلة دقيقة فاذكرها بصيغة غير جازمة.",
-  "8) المستخدم يشاهد هذا العمل الآن، فهو صادر ومتاح بالتأكيد. لا تقل أبدًا إن العمل أو هذا الموسم «لم يصدر بعد» أو «لم يُعرض بعد»، واعتمد على حالة العمل وتاريخ اليوم المذكورين في السياق بدلًا من معرفتك القديمة.",
-  "9) إذا وُجد ملخص الحلقة في السياق فاعتمد أحداثه حرفيًا وابنِ عليه ولا تناقضه أبدًا؛ أضف من معرفتك فقط ما لا يتعارض معه.",
+  "1) حد الحرق: لا تكشف أبدًا أي حدث أو شخصية جديدة أو مفاجأة أو وفاة أو قدرة أو هوية سرية تظهر بعد الحلقة المذكورة في السياق، ولا تلمّح إليها. معلومات الصدور (عدد المواسم، هل انتهى العرض، موعد الموسم القادم) ليست حرقًا.",
+  "2) إذا كان الجواب يتطلب أحداثًا لاحقة، قل بجملة واحدة إن ذلك يُكشف لاحقًا في الأنمي، ثم أجب عن الجزء المسموح فقط.",
+  "3) التزم بالموسم والاسم البديل المذكورين في السياق؛ لا تخلط أحداث هذا الجزء بموسم آخر أو بعمل آخر يحمل اسمًا مشابهًا.",
+  "4) إذا وُجد ملخص الحلقة في السياق فهو الحقيقة: ابنِ عليه ولا تناقضه، وأضف من معرفتك ما يتفق معه فقط.",
+  "5) المستخدم يشاهد هذا العمل الآن، فهو صادر بالتأكيد؛ اعتمد حالة العمل وتاريخ اليوم في السياق بدل معرفتك القديمة.",
+  "6) الدقة أهم من الثقة: لا تخلط بين الشخصيات ولا بين الأسماء المتشابهة (مثل فريرن Frieren وتلميذتها فيرن Fern)، ولا تخترع أسماء أو أحداثًا. إن لم تكن متأكدًا من تفصيلة صغيرة فاذكرها بصيغة غير جازمة («على الأرجح»)، لكن لا ترفض السؤال ولا تعتذر.",
+  "7) الموضوع: هذا الأنمي والأنمي/المانجا عمومًا (ترشيحات، مقارنات، شرح مصطلحات). ارفض بإيجاز ما سوى ذلك وأي محتوى غير لائق.",
+  "",
+  "طريقة التفكير (بصمت، لا تكتبها):",
+  "- افهم السؤال بأي لهجة كان (جزائرية، مغربية، مصرية، خليجية، شامية، فصحى، أو مكتوبة بحروف لاتينية مثل «chkoun howa»).",
+  "- حدّد المقصود بالضبط: «من هو» ← الهوية والدور والقدرات والعلاقات حتى الآن. «لماذا» ← الأسباب والدوافع. «ماذا حدث» ← الأحداث بالترتيب مع أسبابها ونتائجها. «اشرح» ← الفكرة ببساطة مع مثال من القصة. «هل يستحق/ترشيح» ← رأي واضح مع سبب لكل اختيار.",
+  "- إذا كان السؤال غامضًا فاختر التفسير الأرجح في سياق الحلقة وأجب عنه مباشرة.",
+  "",
   "أسلوب الإجابة:",
-  "- ابدأ بالجواب مباشرة من أول جملة. ممنوع: الترحيب، «بالطبع»، «سؤال رائع»، المقدمات، الأسئلة الختامية، الإيموجي.",
-  "- ممنوع الحديث عن «السياق» أو «المصدر» أو «قاعدة البيانات» أو حدود معرفتك أو عدم توفر معلومات؛ المستخدم يريد الجواب مباشرة.",
-  "- اذكر تفاصيل محددة: أسماء الشخصيات والأماكن والقدرات والأحداث وأسبابها ونتائجها. لا عموميات ولا حشو.",
-  "- اشرح كل ما حدث حتى الحلقة الحالية بالتفصيل الذي يطلبه السؤال، مع الالتزام بحد الحرق.",
-  "- في المحادثة: 2 إلى 5 جمل أو نقاط قصيرة مركّزة.",
-  "- اعتمد على الرسائل السابقة، ولا تُعد شرح ما سبق إلا إذا طُلب منك.",
+  "- اللغة: عربية فصحى مبسطة واضحة. إذا كتب المستخدم بالكامل بالإنجليزية أو الفرنسية فأجب بلغته.",
+  "- أول جملة هي الجواب نفسه. ممنوع: الترحيب، «بالطبع»، «سؤال رائع»، «بناءً على الأحداث حتى الحلقة…»، المقدمات، الخاتمة، الأسئلة الختامية، الإيموجي.",
+  "- ممنوع ذكر «السياق» أو «المصدر» أو «الملخص» أو حدود معرفتك.",
+  "- الأسماء: اكتب اسم الشخصية بالعربية مع الاسم اللاتيني بين قوسين أول مرة فقط، مثل: فيرن (Fern).",
+  "- تفاصيل محددة دائمًا: أسماء، أماكن، قدرات، أسباب، نتائج. لا عموميات ولا حشو.",
+  "- الطول حسب السؤال: سؤال بسيط ← جملة إلى ثلاث. سؤال يحتاج شرحًا ← 3 إلى 6 نقاط قصيرة. لا تتجاوز 170 كلمة إلا إذا طُلب التفصيل.",
+  "- التنسيق: نص عادي. للنقاط استخدم «• » في أول السطر. يمكنك تمييز اسم أو مصطلح مهم بـ **نجمتين** باعتدال. لا عناوين (#) ولا جداول ولا فواصل.",
+  "- تابع المحادثة: استند إلى الرسائل السابقة ولا تكرر ما قيل إلا إذا طُلب.",
 ].join("\n");
 
 const RECAP_INSTRUCTION =
-  "اكتب تلخيصًا بالعربية بلا أي مقدمة: 6 إلى 9 نقاط قصيرة، كل نقطة حدث محدد بالأسماء ونتائجه، لما حدث حتى هذه الحلقة، دون أي حرق بعد حد الحرق المذكور.";
+  "لخّص لي ما حدث حتى هذه الحلقة: 6 إلى 9 نقاط تبدأ كل منها بـ «• »، بالترتيب الزمني، كل نقطة حدث محدد بالأسماء وسببه أو نتيجته، مع التركيز أكثر على آخر الحلقات قبل الحلقة الحالية. بلا مقدمة ولا خاتمة، ودون أي حرق بعد حد الحرق.";
 
 function buildContextMessage(
   animeTitle: string,
@@ -135,22 +154,24 @@ function buildContextMessage(
   return lines.join("\n");
 }
 
+// Models that rejected reasoning_effort:"none" (Flash-Lite answers 400) —
+// remembered so they're called without it from then on.
+const noReasoningParam = new Set<string>();
+const modelCooldownUntil = new Map<string, number>();
+
 /**
  * One provider call. Never throws: network/abort/non-2xx/empty/invalid all
- * come back as { ok: false }, so the caller can try the fallback model.
+ * come back as { ok: false } so the race just waits for another model.
  */
 async function callAI(
   base: string,
   key: string,
   model: string,
   messages: Array<{ role: string; content: string }>,
-  maxTokens: number,
-  timeoutMs: number = AI_TIMEOUT_MS,
+  signal: AbortSignal,
 ): Promise<{ ok: true; content: string; truncated: boolean } | { ok: false; status: number }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const upstream = await fetch(`${base.replace(/\/+$/, "")}/chat/completions`, {
+  const send = (withReasoning: boolean) =>
+    fetch(`${base.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -160,14 +181,38 @@ async function callAI(
         model,
         messages,
         temperature: AI_TEMPERATURE,
-        max_tokens: maxTokens,
+        max_tokens: AI_MAX_TOKENS,
+        // Thinking off: it cost 10-20s per answer and could eat the whole
+        // token budget (empty reply). The system prompt carries the reasoning
+        // steps instead.
+        ...(withReasoning ? { reasoning_effort: "none" } : {}),
       }),
-      signal: controller.signal,
+      signal,
     });
+  try {
+    let withReasoning = !noReasoningParam.has(model);
+    let upstream = await send(withReasoning);
+    if (upstream.status === 400 && withReasoning) {
+      await upstream.text().catch(() => "");
+      noReasoningParam.add(model);
+      withReasoning = false;
+      upstream = await send(false);
+    }
     if (!upstream.ok) {
       // Log the provider status/body for debugging but never leak it to the client.
       const detail = await upstream.text().catch(() => "");
-      console.error("AI upstream error", model, upstream.status, detail.slice(0, 500));
+      console.error("AI upstream error", model, upstream.status, detail.slice(0, 300));
+      if (upstream.status === 429 || upstream.status === 503) {
+        // Gemini says which quota tripped: a per-day one won't recover for
+        // hours; a per-minute one carries its own retryDelay.
+        const retrySec = parseInt(detail.match(/"retryDelay"\s*:\s*"(\d+)/)?.[1] ?? "", 10);
+        const ms = /PerDay/i.test(detail)
+          ? MODEL_DAILY_COOLDOWN_MS
+          : Number.isFinite(retrySec) && retrySec > 0
+          ? Math.min(retrySec * 1000, MODEL_DAILY_COOLDOWN_MS)
+          : MODEL_COOLDOWN_MS;
+        modelCooldownUntil.set(model, Date.now() + ms);
+      }
       return { ok: false, status: upstream.status };
     }
     let data: any = null;
@@ -183,20 +228,138 @@ async function callAI(
     const finish = typeof choice?.finish_reason === "string" ? choice.finish_reason.toLowerCase() : "";
     const truncated = finish === "length" || finish === "max_tokens";
     if (typeof content !== "string" || !content.trim()) {
-      // Thinking tokens can eat the ENTIRE budget, leaving empty content with
-      // finish_reason=length. Surface that as a retryable truncation instead of
-      // a hard failure so the caller retries with the bigger budget.
-      if (truncated) return { ok: true, content: "", truncated: true };
-      console.error("AI response bad shape", model, JSON.stringify(data)?.slice(0, 500));
+      console.error("AI response empty", model, finish, JSON.stringify(data)?.slice(0, 300));
       return { ok: false, status: 502 };
     }
     return { ok: true, content: content.trim(), truncated };
   } catch (e) {
-    console.error("AI fetch failed", model, e);
+    if (!signal.aborted) console.error("AI fetch failed", model, e);
     return { ok: false, status: 502 };
-  } finally {
-    clearTimeout(timer);
   }
+}
+
+/** Tidy model output for a plain-text chat bubble. */
+function polishAnswer(raw: string, truncated: boolean): string {
+  let text = raw
+    .replace(/\r/g, "")
+    // Headings / rules / tables the prompt forbids but models still emit.
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/gm, "")
+    // Markdown bullets → the bubble's "• " style.
+    .replace(/^\s*[-*+]\s+/gm, "• ")
+    // Stray glyphs from other scripts that Gemini splices into Arabic words
+    // (seen: "زولტრاك", "كوجيسากي", "ساтору", "فوشيغuro"): Georgian, Thai,
+    // Cyrillic, Armenian never belong in an answer; Latin glued directly to
+    // Arabic letters is the same glitch (real romaji sits in parentheses).
+    .replace(/[Ѐ-ӿ԰-֏฀-๿Ⴀ-ჿ]+/g, "")
+    .replace(/([ء-ي])[A-Za-z]+/g, "$1")
+    .replace(/[A-Za-z]+([ء-ي])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  // Small models still open with pleasantries despite the prompt.
+  text = text
+    .replace(/^(?:أهلًا|أهلاً|مرحبًا|مرحباً|بالطبع|بكل سرور|سؤال رائع|سؤال جميل)[^\n.!؟:]*[.!؟:]?\s*/u, "")
+    .replace(/^(?:إليك|بناءً على|بناء على)[^\n:]{0,80}:\s*\n?/u, "")
+    .trim();
+  if (truncated) {
+    // Cut a mid-sentence ending back to the last complete sentence/line.
+    const cut = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("."), text.lastIndexOf("؟"), text.lastIndexOf("!"));
+    if (cut > text.length * 0.5) text = text.slice(0, cut + 1).trim();
+  }
+  return text || raw.trim();
+}
+
+/**
+ * Hedged race across the model chain. Model i starts at HEDGE_DELAYS_MS[i]
+ * — or immediately once every model already started has failed — and the
+ * first non-empty answer wins (losers aborted). Models cooling down after a
+ * 429/503 go to the back of the line instead of wasting the head start.
+ */
+async function raceModels(
+  base: string,
+  key: string,
+  chain: string[],
+  messages: Array<{ role: string; content: string }>,
+): Promise<string | null> {
+  const now = Date.now();
+  const ready = chain.filter((m) => (modelCooldownUntil.get(m) ?? 0) <= now);
+  const cooling = chain.filter((m) => (modelCooldownUntil.get(m) ?? 0) > now);
+  const order = [...ready, ...cooling];
+  if (!order.length) return null;
+
+  const abort = new AbortController();
+  const hardStop = setTimeout(() => abort.abort(), AI_BUDGET_MS);
+  const timers: number[] = [];
+
+  return await new Promise<string | null>((resolve) => {
+    let started = 0;
+    let failed = 0;
+    let done = false;
+    let partial: string | null = null;
+
+    const finish = (answer: string | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(hardStop);
+      timers.forEach((t) => clearTimeout(t));
+      abort.abort();
+      resolve(answer);
+    };
+    abort.signal.addEventListener("abort", () => finish(partial));
+
+    const launch = (i: number) => {
+      if (done || i < started || i >= order.length) return;
+      started = i + 1;
+      const model = order[i];
+      const t0 = Date.now();
+      callAI(base, key, model, messages, abort.signal).then((res) => {
+        if (done) return;
+        if (res.ok) {
+          console.log("AI answered", model, `${Date.now() - t0}ms`, res.truncated ? "truncated" : "");
+          const text = polishAnswer(res.content, res.truncated);
+          // A cut-off answer is kept as a fallback, but a complete one from a
+          // model still running is preferred.
+          if (!res.truncated) return finish(text);
+          partial = partial ?? text;
+        }
+        failed++;
+        if (started < order.length) launch(started); // a slot freed up — don't wait
+        else if (failed >= started) finish(partial);
+      });
+    };
+
+    launch(0);
+    for (let i = 1; i < order.length; i++) {
+      const delay = HEDGE_DELAYS_MS[Math.min(i, HEDGE_DELAYS_MS.length - 1)];
+      timers.push(setTimeout(() => launch(i), delay));
+    }
+  });
+}
+
+/* ── Answer cache ───────────────────────────────────────────────────────
+   Recaps and first questions (no history) are identical for every viewer of
+   the same episode, so a warm isolate answers repeats instantly and saves
+   provider quota. */
+const answerCache = new Map<string, { answer: string; at: number }>();
+const ANSWER_TTL_MS = 6 * 60 * 60 * 1000;
+const ANSWER_CACHE_MAX = 400;
+
+function cacheGet(key: string): string | null {
+  const hit = answerCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > ANSWER_TTL_MS) {
+    answerCache.delete(key);
+    return null;
+  }
+  return hit.answer;
+}
+
+function cacheSet(key: string, answer: string) {
+  if (answerCache.size >= ANSWER_CACHE_MAX) {
+    const oldest = answerCache.keys().next().value;
+    if (oldest !== undefined) answerCache.delete(oldest);
+  }
+  answerCache.set(key, { answer, at: Date.now() });
 }
 
 /* ── Episode grounding (MAL titles via Jikan) ───────────────────────────
@@ -553,20 +716,19 @@ Deno.serve(async (req) => {
 
   // Verify the JWT manually (in addition to the platform's JWT gate) so we get
   // a userId for the rate limit and never trust an unauthenticated caller.
+  // Started now, awaited before any AI call: it overlaps body parsing and the
+  // grounding lookups instead of adding a round-trip in front of them.
   const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
-  let userId: string | null = null;
-  if (jwt) {
-    const { data } = await supabase.auth.getUser(jwt);
-    userId = data?.user?.id ?? null;
-  }
-  if (!userId) return err(401, "unauthenticated");
+  const userIdPromise: Promise<string | null> = jwt
+    ? supabase.auth.getUser(jwt).then(({ data }) => data?.user?.id ?? null, () => null)
+    : Promise.resolve(null);
 
   const aiBase = Deno.env.get("AI_BASE_URL");
   const aiKey = Deno.env.get("AI_API_KEY");
   const aiModel = Deno.env.get("AI_MODEL") || "";
   const fallbackModel = Deno.env.get("AI_MODEL_FALLBACK") || "";
   const fallbackModel2 = Deno.env.get("AI_MODEL_FALLBACK2") || "";
-  if (!aiBase || !aiKey || (!aiModel && !fallbackModel && !fallbackModel2)) {
+  if (!aiBase || !aiKey || (!aiModel && !fallbackModel && !fallbackModel2 && !Deno.env.get("AI_MODELS"))) {
     // Client degrades gracefully: hide the companion when the AI isn't wired.
     return err(200, "not_configured");
   }
@@ -641,30 +803,67 @@ Deno.serve(async (req) => {
     }
   }
 
+  // AI_MODELS (comma-separated, best first) overrides the legacy 3-var chain.
+  // On the free tier every model has its own daily quota, so a longer chain of
+  // distinct models multiplies capacity.
+  const chainEnv = (Deno.env.get("AI_MODELS") || "").split(",");
+  const models = (chainEnv.some((m) => m.trim()) ? chainEnv : [aiModel, fallbackModel, fallbackModel2])
+    .map((m) => m.trim())
+    .filter((m, i, a) => m && a.indexOf(m) === i);
+  const searchTitle = altTitle || animeTitle;
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Ground the answer in real data without ever making the user wait on it.
+  // AniList's English title is the best seed for the episode providers, but we
+  // don't serialize on it: the source title is tried in parallel right away,
+  // and whatever has landed by GROUND_BUDGET_MS goes into the prompt (late
+  // results still warm the caches for the next question).
+  const ground: {
+    ani: AniListGrounding | null;
+    ep: EpisodeGround | null;
+    enEp: EpisodeGround | null;
+  } = { ani: null, ep: null, enEp: null };
+  const grounding = Promise.allSettled([
+    fetchAniListGrounding(searchTitle, seasonNumber).then(async (g) => {
+      ground.ani = g;
+      const en = g?.enTitle;
+      if (en && en.toLowerCase() !== searchTitle.toLowerCase()) {
+        ground.enEp = await fetchEpisodeGrounding(en, epNum, seasonNumber);
+      }
+    }),
+    fetchEpisodeGrounding(searchTitle, epNum, seasonNumber).then((g) => {
+      ground.ep = g;
+    }),
+  ]);
+
+  const userId = await userIdPromise;
+  if (!userId) return err(401, "unauthenticated");
+
+  // Same episode + same opening question (or a recap) → same answer for every
+  // viewer. Served before the rate limit: it costs no provider quota.
+  const cacheKey = history.length === 0
+    ? [
+      mode, animeTitle.toLowerCase(), altTitle.toLowerCase(), seasonNumber ?? 0, epNum,
+      question.toLowerCase().replace(/[\s؟?!.،,]+/g, " ").trim(),
+    ].join("|")
+    : null;
+  const cached = cacheKey ? cacheGet(cacheKey) : null;
+  if (cached) return json(200, { ok: true, answer: cached, spoilerBound });
+
   // Rate-limit AFTER validation so malformed payloads can't lock a user out.
   if (isRateLimited(userId)) return err(429, "rate_limited");
 
-  const models = [aiModel, fallbackModel, fallbackModel2]
-    .map((m) => m.trim())
-    .filter((m, i, a) => m && a.indexOf(m) === i);
-  // Ground the answer in real data. AniList first (fast, reliable) because its
-  // English title is the best search seed for the episode providers; then
-  // TVmaze/Wikipedia/Jikan in parallel. All best-effort with short timeouts —
-  // grounding upgrades the answer, it is never a dependency.
-  const searchTitle = altTitle || animeTitle;
-  const today = new Date().toISOString().slice(0, 10);
-  const anilistGround = await fetchAniListGrounding(searchTitle, seasonNumber);
-  const groundQuery = anilistGround?.enTitle || searchTitle;
-  const episodeGround = await fetchEpisodeGrounding(groundQuery, epNum, seasonNumber);
+  await Promise.race([grounding, new Promise((r) => setTimeout(r, GROUND_BUDGET_MS))]);
+  const epGround = ground.enEp ?? ground.ep;
   const contextMessage = buildContextMessage(
     animeTitle,
     epNum,
     episodeTitle,
     seasonNumber,
     altTitle,
-    episodeGround?.title ?? null,
-    episodeGround?.summary ?? null,
-    anilistGround?.text ?? null,
+    epGround?.title ?? null,
+    epGround?.summary ?? null,
+    ground.ani?.text ?? null,
     today,
     totalEpisodes,
     spoilerBound,
@@ -672,50 +871,12 @@ Deno.serve(async (req) => {
   const messages = [
     { role: "system", content: `${SYSTEM_PROMPT}\n\n${contextMessage}` },
     ...history,
-    { role: "user", content: mode === "recap" ? RECAP_INSTRUCTION : `سؤال المشاهد: ${question}` },
+    { role: "user", content: mode === "recap" ? RECAP_INSTRUCTION : question },
   ];
 
-  // Model chain with a hard wall-clock budget: 429/503s fail fast, but a hung
-  // provider must not eat the client's 45s deadline. Truncation retry only on
-  // the primary (the smart tier burns budget on thinking tokens). If every
-  // model fails, the client shows its retry toast.
-  const budgetDeadline = Date.now() + AI_BUDGET_MS;
-  let answer: string | null = null;
-  for (let mi = 0; mi < models.length; mi++) {
-    const remaining = budgetDeadline - Date.now();
-    if (remaining <= 2_000) break;
-    const first = await callAI(
-      aiBase, aiKey, models[mi], messages, AI_MAX_TOKENS, Math.min(AI_TIMEOUT_MS, remaining),
-    );
-    if (!first.ok) continue; // timeout / 5xx / non-JSON → next model
-    if (!first.truncated && first.content) {
-      answer = first.content;
-      break;
-    }
-    if (first.truncated && mi === 0 && models.length > 1) {
-      const remaining2 = budgetDeadline - Date.now();
-      if (remaining2 > 2_000) {
-        const retry = await callAI(
-          aiBase, aiKey, models[mi], messages, AI_RETRY_MAX_TOKENS, Math.min(AI_TIMEOUT_MS, remaining2),
-        );
-        if (retry.ok && retry.content) {
-          answer = retry.content;
-          break;
-        }
-      }
-      if (first.content) {
-        answer = first.content; // keep the partial rather than nothing
-        break;
-      }
-      continue; // empty even after the bigger budget → try the fallback model
-    }
-    if (first.content) {
-      answer = first.content; // truncated fallback: partial beats nothing
-      break;
-    }
-    // ok, not truncated, empty: unreachable (callAI guards) — try next model.
-  }
+  const answer = await raceModels(aiBase, aiKey, models, messages);
   if (!answer) return err(502, "upstream");
+  if (cacheKey) cacheSet(cacheKey, answer);
 
   return json(200, { ok: true, answer, spoilerBound });
 });

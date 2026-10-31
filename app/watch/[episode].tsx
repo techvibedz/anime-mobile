@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { memo, useEffect, useState, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -441,6 +441,9 @@ export default function WatchScreen() {
   const [companionMsgs, setCompanionMsgs] = useState<{ role: "user" | "ai"; text: string }[]>([]);
   const [companionBusy, setCompanionBusy] = useState(false);
   const [companionInput, setCompanionInput] = useState("");
+  const [companionFailed, setCompanionFailed] = useState<
+    { mode: "chat" | "recap"; question: string; text: string } | null
+  >(null);
   const companionBusyRef = useRef(false); // synchronous double-tap guard
   const companionGenRef = useRef(0); // bumps per episode; drops stale replies
   // Episode number for the companion's spoiler bound: route param first, then
@@ -495,6 +498,7 @@ export default function WatchScreen() {
     setCompanionOpen(false);
     setCompanionInput("");
     setCompanionBusy(false);
+    setCompanionFailed(null);
     // Re-arm the server-selection gate for the new episode, unless this is an
     // auto-play hop (next/prev/autoplay) or an offline file — those play directly.
     setPicked(!!autoParam || !!localParam);
@@ -1716,21 +1720,26 @@ export default function WatchScreen() {
     }
   }, []);
 
-  const sendCompanion = useCallback(async (mode: "chat" | "recap") => {
+  const sendCompanion = useCallback(async (mode: "chat" | "recap", preset?: string, isRetry = false) => {
     if (companionBusyRef.current) return;
-    const question = companionInput.trim();
+    const question = (preset ?? companionInput).trim();
     if (mode === "chat" && !question) return;
     if (!companionEpNum) return;
     const title = companionCtx.title || t.companion;
     const gen = companionGenRef.current;
+    // A retry re-sends the failed turn, whose bubble is still the last message.
+    const prior = isRetry ? companionMsgs.slice(0, -1) : companionMsgs;
     // Snapshot BEFORE appending this turn: the last exchanges go to the model
     // so it continues the conversation instead of starting over.
-    const history = companionMsgs
+    const history = prior
       .slice(-8)
       .map((m) => ({ role: m.role, text: m.text.slice(0, 400) }));
     companionBusyRef.current = true;
-    setCompanionMsgs((m) => [...m, { role: "user", text: mode === "recap" ? t.companionRecap : question }]);
-    setCompanionInput("");
+    setCompanionFailed(null);
+    if (!isRetry) {
+      setCompanionMsgs((m) => [...m, { role: "user", text: mode === "recap" ? t.companionRecap : question }]);
+    }
+    if (preset === undefined) setCompanionInput("");
     setCompanionBusy(true);
     const res = await askCompanion({
       mode,
@@ -1748,9 +1757,17 @@ export default function WatchScreen() {
     if (res.ok) {
       setCompanionMsgs((m) => [...m, { role: "ai", text: res.answer }]);
     } else {
-      showToast(companionReasonText(res.reason));
+      // Shown inline under the unanswered question with a retry button — a
+      // toast alone left the question hanging with no way to re-ask it.
+      setCompanionFailed({ mode, question, text: companionReasonText(res.reason) });
     }
-  }, [companionInput, companionMsgs, companionEpNum, companionCtx, showToast, companionReasonText]);
+  }, [companionInput, companionMsgs, companionEpNum, companionCtx, companionReasonText]);
+
+  const retryCompanion = useCallback(() => {
+    const f = companionFailed;
+    if (!f) return;
+    sendCompanion(f.mode, f.mode === "chat" ? f.question : "", true);
+  }, [companionFailed, sendCompanion]);
 
   // Current index inside the fetched list (href match first, episode number as
   // fallback for cross-source href shapes).
@@ -3041,6 +3058,9 @@ export default function WatchScreen() {
           onChangeInput={setCompanionInput}
           onSend={() => sendCompanion("chat")}
           onRecap={() => sendCompanion("recap")}
+          onAsk={(q) => sendCompanion("chat", q)}
+          failedText={companionFailed?.text ?? null}
+          onRetry={retryCompanion}
           onClose={() => setCompanionOpen(false)}
           insets={insets}
         />
@@ -3291,6 +3311,22 @@ function EpisodeSheet({
   );
 }
 
+/** AI answer bubble: renders the **bold** spans the companion uses for key
+ *  names/terms (they showed up as raw asterisks before). Bullets arrive as
+ *  "• " lines from the server and need no extra handling. */
+const CompanionAnswer = memo(function CompanionAnswer({ text }: { text: string }) {
+  const parts = text.split(/\*\*([^*\n]+)\*\*/g);
+  return (
+    <Text style={ss.msgText} selectable>
+      {parts.map((p, i) =>
+        i % 2 === 1
+          ? <Text key={i} style={ss.msgBold}>{p}</Text>
+          : p.replace(/\*\*/g, ""),
+      )}
+    </Text>
+  );
+});
+
 /* ── رفيق الأنمي — spoiler-safe AI companion drawer ────────────────── */
 function CompanionSheet({
   title,
@@ -3301,6 +3337,9 @@ function CompanionSheet({
   onChangeInput,
   onSend,
   onRecap,
+  onAsk,
+  failedText,
+  onRetry,
   onClose,
   insets,
 }: {
@@ -3312,10 +3351,27 @@ function CompanionSheet({
   onChangeInput: (v: string) => void;
   onSend: () => void;
   onRecap: () => void;
+  onAsk: (question: string) => void;
+  failedText: string | null;
+  onRetry: () => void;
   onClose: () => void;
   insets: { top: number };
 }) {
   const reduced = useReducedMotion();
+  const scrollRef = useRef<ScrollView>(null);
+  // Long answers used to land below the fold, which read as "no answer".
+  const scrollToEnd = useCallback(() => {
+    scrollRef.current?.scrollToEnd({ animated: !reduced });
+  }, [reduced]);
+  // After a few seconds the spinner says it's still working, so a slower
+  // answer doesn't look like a hang.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    setSlow(false);
+    if (!busy) return;
+    const id = setTimeout(() => setSlow(true), 6_000);
+    return () => clearTimeout(id);
+  }, [busy]);
   const hideX = Dimensions.get("window").width;
   const slide = useRef(new Animated.Value(reduced ? 0 : 1)).current; // 1 = off-screen right
   const backdrop = useRef(new Animated.Value(reduced ? 1 : 0)).current;
@@ -3360,31 +3416,54 @@ function CompanionSheet({
         </View>
 
         <ScrollView
+          ref={scrollRef}
           style={ss.companionBody}
           contentContainerStyle={ss.companionMessages}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          onContentSizeChange={scrollToEnd}
         >
           {messages.length === 0 && (
             <Text style={ss.companionWelcome}>{t.companionWelcome(title)}</Text>
           )}
           {messages.map((m, i) => (
             <View key={`${m.role}-${i}`} style={[ss.msgBubble, m.role === "user" ? ss.msgUser : ss.msgAi]}>
-              <Text style={ss.msgText}>{m.text}</Text>
+              {m.role === "ai" ? <CompanionAnswer text={m.text} /> : <Text style={ss.msgText}>{m.text}</Text>}
             </View>
           ))}
           {busy && (
             <View style={[ss.msgBubble, ss.msgAi, ss.msgBusy]}>
               <ActivityIndicator size="small" color={C.accent} />
-              <Text style={ss.msgText}>{t.companionThinking}</Text>
+              <Text style={ss.msgText}>{slow ? t.companionThinkingSlow : t.companionThinking}</Text>
+            </View>
+          )}
+          {!busy && failedText && (
+            <View style={[ss.msgBubble, ss.msgAi, ss.msgFailed]}>
+              <Text style={ss.msgText}>{failedText}</Text>
+              <Pressable onPress={onRetry} style={ss.msgRetryBtn} hitSlop={6}>
+                <Ionicons name="refresh" size={14} color={C.accent} />
+                <Text style={ss.companionChipText}>{t.companionRetry}</Text>
+              </Pressable>
             </View>
           )}
         </ScrollView>
 
-        <Pressable onPress={onRecap} disabled={busy} style={[ss.companionChip, busy && { opacity: 0.5 }]}>
-          <Ionicons name="sparkles" size={14} color={C.accent} />
-          <Text style={ss.companionChipText}>{t.companionRecap}</Text>
-        </Pressable>
+        <View style={ss.companionChipRow}>
+          {messages.length === 0 && t.companionSuggestions.map((q) => (
+            <Pressable
+              key={q}
+              onPress={() => onAsk(q)}
+              disabled={busy}
+              style={[ss.companionChip, busy && { opacity: 0.5 }]}
+            >
+              <Text style={ss.companionChipText}>{q}</Text>
+            </Pressable>
+          ))}
+          <Pressable onPress={onRecap} disabled={busy} style={[ss.companionChip, busy && { opacity: 0.5 }]}>
+            <Ionicons name="sparkles" size={14} color={C.accent} />
+            <Text style={ss.companionChipText}>{t.companionRecap}</Text>
+          </Pressable>
+        </View>
 
         <View style={ss.companionInputRow}>
           <TextInput
@@ -3765,12 +3844,22 @@ const ss = StyleSheet.create({
   },
   msgBusy: { flexDirection: "row", alignItems: "center", gap: 8 },
   msgText: {
-    color: C.text, fontSize: 13, lineHeight: 20,
+    color: C.text, fontSize: 13, lineHeight: 21,
     textAlign: "right", writingDirection: "rtl", fontFamily: "Cairo_500Medium",
   },
+  msgBold: { color: C.white, fontFamily: "Cairo_700Bold" },
+  msgFailed: { borderColor: "rgba(255,120,120,0.35)" },
+  msgRetryBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    alignSelf: "flex-end", marginTop: 8, paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 100, backgroundColor: "rgba(139,147,255,0.12)",
+    borderWidth: 1, borderColor: C.borderAccent,
+  },
+  // flex-wrap row + per-chip margins (no row-reverse+gap: Yoga bug on RTL).
+  companionChipRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", marginTop: 4 },
   companionChip: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-    alignSelf: "flex-end", marginTop: 8, paddingHorizontal: 12, paddingVertical: 8,
+    alignSelf: "flex-end", marginTop: 6, marginLeft: 6, paddingHorizontal: 12, paddingVertical: 8,
     borderRadius: 100, backgroundColor: "rgba(139,147,255,0.12)",
     borderWidth: 1, borderColor: C.borderAccent,
   },

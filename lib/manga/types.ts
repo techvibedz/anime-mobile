@@ -103,6 +103,17 @@ export interface MergedChapter extends MangaChapterInfo {
   source: MangaSourceId;
   /** Native manga id on `source` (URL/slug) — required to build chapter URLs. */
   mangaId: string;
+  /** The same chapter number on the other matched sources, best quality
+   * first. The reader falls back to these when `source`'s copy is dead
+   * (3asq deleted every image of Naruto 590–700; mangalik still has them). */
+  alternates?: ChapterCopy[];
+}
+
+/** One source's copy of a chapter — enough to fetch its pages. */
+export interface ChapterCopy {
+  source: MangaSourceId;
+  mangaId: string;
+  id: string;
 }
 
 /** Detail with every matching source's chapters unioned by chapter number —

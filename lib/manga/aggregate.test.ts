@@ -151,6 +151,14 @@ async function main() {
   assert.equal(merged.chapters[0].mangaId, "slug");
   assert.equal(merged.chapters[1].source, "asq");
   assert.equal(merged.chapters[2].source, "asq");
+  // The losing copies stay reachable for the reader's dead-copy fallback,
+  // best quality first.
+  assert.equal(merged.chapters[0].alternates, undefined);
+  assert.deepEqual(merged.chapters[1].alternates, [{ source: "mangalik", mangaId: "slug", id: "ml-100" }]);
+  assert.deepEqual(merged.chapters[2].alternates, [
+    { source: "mangalik", mangaId: "slug", id: "ml-99" },
+    { source: "mangawy", mangaId: "slug2", id: "mw-99" },
+  ]);
   assert.equal(merged.synopsis, "من 3asq");
   assert.equal(merged.latest, "الفصل 101");
 

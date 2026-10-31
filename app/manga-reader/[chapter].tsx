@@ -32,9 +32,9 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { M, MT, MANGA_FILL } from "../../lib/manga/design";
 import { t } from "../../lib/i18n";
-import { fetchMangaChapter } from "../../lib/manga/api";
+import { chapterImageReferer, fetchReadableChapter } from "../../lib/manga/readable";
 import { fetchMergedDetail } from "../../lib/manga/aggregate";
-import { decodeReaderRef, type MergedChapter, type MergedMangaDetail } from "../../lib/manga/types";
+import { decodeReaderRef, type ChapterCopy, type MergedChapter, type MergedMangaDetail } from "../../lib/manga/types";
 import {
   flushMangaStore,
   getMangaProgress,
@@ -467,10 +467,13 @@ export default function MangaReaderScreen() {
     const sub = AccessibilityInfo.addEventListener("screenReaderChanged", setScreenReader);
     return () => sub.remove();
   }, []);
-  const imageHeaders = useMemo(() => ({ Referer: chapterSource === "asq" ? chapterId
-    : chapterSource === "mangalik" ? `https://lekmanga.site/manga/${encodeURIComponent(chapterMangaId)}/${encodeURIComponent(chapterId)}/`
-    : chapterSource === "hijala" ? `https://hijala.com/${encodeURIComponent(chapterId)}/`
-    : `https://mangawy.org/series/${encodeURIComponent(chapterMangaId)}/chapter/${encodeURIComponent(chapterId)}` }), [chapterSource, chapterMangaId, chapterId]);
+  // The copy actually served — another source's when this one's images are
+  // dead (lib/manga/readable). Image Referers must follow it.
+  const [served, setServed] = useState<ChapterCopy | null>(null);
+  const imageHeaders = useMemo(
+    () => ({ Referer: chapterImageReferer(served ?? { source: chapterSource, mangaId: chapterMangaId, id: chapterId }) }),
+    [served, chapterSource, chapterMangaId, chapterId],
+  );
   const { width, height } = useWindowDimensions();
   const widthRounded = Math.round(width);
   const dpr = PixelRatio.get() || 2;
@@ -605,9 +608,28 @@ export default function MangaReaderScreen() {
     pendingPageRef.current = 0;
     nextChapterPrefetchRef.current = null;
 
-    void fetchMangaChapter(chapterSource, chapterMangaId, chapterId, { force: reloadKey > 0 })
-      .then((data) => {
+    setServed(null);
+
+    // Other sources' copies of this chapter, read off the merged detail only
+    // when this copy turns out dead or missing.
+    const alternates = async (): Promise<ChapterCopy[]> => {
+      const merged = await fetchMergedDetail(source, mangaId);
+      const numberKey = chapterNumberKey(chapterNumber);
+      const match =
+        merged.chapters.find((chapter) => chapter.id === chapterId && chapter.source === chapterSource) ??
+        (numberKey ? merged.chapters.find((chapter) => chapterNumberKey(chapter.number) === numberKey) : undefined);
+      if (!match) return [];
+      return [{ source: match.source, mangaId: match.mangaId, id: match.id }, ...(match.alternates ?? [])];
+    };
+
+    void fetchReadableChapter(
+      { source: chapterSource, mangaId: chapterMangaId, id: chapterId },
+      alternates,
+      { force: reloadKey > 0 },
+    )
+      .then(({ data, copy }) => {
         if (!alive) return;
+        setServed(copy);
         if (data.pages.length > 0) setPages(data.pages);
         else setError(true);
       })
@@ -793,8 +815,10 @@ export default function MangaReaderScreen() {
     if (index < pages.length - 5) return;
     if (nextChapterPrefetchRef.current === `${newerChapter.source}:${newerChapter.id}`) return;
     nextChapterPrefetchRef.current = `${newerChapter.source}:${newerChapter.id}`;
-    void fetchMangaChapter(newerChapter.source, newerChapter.mangaId, newerChapter.id)
-      .catch(() => {});
+    void fetchReadableChapter(
+      { source: newerChapter.source, mangaId: newerChapter.mangaId, id: newerChapter.id },
+      async () => newerChapter.alternates ?? [],
+    ).catch(() => {});
   }, [index, pages, newerChapter, scrolling]);
 
   const goToChapter = useCallback(

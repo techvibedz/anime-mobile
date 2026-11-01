@@ -1733,7 +1733,8 @@ export default function WatchScreen() {
     // so it continues the conversation instead of starting over.
     const history = prior
       .slice(-8)
-      .map((m) => ({ role: m.role, text: m.text.slice(0, 400) }));
+      // The companion's own answers stay long enough for "explain more" to work.
+      .map((m) => ({ role: m.role, text: m.text.slice(0, m.role === "ai" ? 1200 : 500) }));
     companionBusyRef.current = true;
     setCompanionFailed(null);
     if (!isRetry) {

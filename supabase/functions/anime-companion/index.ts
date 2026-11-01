@@ -16,8 +16,17 @@
 //       plus the auto-provided SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { fetchGrounding, type Grounding } from "./grounding.ts";
 
-const JSON_HEADERS = { "Content-Type": "application/json" };
+// The desktop app calls from a Chromium renderer, which sends a CORS preflight
+// (Authorization + JSON body). Without an OPTIONS answer it got a 400 and the
+// real request was never sent. Native mobile ignores these headers.
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const JSON_HEADERS = { ...CORS_HEADERS, "Content-Type": "application/json" };
 
 // Measured on the production key (Gemini free tier, 2026-10-31): the smart
 // Flash models answer in 7-30s depending on load, Flash-Lite in ~1.5s. Calling
@@ -30,17 +39,20 @@ const JSON_HEADERS = { "Content-Type": "application/json" };
 // quota: the second smart model joins only once the first is clearly slow
 // (smart answers usually land in 4-7s), the fast tier at 10s.
 const HEDGE_DELAYS_MS = [0, 7_000, 10_000, 12_000];
-// Whole AI phase hard stop — well inside the client's 30s deadline.
-const AI_BUDGET_MS = 21_000;
-// Grounding (AniList/TVmaze/Wikipedia/Jikan) is an upgrade, never a wait: we
-// take whatever has arrived by this point and go.
-const GROUND_BUDGET_MS = 2_800;
+// Whole AI phase hard stop. Grounding (<= GROUND_BUDGET_MS) + this stays
+// inside the clients' 28s request deadline.
+const AI_BUDGET_MS = 19_500;
+// Real episode data is what makes answers accurate and spoiler-safe, so it is
+// worth a short wait — measured ~4.5s cold (AniList, then TVmaze/Wikipedia/
+// Jikan in parallel), instant once cached. Whatever has arrived by this point
+// (counted from request start) goes into the prompt.
+const GROUND_BUDGET_MS = 6_500;
 // A model that answered 429/503 is skipped for a while so later questions
 // don't burn their head start on it. Daily-quota 429s skip it far longer.
 const MODEL_COOLDOWN_MS = 60_000;
 const MODEL_DAILY_COOLDOWN_MS = 60 * 60 * 1000;
-// Slightly low: directness and factual density over creative rambling.
-const AI_TEMPERATURE = 0.35;
+// Low: factual accuracy over creative rambling.
+const AI_TEMPERATURE = 0.25;
 // Thinking is disabled (reasoning_effort "none"), so this is all visible text:
 // plenty for a detailed recap, and a hard cap on runaway answers.
 const AI_MAX_TOKENS = 1800;
@@ -72,85 +84,121 @@ function err(status: number, error: string): Response {
   return json(status, { ok: false, error });
 }
 
-// The hard spoiler rule lives here (not only in the context block) so every
-// mode inherits it. Voice: a sharp anime expert friend — understands any
-// dialect, works out what is REALLY being asked, answers that first with
-// concrete names/causes, zero small talk. Thinking is off for speed, so the
-// prompt spells out the reasoning steps the model should do silently.
-const SYSTEM_PROMPT = [
-  "أنت «رفيق بانتوفة»: خبير أنمي ومانجا عربي، ذكي ودقيق، يعرف القصص والشخصيات والقدرات والعلاقات والخلفيات بعمق.",
-  "",
-  "قواعد صارمة لا تُخرَق:",
-  "1) حد الحرق: لا تكشف أبدًا أي حدث أو شخصية جديدة أو مفاجأة أو وفاة أو قدرة أو هوية سرية تظهر بعد الحلقة المذكورة في السياق، ولا تلمّح إليها. معلومات الصدور (عدد المواسم، هل انتهى العرض، موعد الموسم القادم) ليست حرقًا.",
-  "2) إذا كان الجواب يتطلب أحداثًا لاحقة، قل بجملة واحدة إن ذلك يُكشف لاحقًا في الأنمي، ثم أجب عن الجزء المسموح فقط.",
-  "3) التزم بالموسم والاسم البديل المذكورين في السياق؛ لا تخلط أحداث هذا الجزء بموسم آخر أو بعمل آخر يحمل اسمًا مشابهًا.",
-  "4) إذا وُجد ملخص الحلقة في السياق فهو الحقيقة: ابنِ عليه ولا تناقضه، وأضف من معرفتك ما يتفق معه فقط.",
-  "5) المستخدم يشاهد هذا العمل الآن، فهو صادر بالتأكيد؛ اعتمد حالة العمل وتاريخ اليوم في السياق بدل معرفتك القديمة.",
-  "6) الدقة أهم من الثقة: لا تخلط بين الشخصيات ولا بين الأسماء المتشابهة (مثل فريرن Frieren وتلميذتها فيرن Fern)، ولا تخترع أسماء أو أحداثًا. إن لم تكن متأكدًا من تفصيلة صغيرة فاذكرها بصيغة غير جازمة («على الأرجح»)، لكن لا ترفض السؤال ولا تعتذر.",
-  "7) الموضوع: هذا الأنمي والأنمي/المانجا عمومًا (ترشيحات، مقارنات، شرح مصطلحات). ارفض بإيجاز ما سوى ذلك وأي محتوى غير لائق.",
-  "",
-  "طريقة التفكير (بصمت، لا تكتبها):",
-  "- افهم السؤال بأي لهجة كان (جزائرية، مغربية، مصرية، خليجية، شامية، فصحى، أو مكتوبة بحروف لاتينية مثل «chkoun howa»).",
-  "- حدّد المقصود بالضبط: «من هو» ← الهوية والدور والقدرات والعلاقات حتى الآن. «لماذا» ← الأسباب والدوافع. «ماذا حدث» ← الأحداث بالترتيب مع أسبابها ونتائجها. «اشرح» ← الفكرة ببساطة مع مثال من القصة. «هل يستحق/ترشيح» ← رأي واضح مع سبب لكل اختيار.",
-  "- إذا كان السؤال غامضًا فاختر التفسير الأرجح في سياق الحلقة وأجب عنه مباشرة.",
-  "",
-  "أسلوب الإجابة:",
-  "- اللغة: عربية فصحى مبسطة واضحة. إذا كتب المستخدم بالكامل بالإنجليزية أو الفرنسية فأجب بلغته.",
-  "- أول جملة هي الجواب نفسه. ممنوع: الترحيب، «بالطبع»، «سؤال رائع»، «بناءً على الأحداث حتى الحلقة…»، المقدمات، الخاتمة، الأسئلة الختامية، الإيموجي.",
-  "- ممنوع ذكر «السياق» أو «المصدر» أو «الملخص» أو حدود معرفتك.",
-  "- الأسماء: اكتب اسم الشخصية بالعربية مع الاسم اللاتيني بين قوسين أول مرة فقط، مثل: فيرن (Fern).",
-  "- تفاصيل محددة دائمًا: أسماء، أماكن، قدرات، أسباب، نتائج. لا عموميات ولا حشو.",
-  "- الطول حسب السؤال: سؤال بسيط ← جملة إلى ثلاث. سؤال يحتاج شرحًا ← 3 إلى 6 نقاط قصيرة. لا تتجاوز 170 كلمة إلا إذا طُلب التفصيل.",
-  "- التنسيق: نص عادي. للنقاط استخدم «• » في أول السطر. يمكنك تمييز اسم أو مصطلح مهم بـ **نجمتين** باعتدال. لا عناوين (#) ولا جداول ولا فواصل.",
-  "- تابع المحادثة: استند إلى الرسائل السابقة ولا تكرر ما قيل إلا إذا طُلب.",
-].join("\n");
+// The rules live in the system message so every mode inherits them. Voice: a
+// sharp anime-expert friend. Thinking is off for speed, so the prompt spells
+// out the silent checks — above all the spoiler check, because the model's
+// general knowledge of a show includes everything AFTER the user's episode.
+function systemPrompt(bound: number): string {
+  return [
+    "أنت «رفيق بانتوفة»: خبير أنمي ومانجا دقيق جدًا، تشرح بوضوح وعمق كصديق يعرف العمل جيدًا.",
+    "",
+    "مصادرك بالترتيب:",
+    "1) «ما حدث حتى الآن» و«الحلقة الحالية» في بطاقة العمل: بيانات حقيقية عن هذا الجزء بالضبط، وهي الحقيقة. ابنِ إجابتك عليها أولًا ولا تناقضها (هي بالإنجليزية؛ أجب بالعربية).",
+    `2) معرفتك العامة بالعمل: فقط لما يقع يقينًا في الحلقة ${bound} أو قبلها، ولإضافة تفاصيل (أسماء، قدرات، دوافع، أماكن) تتفق مع البيانات.`,
+    "",
+    `حد الحرق — أهم قاعدة: المستخدم شاهد حتى الحلقة ${bound} فقط.`,
+    "- معرفتك العامة تشمل أحداثًا لاحقة، وهي مصدر الحرق الأول. قبل ذكر أي معلومة ليست في البيانات اسأل نفسك بصمت: هل تحدث أو تُكشف في هذه الحلقة أو قبلها؟ إن لم تكن متأكدًا فلا تذكرها.",
+    "- ممنوع: أحداث لاحقة، وفيات، خيانات، هويات أو ماضٍ يُكشف لاحقًا، قدرات أو تحولات لم تظهر بعد، شخصيات لم تظهر بعد، نتائج معارك لم تُحسم، علاقات ستتغير، وأي تلميح مثل «لاحقًا سنعرف» أو «سيكون لهذا دور كبير» أو «انتظر ما سيحدث».",
+    `- عن شخصية: صفها كما عُرفت حتى الحلقة ${bound} فقط. إن لم تظهر بعد فقل ذلك دون أي تفصيل عنها.`,
+    "- القدرات والتقنيات وأسماء الهجمات والأسلحة الخاصة والماضي والهويات والعلاقات الخفية: اذكرها فقط إذا ظهرت في «ما حدث حتى الآن» أو «الحلقة الحالية» أو «فكرة هذا الجزء». ما لم يظهر هناك لا تذكره ولو كنت تعرفه يقينًا؛ قل إن بقية قدراته أو ماضيه لم تُكشف بعد. (إذا لم تُعطَ بيانات حلقات أصلًا فاعتمد معرفتك بحذر شديد ضمن القوس الحالي.)",
+    "- إن كان الجواب الكامل يحتاج أحداثًا لاحقة: أجب بالمعروف حتى الآن، ثم جملة قصيرة «يتضح هذا أكثر في الحلقات القادمة» بلا أي تفصيل.",
+    "- الحلقة الحالية قد يكون المستخدم في منتصفها: لا تكشف نهايتها أو مفاجأتها إلا إذا سأل عمّا حدث فيها.",
+    "- معلومات الصدور (عدد المواسم، هل انتهى العرض، موعد الموسم القادم) ليست حرقًا. إن طلب المستخدم الحرق صراحةً فاعتذر بلطف في جملة واحدة.",
+    "",
+    "الدقة:",
+    "- التزم بهذا الجزء/الموسم ولا تخلطه بموسم آخر أو بعمل يحمل اسمًا مشابهًا.",
+    "- لا تخلط بين الشخصيات المتشابهة ولا تخترع أسماء أو أحداثًا أو أرقام حلقات. تهجئة الأسماء في البطاقة صحيحة.",
+    "- إن لم تكن التفصيلة في البيانات ولست متأكدًا منها فقل ذلك باختصار بدل التخمين، وأجب عن بقية السؤال.",
+    "- لا تنفِ صدور العمل؛ المستخدم يشاهده الآن، واعتمد حالة العمل وتاريخ اليوم في البطاقة بدل معرفتك القديمة.",
+    "- الموضوع: هذا الأنمي والأنمي/المانجا عمومًا (ترشيحات، مقارنات، شرح مصطلحات). ارفض بإيجاز ما سوى ذلك وأي محتوى غير لائق.",
+    "",
+    "فهم السؤال (بصمت، لا تكتبه):",
+    "- افهمه بأي لهجة (جزائرية، مغربية، مصرية، خليجية، شامية، فصحى) أو بحروف لاتينية (مثل «chkoun howa»).",
+    "- حدد المقصود بالضبط وأجب عنه أولًا: «من هو» ← الهوية والدور والقدرات والعلاقات وأهم ما فعله حتى الآن. «لماذا» ← الأسباب والدوافع كما ظهرت. «ماذا حدث» ← الأحداث بالترتيب مع أسبابها ونتائجها. «اشرح» ← الفكرة ببساطة مع مثال من القصة. «هل يستحق/ترشيح» ← رأي واضح مع سبب لكل اختيار.",
+    `- «هذه الحلقة» = الحلقة ${bound}، و«الحلقة السابقة» = ${Math.max(1, bound - 1)}. السؤال الغامض: اختر التفسير الأرجح في سياق الحلقة وأجب مباشرة.`,
+    "",
+    "أسلوب الإجابة:",
+    "- اللغة: عربية فصحى مبسطة واضحة. إذا كتب المستخدم بالكامل بالإنجليزية أو الفرنسية فأجب بلغته.",
+    "- أول جملة هي الجواب نفسه. ممنوع: الترحيب، «بالطبع»، «سؤال رائع»، المقدمات، الخاتمة، الأسئلة الختامية، الإيموجي، وذكر «البطاقة» أو «البيانات» أو «المصدر» أو «الملخص» أو حدود معرفتك.",
+    "- الأسماء: اسم الشخصية بالعربية مع الاسم اللاتيني بين قوسين أول مرة فقط، مثل: فيرن (Fern).",
+    "- تفاصيل محددة دائمًا: أسماء، أماكن، قدرات، أسباب، نتائج، ورقم الحلقة عند ذكر حدث مهم. لا عموميات ولا حشو.",
+    "- الطول حسب السؤال: سؤال بسيط ← جملتان إلى أربع غنيّتان بالمعلومة. سؤال يحتاج شرحًا ← 3 إلى 7 نقاط مفيدة. حتى 230 كلمة إلا إذا طُلب التفصيل.",
+    "- التنسيق: نص عادي. للنقاط «• » في أول السطر. ميّز اسمًا أو مصطلحًا مهمًا بـ **نجمتين** باعتدال. لا عناوين (#) ولا جداول ولا فواصل.",
+    "- تابع المحادثة: استند إلى الرسائل السابقة ولا تكرر ما قيل إلا إذا طُلب.",
+  ].join("\n");
+}
 
-const RECAP_INSTRUCTION =
-  "لخّص لي ما حدث حتى هذه الحلقة: 6 إلى 9 نقاط تبدأ كل منها بـ «• »، بالترتيب الزمني، كل نقطة حدث محدد بالأسماء وسببه أو نتيجته، مع التركيز أكثر على آخر الحلقات قبل الحلقة الحالية. بلا مقدمة ولا خاتمة، ودون أي حرق بعد حد الحرق.";
+function recapInstruction(bound: number): string {
+  return bound <= 1
+    ? "عرّفني بهذا العمل قبل أن أبدأ: الفكرة والعالم والشخصيات التي تظهر في الحلقة الأولى، في 4 إلى 6 نقاط تبدأ بـ «• »، دون كشف نهاية الحلقة أو أي حرق."
+    : [
+      `ذكّرني بما حدث قبل الحلقة ${bound}: 6 إلى 9 نقاط تبدأ كل منها بـ «• »، بالترتيب الزمني، كل نقطة حدث محدد بالأسماء مع سببه أو نتيجته.`,
+      `ركّز أكثر على آخر حلقتين أو ثلاث قبل الحلقة ${bound} لأنها الأهم لمتابعة المشاهدة، واذكر أين توقفت الأحداث بالضبط.`,
+      "بلا مقدمة ولا خاتمة، ودون كشف نهاية الحلقة الحالية أو أي شيء بعدها.",
+    ].join(" ");
+}
 
-function buildContextMessage(
-  animeTitle: string,
-  epNum: number,
-  episodeTitle: string,
-  seasonNumber: number | undefined,
-  altTitle: string,
-  groundingTitle: string | null,
-  episodeSummary: string | null,
-  anilistGrounding: string | null,
-  today: string,
-  totalEpisodes: number | undefined,
-  spoilerBound: number,
-): string {
-  const lines = [`الأنمي: ${animeTitle}`];
-  if (altTitle) {
-    lines.push(`الاسم البديل (رومي/إنجليزي): ${altTitle} — قد يكون الاسم الأشهر لهذا الجزء تحديدًا.`);
+function spoilerReminder(bound: number): string {
+  return `تذكير لك لا تكتبه: شاهدتُ حتى الحلقة ${bound} فقط. لا تذكر أي حدث أو قدرة أو تقنية أو سلاح أو شخصية أو ماضٍ أو هوية لم يظهر في البيانات حتى هذه الحلقة، حتى لو كنت تعرفه يقينًا من بقية العمل؛ قل بدلًا منه إنه لم يُكشف بعد.`;
+}
+
+/** Episodes before the bound: summaries for the last few, titles before that. */
+const TIMELINE_DETAILED = 10;
+const TIMELINE_TITLES = 60;
+
+function buildContextMessage(p: {
+  animeTitle: string;
+  altTitle: string;
+  seasonNumber: number | undefined;
+  epNum: number;
+  episodeTitle: string;
+  totalEpisodes: number | undefined;
+  spoilerBound: number;
+  today: string;
+  g: Partial<Grounding>;
+}): string {
+  const { g } = p;
+  const lines: string[] = ["بطاقة العمل", `الأنمي: ${p.animeTitle}`];
+  const official = [g.enTitle, g.romaji, p.altTitle]
+    .filter((t, i, a): t is string => !!t && a.findIndex((x) => x?.toLowerCase() === t.toLowerCase()) === i);
+  if (official.length) lines.push(`الاسم الرسمي: ${official.join(" / ")}`);
+  if (p.seasonNumber) {
+    lines.push(`الموسم/الجزء: ${p.seasonNumber} — أحداث هذا الجزء فقط، ولا تخلطها بموسم آخر.`);
   }
-  if (seasonNumber) {
-    lines.push(`الموسم المحدد: ${seasonNumber} — أجب عن أحداث هذا الموسم فقط ولا تخلطها مع أي موسم آخر.`);
-  }
-  if (anilistGrounding) {
+  if (g.status) lines.push(`${g.status} — المستخدم يشاهده الآن فهو صادر بالتأكيد.`);
+  if (p.totalEpisodes !== undefined) lines.push(`عدد الحلقات الكلي: ${p.totalEpisodes}`);
+  lines.push(`تاريخ اليوم: ${p.today}`);
+  if (g.premise) lines.push(`فكرة هذا الجزء: ${g.premise}`);
+  if (g.mainCast?.length) {
     lines.push(
-      `حالة العمل حسب AniList: ${anilistGrounding} — لا تنفِ صدور هذا العمل، فالمستخدم يشاهده الآن.`,
+      `الشخصيات الرئيسية (للتهجئة الصحيحة فقط؛ لا تذكر منها من لم يظهر حتى الحلقة ${p.spoilerBound}): ${g.mainCast.join("، ")}`,
     );
   }
-  if (groundingTitle) {
+
+  const timeline = (g.timeline ?? []).filter((e) => e.n < p.spoilerBound);
+  if (timeline.length) {
+    lines.push("", `ما حدث حتى الآن (بيانات حقيقية مرتبة زمنيًا، تتوقف قبل الحلقة ${p.spoilerBound}):`);
+    const detailed = timeline.slice(-TIMELINE_DETAILED);
+    const titled = timeline.slice(0, -TIMELINE_DETAILED).slice(-TIMELINE_TITLES).filter((e) => e.title);
+    if (titled.length) {
+      lines.push("عناوين حلقات سابقة: " + titled.map((e) => `${e.n}) ${e.title}`).join(" · "));
+    }
+    for (const e of detailed) {
+      const head = `• الحلقة ${e.n}${e.title ? ` «${e.title}»` : ""}`;
+      lines.push(e.summary ? `${head}: ${e.summary.length > 420 ? e.summary.slice(0, 420) + "…" : e.summary}` : head);
+    }
+  } else if (p.spoilerBound > 1) {
     lines.push(
-      `عنوان الحلقة: «${groundingTitle}» — استخدمه لتحديد أحداث هذه الحلقة بدقة وعدم الخلط مع حلقات أخرى.`,
+      "",
+      `لا تتوفر بيانات الحلقات السابقة: حدّد بصمت القوس (arc) الذي تقع فيه الحلقة ${p.spoilerBound} واعتمد على معرفتك بحذر شديد دون تجاوزه.`,
     );
   }
-  if (episodeSummary) {
-    lines.push(
-      `ملخص الحلقة (اعتمد عليه كأساس للأحداث، ولا تناقضه، ويمكنك إثراؤه بتفاصيل تعرفها): ${episodeSummary}`,
-    );
-  }
-  lines.push(
-    episodeTitle
-      ? `الحلقة الحالية: ${epNum} — بعنوان: ${episodeTitle}`
-      : `الحلقة التي يشاهدها المستخدم الآن: ${epNum}`,
-  );
-  if (totalEpisodes !== undefined) lines.push(`عدد الحلقات الكلي: ${totalEpisodes}`);
-  lines.push(`تاريخ اليوم: ${today}.`);
-  lines.push(`حد الحرق: لا تكشف أي شيء بعد الحلقة ${spoilerBound} مهما حدث.`);
+
+  const cur = g.current;
+  const curTitle = cur?.title || p.episodeTitle;
+  lines.push("", `الحلقة الحالية: ${p.epNum}${curTitle ? ` «${curTitle}»` : ""}`);
+  if (cur?.summary) lines.push(`ملخصها (قد يكون المستخدم في منتصفها): ${cur.summary}`);
+  lines.push("", `حد الحرق: لا شيء بعد الحلقة ${p.spoilerBound} مهما حدث.`);
   return lines.join("\n");
 }
 
@@ -362,353 +410,10 @@ function cacheSet(key: string, answer: string) {
   answerCache.set(key, { answer, at: Date.now() });
 }
 
-/* ── Episode grounding (MAL titles via Jikan) ───────────────────────────
-   Models guess wrong beats for long-running anime. When Jikan is reachable we
-   look up the real MAL episode title and put it in the context; when it is
-   down (frequent 5xx) we skip silently and fast — grounding is an upgrade,
-   never a dependency. Cached per title#episode so lookups stay rare. */
-const malCache = new Map<string, { title: string | null; at: number }>();
-const MAL_TTL_MS = 6 * 60 * 60 * 1000;
-// Failed lookups are cached briefly, not for hours: a provider outage must not
-// block grounding long after it recovers.
-const MAL_NULL_TTL_MS = 10 * 60 * 1000;
-const MAL_TIMEOUT_MS = 4_000;
-
-// Seasons have identical base titles ("Mushoku Tensei …" S1/S2/S3), so a
-// naive first-result Jikan search can ground the companion on the WRONG
-// season. Detect the season from a MAL title (romans anywhere, Unicode
-// folded) and prefer the candidate that matches the requested season.
-const MAL_ROMAN: Record<string, number> = {
-  II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10,
-};
-
-function malSeasonOf(raw: string): number {
-  const folded = String(raw || "").replace(/[\u2160-\u217f]/g, (ch) => {
-    const map: Record<string, string> = {
-      "\u2160": "I", "\u2161": "II", "\u2162": "III", "\u2163": "IV", "\u2164": "V",
-      "\u2165": "VI", "\u2166": "VII", "\u2167": "VIII", "\u2168": "IX", "\u2169": "X",
-    };
-    return map[ch] ?? ch;
-  });
-  const lower = folded.toLowerCase().replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
-  const m =
-    lower.match(/\b(?:season|part|cour|s)\s*(\d+)\b/) ||
-    lower.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:season|part|cour)\b/) ||
-    lower.match(/(?:الموسم|الجزء)\s*(\d+)/);
-  if (m) return parseInt(m[1], 10);
-  const multi = folded.match(/\b(VIII|VII|VI|IV|IX|III|II)\b/i);
-  if (multi) return MAL_ROMAN[multi[1].toUpperCase()] ?? 0;
-  return 0; // single V/X collide with words/title letters — never a season here
-}
-
-/* ── AniList grounding: real status + air dates ────────────────────────
-   Model knowledge goes stale ("season 3 isn't out yet" for a show that
-   finished months ago). AniList is reliable and carries status / episode
-   count / air dates, so we inject those as facts the model must use. */
-const anilistCache = new Map<
-  string,
-  { text: string | null; enTitle: string | null; at: number }
->();
-
-/** AniList result: a status/date line for the prompt + the entry's English
- *  title, which later providers (TVmaze/Wikipedia/Jikan) search far better
- *  than a raw source title. */
-type AniListGrounding = { text: string | null; enTitle: string | null };
-
-const ANILIST_STATUS_AR: Record<string, string> = {
-  FINISHED: "مكتمل",
-  RELEASING: "يُعرض حاليًا",
-  NOT_YET_RELEASED: "لم يبدأ عرضه بعد",
-  CANCELLED: "ملغى",
-  HIATUS: "متوقف مؤقتًا",
-};
-
-function fmtAniDate(d?: { year?: number | null; month?: number | null; day?: number | null }): string {
-  if (!d?.year) return "";
-  const mm = String(d.month ?? 1).padStart(2, "0");
-  const dd = String(d.day ?? 1).padStart(2, "0");
-  return `${d.year}-${mm}-${dd}`;
-}
-
-async function fetchAniListGrounding(
-  searchTitle: string,
-  seasonNumber?: number,
-): Promise<AniListGrounding | null> {
-  const key = `${searchTitle.toLowerCase().trim()}#s${seasonNumber ?? 0}`;
-  const hit = anilistCache.get(key);
-  if (hit && Date.now() - hit.at < (hit.text ? MAL_TTL_MS : MAL_NULL_TTL_MS)) {
-    return { text: hit.text, enTitle: hit.enTitle };
-  }
-
-  let text: string | null = null;
-  let enTitle: string | null = null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MAL_TIMEOUT_MS);
-  try {
-    const query =
-      "query ($search: String) { Page(perPage: 5) { media(search: $search, type: ANIME) { id status episodes format startDate { year month day } endDate { year month day } title { romaji english } } } }";
-    const res = await fetch("https://graphql.anilist.co", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { search: searchTitle } }),
-      signal: controller.signal,
-    });
-    if (res.ok) {
-      const json = await res.json().catch(() => null);
-      const media: Array<{
-        status?: string;
-        episodes?: number | null;
-        startDate?: { year?: number | null; month?: number | null; day?: number | null };
-        endDate?: { year?: number | null; month?: number | null; day?: number | null };
-        title?: { romaji?: string | null; english?: string | null };
-      }> = Array.isArray(json?.data?.Page?.media) ? json.data.Page.media : [];
-      const wanted = seasonNumber && seasonNumber > 0 ? seasonNumber : 0;
-      const seasonMatches = wanted
-        ? media.filter((m) => malSeasonOf(String(m?.title?.romaji || m?.title?.english || "")) === wanted)
-        : media;
-      // The user is watching this right now, so the entry cannot be an
-      // unreleased sequel ("... Part 2", 2027) that shares the season number.
-      const released = seasonMatches.filter((m) => m?.status && m.status !== "NOT_YET_RELEASED");
-      const pick = released[0] ?? (wanted ? null : seasonMatches[0]);
-      if (pick) {
-        const status = ANILIST_STATUS_AR[pick.status ?? ""] ?? pick.status ?? "";
-        const from = fmtAniDate(pick.startDate);
-        const to = fmtAniDate(pick.endDate);
-        const bits = [`الحالة: ${status}`];
-        if (pick.episodes) bits.push(`عدد الحلقات: ${pick.episodes}`);
-        if (from) bits.push(to ? `صدر من ${from} إلى ${to}` : `بدأ عرضه في ${from}`);
-        text = bits.join(" — ");
-        enTitle = pick.title?.english?.trim() || pick.title?.romaji?.trim() || null;
-      }
-    }
-  } catch {
-    // AniList unreachable — grounding skipped (never fatal).
-  } finally {
-    clearTimeout(timer);
-  }
-  anilistCache.set(key, { text, enTitle, at: Date.now() });
-  return { text, enTitle };
-}
-
-async function fetchMalEpisodeTitle(
-  searchTitle: string,
-  epNum: number,
-  seasonNumber?: number,
-): Promise<string | null> {
-  const key = `${searchTitle.toLowerCase().trim()}#${epNum}#s${seasonNumber ?? 0}`;
-  const hit = malCache.get(key);
-  if (hit && Date.now() - hit.at < (hit.title ? MAL_TTL_MS : MAL_NULL_TTL_MS)) return hit.title;
-
-  let title: string | null = null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MAL_TIMEOUT_MS);
-  try {
-    const search = await fetch(
-      `https://api.jikan.moe/v4/anime?q=${encodeURIComponent(searchTitle)}&limit=5&sfw`,
-      { signal: controller.signal },
-    );
-    if (search.ok) {
-      const sdata = await search.json().catch(() => null);
-      const arr: Array<{ mal_id?: number; title?: string }> = Array.isArray(sdata?.data)
-        ? sdata.data
-        : [];
-      const wanted = seasonNumber && seasonNumber > 0 ? seasonNumber : 0;
-      // When a season is requested but no top-5 result carries it, skip
-      // grounding entirely — grounding on Season 1 would anchor the answer to
-      // the wrong season, which is worse than no grounding at all.
-      const picked = wanted
-        ? arr.find((a) => malSeasonOf(String(a?.title || "")) === wanted) ?? null
-        : arr[0];
-      const malId = picked?.mal_id;
-      if (typeof malId === "number" && malId > 0) {
-        const page = Math.floor((epNum - 1) / 100) + 1;
-        const eps = await fetch(
-          `https://api.jikan.moe/v4/anime/${malId}/episodes?page=${page}`,
-          { signal: controller.signal },
-        );
-        if (eps.ok) {
-          const edata = await eps.json().catch(() => null);
-          const entry = Array.isArray(edata?.data)
-            ? edata.data.find((e: { mal_id?: number }) => e?.mal_id === epNum)
-            : null;
-          if (entry && typeof entry.title === "string" && entry.title.trim()) {
-            title = entry.title.trim().slice(0, 160);
-          }
-        }
-      }
-    }
-  } catch {
-    // Jikan flaky/down or timed out — grounding skipped.
-  } finally {
-    clearTimeout(timer);
-  }
-  malCache.set(key, { title, at: Date.now() });
-  return title;
-}
-
-/* ── Episode title + summary grounding (TVmaze → Wikipedia) ────────────
-   Models do NOT reliably know per-episode beats; real episode data is the
-   only cure. TVmaze carries name+summary for most anime (server-friendly
-   JSON); Wikipedia's episode tables are the quality fallback. Both run with
-   short timeouts and are cached like the others. */
-type EpisodeGround = { title: string | null; summary: string | null };
-
-const epGroundCache = new Map<string, { data: EpisodeGround | null; at: number }>();
-
-function cleanText(raw: string): string {
-  return String(raw || "")
-    .replace(/\{\{[^{}]*\}\}/g, " ")
-    .replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1")
-    .replace(/\[\[([^\]]*)\]\]/g, "$1")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&[a-z#0-9]+;/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function withAbort<T>(ms: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  return fn(controller.signal).finally(() => clearTimeout(timer));
-}
-
-async function fetchTvmazeEpisode(
-  queryTitle: string,
-  epNum: number,
-  seasonNumber: number,
-): Promise<EpisodeGround | null> {
-  // TVmaze names the show without subtitles ("Mushoku Tensei: Jobless
-  // Reincarnation"), so search a progressively shorter base title.
-  const base = queryTitle
-    .replace(/\s*[:：].*$/, "")
-    .replace(/\b(?:season|part|cour)\s*\d+\b/gi, " ")
-    .replace(/\b(viii|vii|vi|iv|ix|iii|ii)\b/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const words = base.split(" ");
-  const queries = [
-    base,
-    words.slice(0, 3).join(" "),
-    words.slice(0, 2).join(" "),
-  ].filter((q, i, a) => q && a.indexOf(q) === i);
-
-  // One shared 4.5s budget for ALL search attempts — three sequential aborts
-  // could otherwise burn 12s and push past the client's deadline.
-  return withAbort(4_500, async (signal) => {
-    for (const q of queries) {
-      const search = await fetch(
-        `https://api.tvmaze.com/search/shows?q=${encodeURIComponent(q)}`,
-        { signal },
-      );
-      if (!search.ok) continue;
-      const list = await search.json().catch(() => null);
-      const showId = Array.isArray(list) ? list[0]?.show?.id : null;
-      if (typeof showId !== "number") continue;
-      const res = await fetch(`https://api.tvmaze.com/shows/${showId}/episodes`, { signal });
-      if (!res.ok) continue;
-      const eps = await res.json().catch(() => null);
-      if (!Array.isArray(eps)) continue;
-      // Season-numbered match preferred; without a marker fall back to the
-      // first episode with the right number (best-effort).
-      const pick = seasonNumber > 0
-        ? eps.find((e) => e?.season === seasonNumber && e?.number === epNum)
-        : eps.find((e) => e?.number === epNum);
-      if (!pick) continue;
-      return {
-        title: typeof pick.name === "string" ? pick.name.slice(0, 160) : null,
-        summary: typeof pick.summary === "string" ? cleanText(pick.summary).slice(0, 700) : null,
-      };
-    }
-    return null;
-  });
-}
-
-async function fetchWikipediaEpisode(
-  queryTitle: string,
-  epNum: number,
-  seasonNumber: number,
-): Promise<EpisodeGround | null> {
-  try {
-    return await withAbort(4_500, async (signal) => {
-      const searchQ = seasonNumber > 0
-        ? `${queryTitle} season ${seasonNumber}`
-        : `${queryTitle} episodes`;
-      const search = await fetch(
-        `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(searchQ)}&srlimit=3&format=json`,
-        { signal },
-      );
-      if (!search.ok) return null;
-      const sdata = await search.json().catch(() => null);
-      const titles: string[] = Array.isArray(sdata?.query?.search)
-        ? sdata.query.search.map((r: { title?: string }) => String(r?.title || ""))
-        : [];
-      const page = titles.find((t) => /season|episode|list of/i.test(t)) || titles[0];
-      if (!page) return null;
-
-      const parsed = await fetch(
-        `https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(page)}&prop=wikitext&redirects=1&format=json`,
-        { signal },
-      );
-      if (!parsed.ok) return null;
-      const pdata = await parsed.json().catch(() => null);
-      const wikitext: string = pdata?.parse?.wikitext?.["*"] || "";
-      if (!wikitext) return null;
-
-      const blocks = wikitext.split(/\{\{\s*Episode list/i).slice(1);
-      for (const block of blocks) {
-        // Season articles carry the season-local number in EpisodeNumber2 and
-        // the overall series number in EpisodeNumber; flat "List of …
-        // episodes" articles only have EpisodeNumber. Prefer the local one —
-        // the user's episode number is always season-local.
-        const num =
-          block.match(/\|\s*EpisodeNumber2\s*=\s*(\d+)/i)?.[1] ??
-          block.match(/\|\s*EpisodeNumber\s*=\s*(\d+)/i)?.[1];
-        if (!num || parseInt(num, 10) !== epNum) continue;
-        const rawTitle = block.match(/\|\s*Title\s*=\s*([^\n|]+)/i)?.[1];
-        const rawSummary = block.match(/\|\s*ShortSummary\s*=\s*([\s\S]*?)(?=\n\s*\||\}\})/i)?.[1];
-        const title = rawTitle ? cleanText(rawTitle).slice(0, 160) : null;
-        const summary = rawSummary ? cleanText(rawSummary).slice(0, 700) : null;
-        if (title || summary) return { title, summary };
-      }
-      return null;
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function fetchEpisodeGrounding(
-  queryTitle: string,
-  epNum: number,
-  seasonNumber?: number,
-): Promise<EpisodeGround | null> {
-  const season = seasonNumber && seasonNumber > 0 ? seasonNumber : 0;
-  const key = `${queryTitle.toLowerCase().trim()}#${epNum}#s${season}`;
-  const hit = epGroundCache.get(key);
-  if (hit) {
-    const ttl = hit.data ? MAL_TTL_MS : MAL_NULL_TTL_MS;
-    if (Date.now() - hit.at < ttl) return hit.data;
-  }
-  const [tvmaze, wiki, jikanTitle] = await Promise.all([
-    fetchTvmazeEpisode(queryTitle, epNum, season),
-    fetchWikipediaEpisode(queryTitle, epNum, season),
-    fetchMalEpisodeTitle(queryTitle, epNum, seasonNumber),
-  ]);
-  const data: EpisodeGround | null = {
-    title: tvmaze?.title || wiki?.title || jikanTitle || null,
-    // TVmaze summaries are short; Wikipedia's are usually richer. Prefer the
-    // longer one when both exist.
-    summary:
-      (wiki?.summary && (!tvmaze?.summary || wiki.summary.length > tvmaze.summary.length)
-        ? wiki.summary
-        : tvmaze?.summary) || null,
-  };
-  const empty = !data.title && !data.summary;
-  epGroundCache.set(key, { data: empty ? null : data, at: Date.now() });
-  return empty ? null : data;
-}
-
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
+  const startedAt = Date.now();
+
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -797,7 +502,9 @@ Deno.serve(async (req) => {
       const role = (item as { role?: unknown }).role;
       const text = (item as { text?: unknown }).text;
       if ((role !== "user" && role !== "ai") || typeof text !== "string") continue;
-      const content = text.trim().slice(0, 500);
+      // The companion's own answers are kept longer so a follow-up ("explain
+      // more", "and the second one?") still sees what was said.
+      const content = text.trim().slice(0, role === "ai" ? 1200 : 500);
       if (!content) continue;
       history.push({ role: role === "ai" ? "assistant" : "user", content });
     }
@@ -810,31 +517,13 @@ Deno.serve(async (req) => {
   const models = (chainEnv.some((m) => m.trim()) ? chainEnv : [aiModel, fallbackModel, fallbackModel2])
     .map((m) => m.trim())
     .filter((m, i, a) => m && a.indexOf(m) === i);
-  const searchTitle = altTitle || animeTitle;
   const today = new Date().toISOString().slice(0, 10);
 
-  // Ground the answer in real data without ever making the user wait on it.
-  // AniList's English title is the best seed for the episode providers, but we
-  // don't serialize on it: the source title is tried in parallel right away,
-  // and whatever has landed by GROUND_BUDGET_MS goes into the prompt (late
-  // results still warm the caches for the next question).
-  const ground: {
-    ani: AniListGrounding | null;
-    ep: EpisodeGround | null;
-    enEp: EpisodeGround | null;
-  } = { ani: null, ep: null, enEp: null };
-  const grounding = Promise.allSettled([
-    fetchAniListGrounding(searchTitle, seasonNumber).then(async (g) => {
-      ground.ani = g;
-      const en = g?.enTitle;
-      if (en && en.toLowerCase() !== searchTitle.toLowerCase()) {
-        ground.enEp = await fetchEpisodeGrounding(en, epNum, seasonNumber);
-      }
-    }),
-    fetchEpisodeGrounding(searchTitle, epNum, seasonNumber).then((g) => {
-      ground.ep = g;
-    }),
-  ]);
+  // Real-data grounding (see grounding.ts) starts now, in parallel with auth;
+  // late results still warm the caches for the next question.
+  const ground: Partial<Grounding> = {};
+  const grounding = fetchGrounding([altTitle, animeTitle], epNum, seasonNumber ?? 0, ground)
+    .catch((e) => console.error("grounding failed", e));
 
   const userId = await userIdPromise;
   if (!userId) return err(401, "unauthenticated");
@@ -843,7 +532,7 @@ Deno.serve(async (req) => {
   // viewer. Served before the rate limit: it costs no provider quota.
   const cacheKey = history.length === 0
     ? [
-      mode, animeTitle.toLowerCase(), altTitle.toLowerCase(), seasonNumber ?? 0, epNum,
+      "v2", mode, animeTitle.toLowerCase(), altTitle.toLowerCase(), seasonNumber ?? 0, epNum,
       question.toLowerCase().replace(/[\s؟?!.،,]+/g, " ").trim(),
     ].join("|")
     : null;
@@ -853,25 +542,42 @@ Deno.serve(async (req) => {
   // Rate-limit AFTER validation so malformed payloads can't lock a user out.
   if (isRateLimited(userId)) return err(429, "rate_limited");
 
-  await Promise.race([grounding, new Promise((r) => setTimeout(r, GROUND_BUDGET_MS))]);
-  const epGround = ground.enEp ?? ground.ep;
-  const contextMessage = buildContextMessage(
+  const waitMs = GROUND_BUDGET_MS - (Date.now() - startedAt);
+  if (waitMs > 0) await Promise.race([grounding, new Promise((r) => setTimeout(r, waitMs))]);
+  console.log(
+    "grounding",
+    JSON.stringify({
+      title: ground.enTitle ?? null,
+      current: !!ground.current?.summary,
+      timeline: ground.timeline?.length ?? 0,
+      ms: Date.now() - startedAt,
+    }),
+  );
+  const contextMessage = buildContextMessage({
     animeTitle,
+    altTitle,
+    seasonNumber,
     epNum,
     episodeTitle,
-    seasonNumber,
-    altTitle,
-    epGround?.title ?? null,
-    epGround?.summary ?? null,
-    ground.ani?.text ?? null,
-    today,
     totalEpisodes,
     spoilerBound,
-  );
+    today,
+    g: ground,
+  });
   const messages = [
-    { role: "system", content: `${SYSTEM_PROMPT}\n\n${contextMessage}` },
+    { role: "system", content: `${systemPrompt(spoilerBound)}
+
+${contextMessage}` },
     ...history,
-    { role: "user", content: mode === "recap" ? RECAP_INSTRUCTION : question },
+    {
+      role: "user",
+      content: mode === "recap"
+        ? recapInstruction(spoilerBound)
+        // Restated next to the question: buried in the system message, the
+        // spoiler rule lost to what the model "knows" (abilities shown only
+        // in later fights leaked into "what can X do?").
+        : `${question}\n\n[${spoilerReminder(spoilerBound)}]`,
+    },
   ];
 
   const answer = await raceModels(aiBase, aiKey, models, messages);

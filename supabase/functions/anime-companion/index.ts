@@ -11,7 +11,8 @@
 // can hide the feature instead of surfacing an error.
 //
 // Deploy: supabase functions deploy anime-companion   (JWT verification ON)
-// Env:  AI_BASE_URL (e.g. https://api.openai.com/v1), AI_API_KEY, and either
+// Env:  AI_BASE_URL (e.g. https://api.openai.com/v1), AI_API_KEYS (comma-separated,
+//       rotated; a key out of quota hands over to the next) or AI_API_KEY, and either
 //       AI_MODELS (comma-separated chain, best first) or AI_MODEL (+ _FALLBACK/_FALLBACK2)
 //       plus the auto-provided SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.
 
@@ -205,7 +206,27 @@ function buildContextMessage(p: {
 // Models that rejected reasoning_effort:"none" (Flash-Lite answers 400) —
 // remembered so they're called without it from then on.
 const noReasoningParam = new Set<string>();
-const modelCooldownUntil = new Map<string, number>();
+// Cooldowns are per key+model: each key (from its own project) has its own
+// quota per model, so one exhausted pair says nothing about the others.
+const keyModelCooldownUntil = new Map<string, number>();
+// A key the provider rejects as invalid/revoked is benched for every model.
+const badKeyUntil = new Map<number, number>();
+const BAD_KEY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+// Round-robin start point per model, so load (and per-minute limits) spreads
+// across all keys instead of draining the first one.
+const keyCursor = new Map<string, number>();
+
+const cooldownId = (keyIdx: number, model: string) => `${keyIdx}|${model}`;
+
+function keyReady(keyIdx: number, model: string, now: number): boolean {
+  return (badKeyUntil.get(keyIdx) ?? 0) <= now &&
+    (keyModelCooldownUntil.get(cooldownId(keyIdx, model)) ?? 0) <= now;
+}
+
+type AIResult =
+  | { ok: true; content: string; truncated: boolean }
+  // cooldownMs: quota hit (try another key). badKey: key rejected outright.
+  | { ok: false; status: number; cooldownMs?: number; badKey?: boolean };
 
 /**
  * One provider call. Never throws: network/abort/non-2xx/empty/invalid all
@@ -217,7 +238,7 @@ async function callAI(
   model: string,
   messages: Array<{ role: string; content: string }>,
   signal: AbortSignal,
-): Promise<{ ok: true; content: string; truncated: boolean } | { ok: false; status: number }> {
+): Promise<AIResult> {
   const send = (withReasoning: boolean) =>
     fetch(`${base.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
@@ -259,7 +280,15 @@ async function callAI(
           : Number.isFinite(retrySec) && retrySec > 0
           ? Math.min(retrySec * 1000, MODEL_DAILY_COOLDOWN_MS)
           : MODEL_COOLDOWN_MS;
-        modelCooldownUntil.set(model, Date.now() + ms);
+        return { ok: false, status: upstream.status, cooldownMs: ms };
+      }
+      // Newer keys can't use some older models ("no longer available to new
+      // users") while older keys still can: bench just this key+model pair.
+      if (upstream.status === 404) {
+        return { ok: false, status: 404, cooldownMs: BAD_KEY_COOLDOWN_MS };
+      }
+      if (upstream.status === 401 || upstream.status === 403 || /API_KEY_INVALID|API key not valid/i.test(detail)) {
+        return { ok: false, status: upstream.status, badKey: true };
       }
       return { ok: false, status: upstream.status };
     }
@@ -284,6 +313,49 @@ async function callAI(
     if (!signal.aborted) console.error("AI fetch failed", model, e);
     return { ok: false, status: 502 };
   }
+}
+
+/**
+ * One model, every key: tries the keys round-robin (ready ones first) and
+ * moves straight to the next key when one is out of quota or invalid, so a
+ * single race slot keeps going until a key answers or all are spent. Other
+ * failures (timeout, 5xx, empty reply) end the slot — another key won't fix
+ * those, and the race already has other models for them.
+ */
+async function callModel(
+  base: string,
+  keys: string[],
+  model: string,
+  messages: Array<{ role: string; content: string }>,
+  signal: AbortSignal,
+): Promise<AIResult> {
+  const now = Date.now();
+  const start = (keyCursor.get(model) ?? 0) % keys.length;
+  keyCursor.set(model, start + 1);
+  const rotated = keys.map((_, i) => (start + i) % keys.length);
+  const order = [
+    ...rotated.filter((k) => keyReady(k, model, now)),
+    ...rotated.filter((k) => !keyReady(k, model, now)),
+  ];
+
+  let last: AIResult = { ok: false, status: 502 };
+  for (const k of order) {
+    if (signal.aborted) break;
+    last = await callAI(base, keys[k], model, messages, signal);
+    if (last.ok) return last;
+    if (last.badKey) {
+      console.error("AI key rejected", `key#${k + 1}`, last.status);
+      badKeyUntil.set(k, Date.now() + BAD_KEY_COOLDOWN_MS);
+      continue;
+    }
+    if (last.cooldownMs) {
+      console.log("AI quota hit", model, `key#${k + 1}`, `${Math.round(last.cooldownMs / 1000)}s`);
+      keyModelCooldownUntil.set(cooldownId(k, model), Date.now() + last.cooldownMs);
+      continue;
+    }
+    break;
+  }
+  return last;
 }
 
 /** Tidy model output for a plain-text chat bubble. */
@@ -325,13 +397,15 @@ function polishAnswer(raw: string, truncated: boolean): string {
  */
 async function raceModels(
   base: string,
-  key: string,
+  keys: string[],
   chain: string[],
   messages: Array<{ role: string; content: string }>,
 ): Promise<string | null> {
   const now = Date.now();
-  const ready = chain.filter((m) => (modelCooldownUntil.get(m) ?? 0) <= now);
-  const cooling = chain.filter((m) => (modelCooldownUntil.get(m) ?? 0) > now);
+  // A model is ready while at least one key still has quota for it.
+  const hasKey = (m: string) => keys.some((_, k) => keyReady(k, m, now));
+  const ready = chain.filter(hasKey);
+  const cooling = chain.filter((m) => !hasKey(m));
   const order = [...ready, ...cooling];
   if (!order.length) return null;
 
@@ -360,7 +434,7 @@ async function raceModels(
       started = i + 1;
       const model = order[i];
       const t0 = Date.now();
-      callAI(base, key, model, messages, abort.signal).then((res) => {
+      callModel(base, keys, model, messages, abort.signal).then((res) => {
         if (done) return;
         if (res.ok) {
           console.log("AI answered", model, `${Date.now() - t0}ms`, res.truncated ? "truncated" : "");
@@ -429,11 +503,15 @@ Deno.serve(async (req) => {
     : Promise.resolve(null);
 
   const aiBase = Deno.env.get("AI_BASE_URL");
-  const aiKey = Deno.env.get("AI_API_KEY");
+  // AI_API_KEYS (comma-separated) enables key rotation; AI_API_KEY still works
+  // alone. Both may be set — the single key just joins the pool.
+  const aiKeys = [...(Deno.env.get("AI_API_KEYS") || "").split(","), Deno.env.get("AI_API_KEY") || ""]
+    .map((k) => k.trim())
+    .filter((k, i, a) => k && a.indexOf(k) === i);
   const aiModel = Deno.env.get("AI_MODEL") || "";
   const fallbackModel = Deno.env.get("AI_MODEL_FALLBACK") || "";
   const fallbackModel2 = Deno.env.get("AI_MODEL_FALLBACK2") || "";
-  if (!aiBase || !aiKey || (!aiModel && !fallbackModel && !fallbackModel2 && !Deno.env.get("AI_MODELS"))) {
+  if (!aiBase || !aiKeys.length || (!aiModel && !fallbackModel && !fallbackModel2 && !Deno.env.get("AI_MODELS"))) {
     // Client degrades gracefully: hide the companion when the AI isn't wired.
     return err(200, "not_configured");
   }
@@ -580,7 +658,7 @@ ${contextMessage}` },
     },
   ];
 
-  const answer = await raceModels(aiBase, aiKey, models, messages);
+  const answer = await raceModels(aiBase, aiKeys, models, messages);
   if (!answer) return err(502, "upstream");
   if (cacheKey) cacheSet(cacheKey, answer);
 

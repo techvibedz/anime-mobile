@@ -4,8 +4,12 @@
 // per-season aggregation, which could only ever surface news about a handful
 // of airing titles and routinely showed weeks-old items as "latest".
 //
-// Brand safety: a keyword guard on the English headline (isSafeNews) drops any
-// adult-content article before it is translated or displayed.
+// Brand safety: two layers drop adult (+18) articles before they are translated
+// or displayed — a keyword guard on the English headline (isSafeNews), and a
+// subject check (filterAdultNews): each article's breadcrumb names the anime /
+// manga it is about, and AniList tells us whether that entry is adult / Hentai /
+// Ecchi. Headlines use Japanese titles ("Killing Bites", "Yumene Connect"), so
+// the keyword guard alone let most of these through.
 //
 // Everything user-facing is Arabic: headlines, tag chips and article bodies are
 // translated lazily (only the visible page / the opened article) via
@@ -17,6 +21,7 @@
 // ordered text/image/video blocks and translates every text block, so the whole
 // post (trailers included) reads in-app, in Arabic.
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { translateToArabic } from "./translate";
 import { fetchHtml } from "./scraper/direct";
 
@@ -45,6 +50,121 @@ const NSFW_RE = /(\bhentai\b|\becchi\b|\bnsfw\b|18\s*\+|\br-?18\b|\beroge\b|\bpo
 
 export function isSafeNews(title: string): boolean {
   return !NSFW_RE.test(title);
+}
+
+/* ── Adult-subject filter ───────────────────────
+ * The MAL article page's breadcrumb ("Top > Manga > Killing Bites > …") links
+ * the entry the post is about. We collect those MAL ids for a whole index page,
+ * resolve them on AniList in ONE batched query, and drop any article whose
+ * subject is isAdult or carries the Hentai/Ecchi genre. Verdicts are permanent
+ * per post, so they're cached on disk and each article is checked only once.
+ * Fails OPEN on network errors (not cached) so an AniList outage can't empty
+ * the feed — the headline keyword guard still applies. */
+
+const BLOCKED_GENRES = ["Hentai", "Ecchi"];
+const VERDICT_KEY = "news-adult-verdicts-v1";
+const VERDICT_MAX = 600;
+let verdicts: Record<string, 0 | 1> | null = null;
+
+async function loadVerdicts(): Promise<Record<string, 0 | 1>> {
+  if (verdicts) return verdicts;
+  try { verdicts = JSON.parse((await AsyncStorage.getItem(VERDICT_KEY)) || "{}") || {}; }
+  catch { verdicts = {}; }
+  return verdicts!;
+}
+function saveVerdicts(): void {
+  if (!verdicts) return;
+  const keys = Object.keys(verdicts);
+  if (keys.length > VERDICT_MAX) {
+    // Keep the newest posts (MAL ids grow over time).
+    const keep = keys.sort((a, b) => Number(b) - Number(a)).slice(0, VERDICT_MAX);
+    verdicts = Object.fromEntries(keep.map((k) => [k, verdicts![k]]));
+  }
+  AsyncStorage.setItem(VERDICT_KEY, JSON.stringify(verdicts)).catch(() => {});
+}
+
+type Ref = { kind: "anime" | "manga"; id: number };
+
+/**
+ * Exported for the self-check: the MAL entries an article page is about — the
+ * breadcrumb entry, plus any linked entry sharing its title slug (an adaptation
+ * post's breadcrumb is the brand-new anime, which AniList may not have rated
+ * yet; its source manga, linked in the body under the same slug, usually is).
+ * Other titles a roundup merely mentions are deliberately NOT included.
+ */
+export function parseBreadcrumbRefs(html: string): Ref[] {
+  const out: Ref[] = [];
+  const seen = new Set<string>();
+  const add = (kind: string, id: string) => {
+    if (seen.has(kind + id)) return;
+    seen.add(kind + id);
+    out.push({ kind: kind as Ref["kind"], id: Number(id) });
+  };
+  const slugs = new Set<string>();
+  const re = /href="https:\/\/myanimelist\.net\/(anime|manga)\/(\d+)\/?([^"/]*)"\s+itemprop="item"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    add(m[1], m[2]);
+    if (m[3]) slugs.add(m[3]);
+  }
+  if (slugs.size) {
+    const any = /href="https:\/\/myanimelist\.net\/(anime|manga)\/(\d+)\/([^"/?#]+)"/g;
+    while ((m = any.exec(html))) if (slugs.has(m[3])) add(m[1], m[2]);
+  }
+  return out;
+}
+
+async function anilistAdultIds(anime: number[], manga: number[]): Promise<Set<string> | null> {
+  if (!anime.length && !manga.length) return new Set();
+  const query = `query($a:[Int],$m:[Int]){
+    a:Page(perPage:50){media(idMal_in:$a,type:ANIME){idMal isAdult genres}}
+    m:Page(perPage:50){media(idMal_in:$m,type:MANGA){idMal isAdult genres}}}`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ query, variables: { a: anime.slice(0, 50), m: manga.slice(0, 50) } }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const bad = new Set<string>();
+    const scan = (kind: string, list: any[] | undefined) => {
+      for (const x of list || []) {
+        if (x?.isAdult || (x?.genres || []).some((g: string) => BLOCKED_GENRES.includes(g))) bad.add(kind + x.idMal);
+      }
+    };
+    scan("anime", j?.data?.a?.media);
+    scan("manga", j?.data?.m?.media);
+    return bad;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/** Drop articles whose subject anime/manga is adult content. */
+async function filterAdultNews(items: NewsItem[]): Promise<NewsItem[]> {
+  const v = await loadVerdicts();
+  const pending = items.filter((n) => v[n.id] === undefined);
+  if (pending.length) {
+    const refs = new Map<number, Ref[]>();
+    await mapLimit(pending, 6, async (n) => {
+      const html = await fetchHtml(n.url, `${MAL}/news`).catch(() => null);
+      if (html) refs.set(n.id, parseBreadcrumbRefs(html));
+    });
+    const all = [...refs.values()].flat();
+    const uniq = (k: Ref["kind"]) => [...new Set(all.filter((r) => r.kind === k).map((r) => r.id))];
+    const bad = await anilistAdultIds(uniq("anime"), uniq("manga"));
+    if (bad) {
+      for (const [id, rs] of refs) v[id] = rs.some((r) => bad.has(r.kind + r.id)) ? 1 : 0;
+      saveVerdicts();
+    }
+  }
+  return items.filter((n) => v[n.id] !== 1);
 }
 
 /* ── HTML helpers ─────────────────────────────── */
@@ -158,7 +278,7 @@ async function fetchNextIndexPage(): Promise<void> {
   if (!batch.length) { exhausted = true; return; }
   malPage = p;
   const seen = new Set(feed.map((n) => n.id));
-  for (const n of batch) if (!seen.has(n.id)) feed.push(n);
+  for (const n of await filterAdultNews(batch)) if (!seen.has(n.id)) feed.push(n);
 }
 
 // Translate a visible item to Arabic in place + register it for the detail page.
@@ -275,6 +395,8 @@ export async function fetchNewsArticle(id: number): Promise<ArticleBlock[] | nul
   const cached = articleCache.get(id);
   if (cached) return cached;
 
+  // Safety net for deep links / stale screens: never render a blocked post.
+  if ((await loadVerdicts())[id] === 1) return null;
   const item = registry.get(id);
   const url = item?.url || `${MAL}/news/${id}`;
   const html = await fetchHtml(url, `${MAL}/`).catch(() => null);
@@ -315,6 +437,8 @@ if (__DEV__) {
   console.assert(isSafeNews("Uncensored Hentai OVA listed") === false, "news: hentai not filtered");
   console.assert(isSafeNews("Spring Ecchi roundup") === false, "news: ecchi keyword not filtered");
   console.assert(isSafeNews("Top 10 of 2026") === true, "news: clean item wrongly rejected");
+  const crumbs = parseBreadcrumbRefs('<a href="https://myanimelist.net/anime.php" itemprop="item"></a><a href="https://myanimelist.net/anime/65326/Hagure_Idol" itemprop="item"></a> <a href="https://myanimelist.net/manga/83835/Hagure_Idol">src</a> <a href="https://myanimelist.net/anime/34964/Other">x</a>');
+  console.assert(crumbs.map((r) => r.kind + r.id).join() === "anime65326,manga83835", "news: breadcrumb parse broke");
   // Date parser: a yearless date must land in the recent past, not the future.
   const iso = parseMalDate("Jul 15, 2:48 AM");
   console.assert(!!iso && new Date(iso).getTime() <= Date.now(), "news: yearless date in future");

@@ -6,10 +6,14 @@
 //
 // Brand safety: two layers drop adult (+18) articles before they are translated
 // or displayed — a keyword guard on the English headline (isSafeNews), and a
-// subject check (filterAdultNews): each article's breadcrumb names the anime /
-// manga it is about, and AniList tells us whether that entry is adult / Hentai /
-// Ecchi. Headlines use Japanese titles ("Killing Bites", "Yumene Connect"), so
-// the keyword guard alone let most of these through.
+// subject check (adultNewsIds): the work each headline quotes is looked up on
+// AniList (one batched request per index page) and adult / Hentai / Ecchi
+// subjects are dropped. Headlines use Japanese titles ("Killing Bites",
+// "Yumene Connect"), so the keyword guard alone let most of these through.
+//
+// Speed: the adult check and the Arabic translation run in parallel, and the
+// first page is cached on disk so the screen paints instantly on open
+// (getCachedNewsFirstPage) while the fresh feed loads behind it.
 //
 // Everything user-facing is Arabic: headlines, tag chips and article bodies are
 // translated lazily (only the visible page / the opened article) via
@@ -53,16 +57,18 @@ export function isSafeNews(title: string): boolean {
 }
 
 /* ── Adult-subject filter ───────────────────────
- * The MAL article page's breadcrumb ("Top > Manga > Killing Bites > …") links
- * the entry the post is about. We collect those MAL ids for a whole index page,
- * resolve them on AniList in ONE batched query, and drop any article whose
- * subject is isAdult or carries the Hentai/Ecchi genre. Verdicts are permanent
- * per post, so they're cached on disk and each article is checked only once.
- * Fails OPEN on network errors (not cached) so an AniList outage can't empty
- * the feed — the headline keyword guard still applies. */
+ * MAL headlines quote the work they're about ('Killing Bites', 'Hagure Idol:
+ * Jigoku-hen'). All quoted titles of an index page are searched on AniList in
+ * ONE batched GraphQL request (~0.5s); for each title the most popular entry
+ * whose romaji/english/synonym EXACTLY matches decides — isAdult or a
+ * Hentai/Ecchi genre drops the article. Exact + most-popular matching avoids
+ * false hits on lookalike titles ('Magi' vs an adult 'Magi Magic').
+ * Verdicts are permanent per post, so they're cached on disk; network failures
+ * fail OPEN (not cached) so an AniList outage can't empty the feed — the
+ * headline keyword guard still applies. */
 
 const BLOCKED_GENRES = ["Hentai", "Ecchi"];
-const VERDICT_KEY = "news-adult-verdicts-v1";
+const VERDICT_KEY = "news-adult-verdicts-v2";
 const VERDICT_MAX = 600;
 let verdicts: Record<string, 0 | 1> | null = null;
 
@@ -83,61 +89,59 @@ function saveVerdicts(): void {
   AsyncStorage.setItem(VERDICT_KEY, JSON.stringify(verdicts)).catch(() => {});
 }
 
-type Ref = { kind: "anime" | "manga"; id: number };
-
-/**
- * Exported for the self-check: the MAL entries an article page is about — the
- * breadcrumb entry, plus any linked entry sharing its title slug (an adaptation
- * post's breadcrumb is the brand-new anime, which AniList may not have rated
- * yet; its source manga, linked in the body under the same slug, usually is).
- * Other titles a roundup merely mentions are deliberately NOT included.
- */
-export function parseBreadcrumbRefs(html: string): Ref[] {
-  const out: Ref[] = [];
-  const seen = new Set<string>();
-  const add = (kind: string, id: string) => {
-    if (seen.has(kind + id)) return;
-    seen.add(kind + id);
-    out.push({ kind: kind as Ref["kind"], id: Number(id) });
-  };
-  const slugs = new Set<string>();
-  const re = /href="https:\/\/myanimelist\.net\/(anime|manga)\/(\d+)\/?([^"/]*)"\s+itemprop="item"/g;
+/** Exported for the self-check: the work titles a headline quotes ('…'). */
+export function quotedTitles(headline: string): string[] {
+  const out: string[] = [];
+  const re = /['‘’]([^'‘’]{2,80})['‘’]/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
-    add(m[1], m[2]);
-    if (m[3]) slugs.add(m[3]);
-  }
-  if (slugs.size) {
-    const any = /href="https:\/\/myanimelist\.net\/(anime|manga)\/(\d+)\/([^"/?#]+)"/g;
-    while ((m = any.exec(html))) if (slugs.has(m[3])) add(m[1], m[2]);
-  }
+  while ((m = re.exec(headline)) && out.length < 2) out.push(m[1].trim());
   return out;
 }
 
-async function anilistAdultIds(anime: number[], manga: number[]): Promise<Set<string> | null> {
-  if (!anime.length && !manga.length) return new Set();
-  const query = `query($a:[Int],$m:[Int]){
-    a:Page(perPage:50){media(idMal_in:$a,type:ANIME){idMal isAdult genres}}
-    m:Page(perPage:50){media(idMal_in:$m,type:MANGA){idMal isAdult genres}}}`;
+const normTitle = (s: string | null | undefined) =>
+  (s || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "");
+
+interface AlMedia {
+  isAdult: boolean;
+  genres: string[] | null;
+  popularity: number | null;
+  synonyms: string[] | null;
+  title: { romaji: string | null; english: string | null } | null;
+}
+
+/** Returns the set of ids judged adult, or null when AniList couldn't answer. */
+async function anilistAdultCheck(queries: { id: number; q: string }[]): Promise<Set<number> | null> {
+  if (!queries.length) return new Set();
+  const vars: Record<string, string> = {};
+  const decl: string[] = [];
+  const body: string[] = [];
+  queries.forEach((x, i) => {
+    vars[`q${i}`] = x.q;
+    decl.push(`$q${i}:String`);
+    body.push(`r${i}:Page(perPage:6){media(search:$q${i}){isAdult genres popularity synonyms title{romaji english}}}`);
+  });
+  const query = `query(${decl.join(",")}){${body.join(" ")}}`;
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 10000);
+  const t = setTimeout(() => ctrl.abort(), 8000);
   try {
     const res = await fetch("https://graphql.anilist.co", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ query, variables: { a: anime.slice(0, 50), m: manga.slice(0, 50) } }),
+      body: JSON.stringify({ query, variables: vars }),
       signal: ctrl.signal,
     });
     if (!res.ok) return null;
     const j = await res.json();
-    const bad = new Set<string>();
-    const scan = (kind: string, list: any[] | undefined) => {
-      for (const x of list || []) {
-        if (x?.isAdult || (x?.genres || []).some((g: string) => BLOCKED_GENRES.includes(g))) bad.add(kind + x.idMal);
-      }
-    };
-    scan("anime", j?.data?.a?.media);
-    scan("manga", j?.data?.m?.media);
+    if (!j?.data) return null;
+    const bad = new Set<number>();
+    queries.forEach((x, i) => {
+      const want = normTitle(x.q);
+      const media: AlMedia[] = j.data[`r${i}`]?.media || [];
+      const best = media
+        .filter((m) => [m.title?.romaji, m.title?.english, ...(m.synonyms || [])].some((s) => normTitle(s) === want))
+        .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))[0];
+      if (best && (best.isAdult || (best.genres || []).some((g) => BLOCKED_GENRES.includes(g)))) bad.add(x.id);
+    });
     return bad;
   } catch {
     return null;
@@ -146,25 +150,22 @@ async function anilistAdultIds(anime: number[], manga: number[]): Promise<Set<st
   }
 }
 
-/** Drop articles whose subject anime/manga is adult content. */
-async function filterAdultNews(items: NewsItem[]): Promise<NewsItem[]> {
+/**
+ * Ids of articles whose subject is adult content. `titles` are the ENGLISH
+ * headlines (captured before translation mutates the items).
+ */
+async function adultNewsIds(titles: { id: number; title: string }[]): Promise<Set<number>> {
   const v = await loadVerdicts();
-  const pending = items.filter((n) => v[n.id] === undefined);
+  const pending = titles.filter((n) => v[n.id] === undefined);
   if (pending.length) {
-    const refs = new Map<number, Ref[]>();
-    await mapLimit(pending, 6, async (n) => {
-      const html = await fetchHtml(n.url, `${MAL}/news`).catch(() => null);
-      if (html) refs.set(n.id, parseBreadcrumbRefs(html));
-    });
-    const all = [...refs.values()].flat();
-    const uniq = (k: Ref["kind"]) => [...new Set(all.filter((r) => r.kind === k).map((r) => r.id))];
-    const bad = await anilistAdultIds(uniq("anime"), uniq("manga"));
+    const queries = pending.flatMap((n) => quotedTitles(n.title).map((q) => ({ id: n.id, q })));
+    const bad = await anilistAdultCheck(queries);
     if (bad) {
-      for (const [id, rs] of refs) v[id] = rs.some((r) => bad.has(r.kind + r.id)) ? 1 : 0;
+      for (const n of pending) v[n.id] = bad.has(n.id) ? 1 : 0;
       saveVerdicts();
     }
   }
-  return items.filter((n) => v[n.id] !== 1);
+  return new Set(titles.filter((n) => v[n.id] === 1).map((n) => n.id));
 }
 
 /* ── HTML helpers ─────────────────────────────── */
@@ -278,7 +279,15 @@ async function fetchNextIndexPage(): Promise<void> {
   if (!batch.length) { exhausted = true; return; }
   malPage = p;
   const seen = new Set(feed.map((n) => n.id));
-  for (const n of await filterAdultNews(batch)) if (!seen.has(n.id)) feed.push(n);
+  const fresh = batch.filter((n) => !seen.has(n.id));
+  // Capture the ENGLISH headlines before translateItem rewrites them, then run
+  // the adult check and the translations side by side.
+  const english = fresh.map((n) => ({ id: n.id, title: n.title }));
+  const [bad] = await Promise.all([adultNewsIds(english), mapLimit(fresh, 8, translateItem)]);
+  for (const n of fresh) {
+    if (bad.has(n.id)) registry.delete(n.id);
+    else feed.push(n);
+  }
 }
 
 // Translate a visible item to Arabic in place + register it for the detail page.
@@ -306,8 +315,30 @@ export async function fetchNewsPage(page: number): Promise<{ items: NewsItem[]; 
     if (feed.length === before) break; // fetch failed — don't spin
   }
   const slice = feed.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
-  await mapLimit(slice, 6, translateItem);
+  await mapLimit(slice, 8, translateItem); // no-op for already-translated items
+  if (page === 0 && slice.length) {
+    AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(slice)).catch(() => {});
+  }
   return { items: slice, hasMore: !exhausted || feed.length > (page + 1) * PAGE_SIZE };
+}
+
+const FEED_CACHE_KEY = "news-feed-first-page-v1";
+
+/**
+ * Last successfully loaded first page (already translated + filtered), for an
+ * instant first paint while fetchNewsPage(0) refreshes. Null if none cached.
+ */
+export async function getCachedNewsFirstPage(): Promise<NewsItem[] | null> {
+  try {
+    const raw = await AsyncStorage.getItem(FEED_CACHE_KEY);
+    if (!raw) return null;
+    const v = await loadVerdicts();
+    const items = (JSON.parse(raw) as NewsItem[]).filter((n) => n && n.id && v[n.id] !== 1);
+    for (const n of items) if (!registry.has(n.id)) registry.set(n.id, n);
+    return items.length ? items : null;
+  } catch {
+    return null;
+  }
 }
 
 /* ── Article detail (full body + images + trailers) ──────────
@@ -437,8 +468,8 @@ if (__DEV__) {
   console.assert(isSafeNews("Uncensored Hentai OVA listed") === false, "news: hentai not filtered");
   console.assert(isSafeNews("Spring Ecchi roundup") === false, "news: ecchi keyword not filtered");
   console.assert(isSafeNews("Top 10 of 2026") === true, "news: clean item wrongly rejected");
-  const crumbs = parseBreadcrumbRefs('<a href="https://myanimelist.net/anime.php" itemprop="item"></a><a href="https://myanimelist.net/anime/65326/Hagure_Idol" itemprop="item"></a> <a href="https://myanimelist.net/manga/83835/Hagure_Idol">src</a> <a href="https://myanimelist.net/anime/34964/Other">x</a>');
-  console.assert(crumbs.map((r) => r.kind + r.id).join() === "anime65326,manga83835", "news: breadcrumb parse broke");
+  console.assert(quotedTitles("Manga 'Hagure Idol: Jigoku-hen' Gets TV Anime").join() === "Hagure Idol: Jigoku-hen", "news: quoted title parse broke");
+  console.assert(quotedTitles("Voice Actress Announces Marriage").length === 0, "news: phantom quoted title");
   // Date parser: a yearless date must land in the recent past, not the future.
   const iso = parseMalDate("Jul 15, 2:48 AM");
   console.assert(!!iso && new Date(iso).getTime() <= Date.now(), "news: yearless date in future");

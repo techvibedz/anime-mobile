@@ -1,6 +1,8 @@
 // Anime News — an infinitely-scrolling, 100% SFW feed of the LATEST MAL news
 // (global index, newest-first). Brand safety is enforced in lib/news.ts
-// (headline keyword guard); this screen only renders what survives it. Tapping
+// (headline keyword guard + AniList adult-subject check); this screen only
+// renders what survives it. The last first page is painted instantly from disk
+// while the fresh feed loads. Tapping
 // a card opens the full article in-app (app/news/[id].tsx).
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -10,7 +12,7 @@ import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { fetchNewsPage, resetNews, type NewsItem } from "../lib/news";
+import { fetchNewsPage, getCachedNewsFirstPage, resetNews, type NewsItem } from "../lib/news";
 import { C, R, S, AR, F, ELEVATION_CARD } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
@@ -25,6 +27,7 @@ export default function NewsScreen() {
   const pageRef = useRef(0);
   const hasMoreRef = useRef(true);
   const seenIds = useRef<Set<number>>(new Set());
+  const firstLoading = useRef(false); // page 0 in flight (cached page may be showing)
 
   const append = useCallback((batch: NewsItem[]) => {
     const fresh = batch.filter((n) => !seenIds.current.has(n.id));
@@ -32,25 +35,38 @@ export default function NewsScreen() {
     setItems((prev) => [...(prev ?? []), ...fresh]);
   }, []);
 
-  const loadFirst = useCallback(async () => {
+  const loadFirst = useCallback(async (useCache = false) => {
     pageRef.current = 0;
     hasMoreRef.current = true;
     seenIds.current.clear();
-    setItems(null);
+    firstLoading.current = true;
+    let fresh = false;
+    if (useCache) {
+      // Instant paint from the last session's first page; replaced below.
+      getCachedNewsFirstPage().then((cached) => {
+        if (cached && !fresh) setItems((prev) => prev ?? cached);
+      });
+    } else {
+      setItems(null);
+    }
     try {
       const { items: batch, hasMore } = await fetchNewsPage(0);
+      fresh = true;
       hasMoreRef.current = hasMore;
       seenIds.current = new Set(batch.map((n) => n.id));
-      setItems(batch);
+      // Keep the cached page on screen if the network fetch came back empty.
+      setItems((prev) => (batch.length || !prev ? batch : prev));
     } catch {
-      setItems([]);
+      fresh = true;
+      setItems((prev) => prev ?? []);
     } finally {
+      firstLoading.current = false;
       setRefreshing(false);
     }
   }, []);
 
   const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMoreRef.current || items === null) return;
+    if (loadingMore || firstLoading.current || !hasMoreRef.current || items === null) return;
     setLoadingMore(true);
     try {
       const next = pageRef.current + 1;
@@ -65,7 +81,7 @@ export default function NewsScreen() {
     }
   }, [loadingMore, items, append]);
 
-  useEffect(() => { loadFirst(); }, [loadFirst]);
+  useEffect(() => { loadFirst(true); }, [loadFirst]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);

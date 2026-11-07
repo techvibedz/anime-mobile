@@ -123,6 +123,7 @@ function Sidebar() {
     ] },
     { title: t.sidebarAccount, items: [
       { icon: "person-outline", label: t.profile, path: "/profile", match: "/profile" },
+      { icon: "gift-outline", label: t.wrappedTitle, path: "/wrapped", match: "/wrapped" },
       { icon: "notifications-outline", label: t.notifications, path: "/notifications", match: "/notifications" },
       { icon: "settings-outline", label: t.settingsTitle, path: "/settings", match: "/settings" },
       ...(!admin ? [{ icon: "chatbubble-ellipses-outline" as const, label: t.chatMenuUser, path: "/chat", match: "/chat" }] : []),

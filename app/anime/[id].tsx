@@ -52,6 +52,11 @@ import { Rise } from "../../components/Rise";
 import { useReducedMotion } from "../../lib/motion";
 import { useSidebarActions } from "../../components/Sidebar";
 import { shouldShowSynopsis, synopsisForDisplay } from "../../lib/animeDetail";
+import { getFillerData, peekFillerData, summarizeFiller, hoursSaved, isSkippable, type EpKind, type FillerData } from "../../lib/filler";
+import { getSkipFiller, setSkipFiller } from "../../lib/settings";
+import { bridgeIsShowable, getMangaBridge, type BridgeInfo } from "../../lib/mangaBridge";
+import { MangaBridgeCard } from "../../components/MangaBridgeCard";
+import { seasonNum, slugToTitle } from "../../lib/relations";
 
 // Core React Native bundles a Clipboard native module (no extra dependency), so
 // copying works over OTA on the existing build. Deep-import since the top-level
@@ -252,6 +257,27 @@ export default function AnimeDetailScreen() {
     void fetchAnimeInfo(data.title);
     return () => { cancelled = true; };
   }, [data?.title]);
+
+  // Anime → manga bridge ("continue from chapter N"). Runs after the page is
+  // up; a first-ever lookup for a season asks the AI once for everyone.
+  const [bridge, setBridge] = useState<BridgeInfo | null>(null);
+  const [bridgeTick, setBridgeTick] = useState(0);
+  useEffect(() => {
+    if (!data?.title) return;
+    let cancelled = false;
+    const season = seasonNum(data.title) || seasonNum(animeHref) || 0;
+    const alt = slugToTitle(animeHref);
+    const timer = setTimeout(() => {
+      void getMangaBridge({
+        animeTitle: data.title,
+        altTitle: alt && alt.toLowerCase() !== data.title.toLowerCase() ? alt : undefined,
+        season,
+        totalEpisodes: data.totalEpisodes || null,
+        refresh: bridgeTick > 0,
+      }).then((info) => { if (!cancelled) setBridge(info); });
+    }, bridgeTick > 0 ? 0 : 700);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [data?.title, animeHref, data?.totalEpisodes, bridgeTick]);
 
   const sourceSynopsisEmpty = !synopsisForDisplay(data?.synopsis ?? "");
   useEffect(() => {
@@ -596,6 +622,16 @@ export default function AnimeDetailScreen() {
               </View>
             ))}
           </View>
+
+          {/* Continue the story in the source manga */}
+          {bridge && bridgeIsShowable(bridge.payload) && (
+            <MangaBridgeCard
+              key={bridge.key + bridge.votes.length + (bridge.mine ?? "")}
+              info={bridge}
+              animeTitle={data.title}
+              onVoted={() => setBridgeTick((n) => n + 1)}
+            />
+          )}
         </Rise>
 
         {/* ── Glow divider ──────────────────── */}
@@ -920,6 +956,23 @@ function EpisodesTab({
   onJumpToOffset: (offset: number) => void;
 }) {
   const [sortDesc, setSortDesc] = useState(true); // true = newest first
+  // Filler/canon data (animefillerlist / MAL) + the canon-only preference.
+  const [filler, setFiller] = useState<FillerData | null>(() => peekFillerData(animeTitle) ?? null);
+  const [canonOnly, setCanonOnly] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getSkipFiller().then((v) => { if (alive) setCanonOnly(v); });
+    if (animeTitle) {
+      getFillerData({ title: animeTitle, href: animeHref }).then((d) => { if (alive) setFiller(d); });
+    }
+    return () => { alive = false; };
+  }, [animeTitle, animeHref]);
+  const toggleCanonOnly = useCallback(() => {
+    setCanonOnly((v) => {
+      void setSkipFiller(!v);
+      return !v;
+    });
+  }, []);
   const [episodeQuery, setEpisodeQuery] = useState("");
   const [jumpError, setJumpError] = useState(false);
   const [highlightedEpisode, setHighlightedEpisode] = useState<number | null>(null);
@@ -1009,11 +1062,23 @@ function EpisodesTab({
     return Array.from(byNum.values());
   }, [episodes, episodes4up, episodes3rb]);
 
-  const sorted = useMemo(() => [...mergedEps].sort((a, b) => {
+  const fillerSummary = useMemo(
+    () => (filler ? summarizeFiller(filler.kinds, mergedEps.map((e) => e.number ?? 0)) : null),
+    [filler, mergedEps],
+  );
+  // Canon-only hides skippable episodes (filler/recap) from the grid AND from
+  // next/prev, so playing through the grid never lands on filler.
+  const hideFiller = canonOnly && !!fillerSummary && fillerSummary.fillerCount > 0;
+  const shownEps = useMemo(
+    () => (hideFiller && filler ? mergedEps.filter((e) => !isSkippable(filler.kinds[e.number ?? -1])) : mergedEps),
+    [hideFiller, filler, mergedEps],
+  );
+
+  const sorted = useMemo(() => [...shownEps].sort((a, b) => {
     const an = a.number ?? 0;
     const bn = b.number ?? 0;
     return sortDesc ? bn - an : an - bn;
-  }), [mergedEps, sortDesc]);
+  }), [shownEps, sortDesc]);
 
   // Highest episode number = the last available episode. Its card gets a
   // "finale" tag so the user can see which episode finishes the anime.
@@ -1025,8 +1090,8 @@ function EpisodesTab({
   // Ascending order, computed once — used to derive prev/next for the watch
   // screen. Previously re-sorted inside every card's onPress handler.
   const byNum = useMemo(
-    () => [...mergedEps].sort((a, b) => (a.number ?? 0) - (b.number ?? 0)),
-    [mergedEps],
+    () => [...shownEps].sort((a, b) => (a.number ?? 0) - (b.number ?? 0)),
+    [shownEps],
   );
 
   // The set of episode numbers watched for THIS anime (cross-source), resolved
@@ -1125,6 +1190,29 @@ function EpisodesTab({
         <Text style={ss.epCount}>{t.episodeCount(mergedEps.length)}</Text>
       </View>
 
+      {fillerSummary && fillerSummary.fillerCount > 0 && (
+        <View style={ss.fillerRow}>
+          <Pressable
+            onPress={toggleCanonOnly}
+            style={[ss.sortChip, canonOnly && ss.canonChipActive]}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: canonOnly }}
+            accessibilityLabel={t.canonOnly}
+          >
+            <Ionicons name={canonOnly ? "checkmark-circle" : "cut-outline"} size={13} color={canonOnly ? C.bg : C.mint} />
+            <Text style={[ss.sortChipText, canonOnly && ss.canonChipTextActive]}>{t.canonOnly}</Text>
+          </Pressable>
+          <View style={ss.fillerInfo}>
+            <Text style={ss.fillerInfoText} numberOfLines={1}>
+              {t.fillerSummary(fillerSummary.fillerCount)} · {t.fillerSaves(hoursSaved(fillerSummary.fillerCount))}
+            </Text>
+            <Text style={ss.fillerSourceText} numberOfLines={1}>
+              {canonOnly ? t.canonOnlyOn : filler?.source === "afl" ? t.fillerSource : "MyAnimeList"}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {merged && (
         <View style={ss.sourceBadge}>
           <Ionicons name="checkmark-circle" size={12} color={C.accent} />
@@ -1172,6 +1260,7 @@ function EpisodesTab({
             <EpisodeGridCard
               key={`${ep.number}-${i}`}
               ep={ep}
+              kind={filler?.kinds[ep.number ?? -1]}
               watched={watched}
               highlighted={ep.number === highlightedEpisode}
               onLayout={handleEpisodeLayout}
@@ -1231,6 +1320,7 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
   onToggleWatched,
   dl,
   onDownload,
+  kind,
 }: {
   ep: GridEpisode;
   watched: boolean;
@@ -1244,6 +1334,8 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
   onToggleWatched: (ep: GridEpisode) => void;
   dl?: { status: DownloadStatus; progress: number };
   onDownload: (ep: GridEpisode) => void;
+  /** Filler/canon classification (undefined = canon / unknown). */
+  kind?: EpKind;
 }) {
   const { width } = useWindowDimensions();
   const dlDone = dl?.status === "completed";
@@ -1321,6 +1413,13 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
           <View style={ss.watchedBadge}>
             <Ionicons name="checkmark-circle" size={11} color="#fff" />
             <Text style={ss.watchedBadgeText}>{t.watchedBadge}</Text>
+          </View>
+        )}
+        {(kind === "filler" || kind === "recap" || kind === "mixed") && !isLast && (
+          <View style={[ss.fillerBadge, kind === "mixed" && ss.mixedBadge]}>
+            <Text style={[ss.fillerBadgeText, kind === "mixed" && { color: C.textSecondary }]} numberOfLines={1}>
+              {kind === "filler" ? t.fillerBadge : kind === "recap" ? t.recapBadge : t.mixedBadge}
+            </Text>
           </View>
         )}
         {ep.href4up && !watched && (
@@ -1833,6 +1932,23 @@ const ss = StyleSheet.create({
     color: C.text, fontSize: 12, lineHeight: 20, fontWeight: "600",
     marginTop: 10, fontFamily: "Cairo_600SemiBold", textAlign: "right",
   },
+  // Filler / canon
+  fillerRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    marginBottom: 10, paddingHorizontal: 4,
+  },
+  fillerInfo: { flex: 1, marginLeft: 10, alignItems: "flex-end" },
+  fillerInfoText: { color: C.text, fontSize: 12, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
+  fillerSourceText: { color: C.textMuted, fontSize: 10, fontFamily: "Cairo_500Medium", textAlign: "right" },
+  canonChipActive: { backgroundColor: C.mint, borderColor: "transparent" },
+  canonChipTextActive: { color: C.bg, fontFamily: "Cairo_700Bold" },
+  fillerBadge: {
+    position: "absolute", bottom: 6, right: 8,
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: R.pill,
+    backgroundColor: "rgba(255,206,92,0.92)",
+  },
+  mixedBadge: { backgroundColor: "rgba(20,22,30,0.85)", borderWidth: 1, borderColor: "rgba(255,255,255,0.22)" },
+  fillerBadgeText: { color: "#1A1400", fontSize: 9, fontFamily: "Cairo_700Bold", includeFontPadding: false },
 
   // Related — 2 columns, relaxed gap.
   relatedGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 12 },

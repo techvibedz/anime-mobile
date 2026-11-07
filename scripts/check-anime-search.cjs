@@ -156,7 +156,9 @@ async function checks() {
   const ctx = { exports: {}, useCallback: fn => fn, reqSeq: { current: 0 }, modeRef: { current: 'browse' }, debounceRef: { current: null }, inputRef: { current: null },
     setItems: rows => states.push(rows), setLoading() {}, setSearching() {}, setStale() {}, setHasMore() {}, setIncompleteSearch() {}, setQuery() {}, setActiveGenre() {},
     loadBrowse() {}, loadGenre() {}, searchAnime: () => new Promise(resolve => { finish = resolve; }),
-    setTimeout: fn => { const id = timers.size + 1; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id) };
+    setTimeout: fn => { const id = timers.size + 1; timers.set(id, fn); return id; }, clearTimeout: id => timers.delete(id),
+    // Smart (AI) search state reset on every edit/clear.
+    aiSeq: { current: 0 }, setAiState() {} };
   vm.runInNewContext(compile(callbacks) + '\nexports.actions = {doSearch, onChangeText, handleClear, handleGenre};', ctx);
   const pending = ctx.exports.actions.doSearch('jojo');
   ctx.exports.actions.onChangeText('naruto');

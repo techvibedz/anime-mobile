@@ -23,6 +23,12 @@ import {
   setAutoplayNext,
   getAutoSkipIntro,
   setAutoSkipIntro,
+  getSkipFiller,
+  setSkipFiller,
+  getShowReactions,
+  setShowReactions,
+  getRecapOffers,
+  setRecapOffers,
   getNotificationScope,
   setNotificationScope,
   getPrefetchNext,
@@ -62,6 +68,9 @@ export default function SettingsScreen() {
   const [notifs, setNotifs] = useState(true);
   const [autoplay, setAutoplay] = useState(true);
   const [autoSkip, setAutoSkip] = useState(false);
+  const [skipFiller, setSkipFillerState] = useState(false);
+  const [showReactions, setShowReactionsState] = useState(true);
+  const [recapOffers, setRecapOffersState] = useState(true);
   const [scope, setScope] = useState<NotificationScope>("all");
   const [prefetch, setPrefetch] = useState(true);
   const [dailyAnime, setDailyAnime] = useState(false);
@@ -78,6 +87,9 @@ export default function SettingsScreen() {
       getNotificationsEnabled().then(setNotifs);
       getAutoplayNext().then(setAutoplay);
       getAutoSkipIntro().then(setAutoSkip);
+      getSkipFiller().then(setSkipFillerState);
+      getShowReactions().then(setShowReactionsState);
+      getRecapOffers().then(setRecapOffersState);
       getNotificationScope().then(setScope);
       getPrefetchNext().then(setPrefetch);
       getDailyAnimeNotif().then(setDailyAnime);
@@ -144,6 +156,21 @@ export default function SettingsScreen() {
   const toggleAutoSkip = useCallback(async (value: boolean) => {
     setAutoSkip(value);
     await setAutoSkipIntro(value);
+  }, []);
+
+  const toggleSkipFiller = useCallback(async (value: boolean) => {
+    setSkipFillerState(value);
+    await setSkipFiller(value);
+  }, []);
+
+  const toggleShowReactions = useCallback(async (value: boolean) => {
+    setShowReactionsState(value);
+    await setShowReactions(value);
+  }, []);
+
+  const toggleRecapOffers = useCallback(async (value: boolean) => {
+    setRecapOffersState(value);
+    await setRecapOffers(value);
   }, []);
 
   const togglePrefetch = useCallback(async (value: boolean) => {
@@ -313,6 +340,33 @@ export default function SettingsScreen() {
             desc={t.settingsAutoSkipIntroDesc}
             value={autoSkip}
             onChange={toggleAutoSkip}
+          />
+          <Divider />
+          <ToggleRow
+            icon="cut-outline"
+            tint={C.mint}
+            title={t.settingsSkipFiller}
+            desc={t.settingsSkipFillerDesc}
+            value={skipFiller}
+            onChange={toggleSkipFiller}
+          />
+          <Divider />
+          <ToggleRow
+            icon="flame-outline"
+            tint={C.accent}
+            title={t.settingsShowReactions}
+            desc={t.settingsShowReactionsDesc}
+            value={showReactions}
+            onChange={toggleShowReactions}
+          />
+          <Divider />
+          <ToggleRow
+            icon="sparkles-outline"
+            tint={C.violet}
+            title={t.settingsRecapOffers}
+            desc={t.settingsRecapOffersDesc}
+            value={recapOffers}
+            onChange={toggleRecapOffers}
           />
           <Divider />
           <ToggleRow

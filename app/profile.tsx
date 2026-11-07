@@ -343,6 +343,27 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        {/* Pantoufa Wrapped — the year in anime, shareable */}
+        <Pressable
+          onPress={() => router.push("/wrapped")}
+          style={({ pressed }) => [s.wrappedCard, pressed && { opacity: 0.85 }]}
+          accessibilityRole="button"
+          accessibilityLabel={t.wrappedEntry(new Date().getFullYear())}
+        >
+          <LinearGradient
+            colors={["rgba(139,147,255,0.30)", "rgba(94,234,212,0.14)"]}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <Text style={s.wrappedEmoji}>🍿</Text>
+          <View style={s.wrappedText}>
+            <Text style={s.wrappedTitle}>{t.wrappedEntry(new Date().getFullYear())}</Text>
+            <Text style={s.wrappedSub}>{t.wrappedEntrySub}</Text>
+          </View>
+          <Ionicons name="chevron-back" size={18} color={C.textSecondary} />
+        </Pressable>
+
         {/* Watch history — one card per anime, latest episode reached */}
         <View style={s.section}>
           <View style={s.sectionRow}>
@@ -488,4 +509,13 @@ const s = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   emptyText: { color: C.textMuted, fontSize: 13, fontFamily: "Cairo_500Medium" },
+  wrappedCard: {
+    direction: "ltr", flexDirection: "row-reverse", alignItems: "center",
+    marginHorizontal: 16, marginTop: 16, padding: 16, borderRadius: 20, overflow: "hidden",
+    borderWidth: 1, borderColor: "rgba(139,147,255,0.35)",
+  },
+  wrappedEmoji: { fontSize: 30, marginLeft: 12 },
+  wrappedText: { flex: 1, alignItems: "flex-end" },
+  wrappedTitle: { color: C.text, fontSize: 16, fontFamily: "Cairo_700Bold", textAlign: "right" },
+  wrappedSub: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium", textAlign: "right" },
 });

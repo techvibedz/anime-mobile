@@ -400,6 +400,7 @@ async function raceModels(
   keys: string[],
   chain: string[],
   messages: Array<{ role: string; content: string }>,
+  opts: { raw?: boolean } = {},
 ): Promise<string | null> {
   const now = Date.now();
   // A model is ready while at least one key still has quota for it.
@@ -438,7 +439,9 @@ async function raceModels(
         if (done) return;
         if (res.ok) {
           console.log("AI answered", model, `${Date.now() - t0}ms`, res.truncated ? "truncated" : "");
-          const text = polishAnswer(res.content, res.truncated);
+          // JSON modes (search/bridge) must not go through the chat polish —
+          // it strips Latin glued to Arabic, which would corrupt titles.
+          const text = opts.raw ? res.content.trim() : polishAnswer(res.content, res.truncated);
           // A cut-off answer is kept as a fallback, but a complete one from a
           // model still running is preferred.
           if (!res.truncated) return finish(text);
@@ -483,6 +486,340 @@ function cacheSet(key: string, answer: string) {
   }
   answerCache.set(key, { answer, at: Date.now() });
 }
+
+/* ── JSON-mode helpers (search / bridge) ─────────────────────────────── */
+
+/** Pull the first JSON object/array out of a model reply (tolerates code
+ *  fences and stray prose around it). */
+function extractJson(raw: string): any | null {
+  const s = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  const start = s.search(/[\[{]/);
+  if (start < 0) return null;
+  const close = s[start] === "{" ? "}" : "]";
+  const end = s.lastIndexOf(close);
+  if (end <= start) return null;
+  try {
+    return JSON.parse(s.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+const cleanText = (v: unknown, max: number): string =>
+  typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "";
+
+const cleanNum = (v: unknown, min: number, max: number): number | null => {
+  const n = typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) && n >= min && n <= max ? Math.round(n * 10) / 10 : null;
+};
+
+type AIContext = {
+  aiBase: string;
+  aiKeys: string[];
+  models: string[];
+  // deno-lint-ignore no-explicit-any
+  db: any;
+  userId: string;
+};
+
+/* ── Mode: "search" — natural-language anime discovery ─────────────────
+   The model turns a free-form request (any dialect) into real titles; the
+   client resolves them on AniList and opens them through the normal
+   title→source resolution. Answers are shared through ai_search_cache so a
+   repeated phrase costs no provider quota. */
+const SEARCH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function searchCacheKey(q: string): string {
+  return q
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[ً-ٕـ]/g, "")
+    .replace(/[إأآٱ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/[\s؟?!.،,:;"'«»()\[\]{}\-_/\\]+/g, " ")
+    .trim()
+    .slice(0, 300);
+}
+
+function searchSystemPrompt(today: string): string {
+  return [
+    "أنت خبير ترشيحات أنمي دقيق. يصف المستخدم ما يريد مشاهدته بأي لهجة عربية (جزائرية، مغربية، مصرية، خليجية، شامية، فصحى) أو بالإنجليزية أو الفرنسية أو بحروف لاتينية.",
+    "مهمتك: فهم طلبه بدقة واقتراح أعمال أنمي حقيقية تطابقه.",
+    "",
+    "القواعد:",
+    "- اقترح من 6 إلى 10 أعمال أنمي حقيقية موجودة فعلًا (مسلسلات أو أفلام). ممنوع اختراع عناوين.",
+    "- title: الاسم الرسمي كما على AniList أو MyAnimeList (روماجي أو إنجليزي)، بلا رقم موسم إلا إذا طُلب موسم بعينه.",
+    "- إن ذكر عملًا كمثال («زي هجوم العمالقة») فلا تضعه في النتائج إلا إذا طلبه هو نفسه.",
+    "- احترم كل القيود: الطول (قصير = 26 حلقة أو أقل، فيلم)، الحالة (مكتمل/مستمر)، التصنيف، الحقبة، المزاج، الجمهور، الدبلجة.",
+    "- إن كان الطلب اسم عمل محدد (حتى لو بتهجئة خاطئة أو بالعربية) فضعه أولًا ثم أعمالًا مشابهة.",
+    "- رتّب من الأنسب إلى الأقل، وفضّل الأعمال الأعلى تقييمًا عند التساوي.",
+    "- ممنوع تمامًا أي محتوى إباحي أو hentai أو ecchi صريح.",
+    "- reason: سبب واحد قصير بالعربية (حتى 14 كلمة) يوضح لماذا يطابق الطلب، بلا حرق.",
+    "- intent: إعادة صياغة قصيرة جدًا بالعربية لما فهمته (حتى 10 كلمات).",
+    `- تاريخ اليوم: ${today}.`,
+    "",
+    "أجب بـ JSON فقط، بلا أي نص قبله أو بعده:",
+    '{"intent":"...","results":[{"title":"...","reason":"..."}]}',
+    'إن لم يكن الطلب عن الأنمي أصلًا: {"intent":"","results":[]}',
+  ].join("\n");
+}
+
+async function handleSearch(ctx: AIContext, rawQuery: unknown, today: string): Promise<Response> {
+  const query = cleanText(rawQuery, 300);
+  if (query.length < 2) return err(400, "invalid_request");
+  const key = searchCacheKey(query);
+  if (!key) return err(400, "invalid_request");
+
+  try {
+    const { data: hit } = await ctx.db
+      .from("ai_search_cache")
+      .select("payload, created_at")
+      .eq("query_key", key)
+      .maybeSingle();
+    if (hit?.payload && Date.now() - Date.parse(hit.created_at) < SEARCH_TTL_MS) {
+      return json(200, { ok: true, cached: true, ...hit.payload });
+    }
+  } catch (e) {
+    console.error("search cache read failed", e);
+  }
+
+  if (isRateLimited(ctx.userId)) return err(429, "rate_limited");
+
+  const answer = await raceModels(ctx.aiBase, ctx.aiKeys, ctx.models, [
+    { role: "system", content: searchSystemPrompt(today) },
+    { role: "user", content: query },
+  ], { raw: true });
+  if (!answer) return err(502, "upstream");
+
+  const parsed = extractJson(answer);
+  const seen = new Set<string>();
+  const results: { title: string; reason: string }[] = [];
+  for (const r of Array.isArray(parsed?.results) ? parsed.results : []) {
+    const title = cleanText(r?.title, 120);
+    const k = title.toLowerCase();
+    if (title.length < 2 || seen.has(k)) continue;
+    seen.add(k);
+    results.push({ title, reason: cleanText(r?.reason, 160) });
+    if (results.length >= 10) break;
+  }
+  const payload = { intent: cleanText(parsed?.intent, 120), results };
+  if (results.length) {
+    const { error } = await ctx.db
+      .from("ai_search_cache")
+      .upsert({ query_key: key, payload, created_at: new Date().toISOString() });
+    if (error) console.error("search cache write failed", error.message);
+  }
+  return json(200, { ok: true, ...payload });
+}
+
+/* ── Mode: "bridge" — where the anime ends in its source manga ─────────
+   AniList pins the exact source work (title, format, chapter count) so the
+   model only has to answer "which chapters does THIS season adapt". The
+   result is stored in manga_bridge for every device; airing shows refresh
+   every few days because the adapted range grows weekly. Community votes
+   (manga_bridge_votes) can override the AI's chapter on the client. */
+const BRIDGE_AIRING_TTL_MS = 4 * 24 * 60 * 60 * 1000;
+
+const ANILIST_BRIDGE_QUERY = `query($s:String){Page(perPage:6){media(search:$s,type:ANIME,sort:SEARCH_MATCH){
+  id status episodes format seasonYear source(version:3)
+  nextAiringEpisode{episode}
+  title{romaji english}
+  relations{edges{relationType(version:2) node{id type format status chapters volumes title{romaji english native} synonyms}}}
+}}}`;
+
+type BridgeMedia = {
+  id: number;
+  status?: string | null;
+  episodes?: number | null;
+  format?: string | null;
+  seasonYear?: number | null;
+  source?: string | null;
+  nextAiringEpisode?: { episode?: number | null } | null;
+  title?: { romaji?: string | null; english?: string | null } | null;
+  relations?: {
+    edges?: Array<{
+      relationType?: string | null;
+      node?: {
+        id: number;
+        type?: string | null;
+        format?: string | null;
+        status?: string | null;
+        chapters?: number | null;
+        volumes?: number | null;
+        title?: { romaji?: string | null; english?: string | null; native?: string | null } | null;
+        synonyms?: string[] | null;
+      } | null;
+    }> | null;
+  } | null;
+};
+
+async function aniListBridgeLookup(titles: string[]): Promise<BridgeMedia | null> {
+  for (const s of titles) {
+    if (!s) continue;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch("https://graphql.anilist.co", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ query: ANILIST_BRIDGE_QUERY, variables: { s } }),
+        signal: ctrl.signal,
+      }).finally(() => clearTimeout(timer));
+      if (!res.ok) continue;
+      const j = await res.json();
+      const list: BridgeMedia[] = j?.data?.Page?.media ?? [];
+      // Skip music videos / specials that sometimes outrank the TV entry.
+      const pick = list.find((m) => m.format !== "MUSIC" && m.format !== "SPECIAL") ?? list[0];
+      if (pick) return pick;
+    } catch (e) {
+      console.error("anilist bridge lookup failed", e);
+    }
+  }
+  return null;
+}
+
+function bridgeSourceKind(source: string | null | undefined, nodeFormat: string | null | undefined): string {
+  const s = (source || "").toUpperCase();
+  if (s === "ORIGINAL") return "original";
+  if (s === "LIGHT_NOVEL" || (nodeFormat === "NOVEL" && s !== "MANGA" && s !== "WEB_MANGA")) return "light_novel";
+  if (s === "WEB_NOVEL" || s === "NOVEL") return "web_novel";
+  if (s === "MANGA" || s === "WEB_MANGA" || s === "DOUJINSHI" || nodeFormat === "MANGA" || nodeFormat === "ONE_SHOT") {
+    return "manga";
+  }
+  if (s === "VIDEO_GAME" || s === "VISUAL_NOVEL" || s === "GAME") return "game";
+  return s ? "other" : "manga";
+}
+
+async function handleBridge(
+  ctx: AIContext,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const animeKey = cleanText(body?.animeKey, 300);
+  const animeTitle = cleanText(body?.animeTitle, 200);
+  const altTitle = cleanText(body?.altTitle, 120);
+  const seasonNumber = cleanNum(body?.seasonNumber, 1, 50);
+  const totalEpisodes = cleanNum(body?.totalEpisodes, 1, 5000);
+  const force = body?.force === true;
+  if (!animeKey || !animeTitle) return err(400, "invalid_request");
+
+  try {
+    const { data: row } = await ctx.db
+      .from("manga_bridge")
+      .select("payload, updated_at")
+      .eq("anime_key", animeKey)
+      .maybeSingle();
+    const age = row ? Date.now() - Date.parse(row.updated_at) : Infinity;
+    const fresh = row?.payload && (!row.payload.airing || age < BRIDGE_AIRING_TTL_MS);
+    if (fresh && !force) return json(200, { ok: true, cached: true, payload: row.payload });
+    // A forced refresh (stale airing show) is still throttled per anime.
+    if (row?.payload && force && age < 6 * 60 * 60 * 1000) {
+      return json(200, { ok: true, cached: true, payload: row.payload });
+    }
+  } catch (e) {
+    console.error("bridge cache read failed", e);
+  }
+
+  if (isRateLimited(ctx.userId)) return err(429, "rate_limited");
+
+  const seasonHint = seasonNumber && seasonNumber > 1 ? [`${altTitle || animeTitle} Season ${seasonNumber}`] : [];
+  const media = await aniListBridgeLookup([...seasonHint, altTitle, animeTitle]);
+  const edges = media?.relations?.edges ?? [];
+  const sourceEdge =
+    edges.find((e) => e.relationType === "SOURCE" && e.node?.type === "MANGA") ??
+    edges.find((e) => e.relationType === "ADAPTATION" && e.node?.type === "MANGA" && e.node?.format !== "NOVEL");
+  const node = sourceEdge?.node ?? null;
+  const kind = bridgeSourceKind(media?.source, node?.format);
+  const airing = media?.status === "RELEASING";
+  const airedEpisodes = airing && media?.nextAiringEpisode?.episode
+    ? Math.max(0, media.nextAiringEpisode.episode - 1)
+    : media?.episodes ?? totalEpisodes ?? null;
+
+  const base = {
+    source: kind,
+    anilistAnimeId: media?.id ?? null,
+    anilistMangaId: node?.id ?? null,
+    mangaTitle: node?.title?.romaji || node?.title?.english || "",
+    mangaTitleEnglish: node?.title?.english || "",
+    mangaTitleNative: node?.title?.native || "",
+    mangaSynonyms: (node?.synonyms ?? []).filter((s) => typeof s === "string" && s.length <= 120).slice(0, 8),
+    mangaFormat: node?.format ?? null,
+    mangaChapters: node?.chapters ?? null,
+    mangaVolumes: node?.volumes ?? null,
+    mangaStatus: node?.status ?? null,
+    airing,
+  };
+
+  let payload: Record<string, unknown> = {
+    ...base,
+    startChapter: null,
+    endChapter: null,
+    endVolume: null,
+    confidence: "low",
+    note: "",
+  };
+
+  // Original / game adaptations have no chapter to continue from: store the
+  // fact (so nobody asks the AI again) without a model call.
+  if (kind !== "original" && kind !== "game") {
+    const animeName = media?.title?.romaji || altTitle || animeTitle;
+    const sourceName = base.mangaTitle || base.mangaTitleEnglish || animeName;
+    const isNovel = kind === "light_novel" || kind === "web_novel";
+    const prompt = [
+      `Anime entry: "${animeName}"${media?.title?.english ? ` (English: "${media.title.english}")` : ""}.`,
+      `Format: ${media?.format ?? "TV"}, year ${media?.seasonYear ?? "?"}, ${media?.episodes ?? totalEpisodes ?? "?"} episodes, status ${media?.status ?? "?"}.`,
+      seasonNumber ? `This is season/part ${seasonNumber} of its franchise.` : "",
+      airing ? `It is still airing; ${airedEpisodes ?? "?"} episodes have aired so far.` : "",
+      `Source material: "${sourceName}" (${isNovel ? "novel" : "manga"}${base.mangaChapters ? `, ${base.mangaChapters} chapters` : ""}${base.mangaVolumes ? `, ${base.mangaVolumes} volumes` : ""}${base.mangaStatus ? `, ${base.mangaStatus}` : ""}).`,
+      "",
+      `Question: which part of the source does THIS anime entry adapt (only this season/part, not the whole franchise)?${airing ? " For an airing show, answer for the episodes aired so far." : ""}`,
+      isNovel
+        ? "Give the first and last chapter of the MANGA adaptation if one exists (else null), and the last NOVEL volume adapted."
+        : "Give the first and last manga chapter adapted, and the last volume.",
+      "Use exact, well-known adaptation data. If you are not certain, set confidence to \"low\" — never guess wildly.",
+      'Reply with JSON only: {"startChapter": number|null, "endChapter": number|null, "endVolume": number|null, "confidence": "high"|"medium"|"low", "note": "one short Arabic sentence about where to continue reading, NO plot spoilers"}',
+    ].filter(Boolean).join("\n");
+
+    const answer = await raceModels(ctx.aiBase, ctx.aiKeys, ctx.models, [
+      { role: "system", content: "You are a precise anime/manga adaptation database. You answer only with JSON." },
+      { role: "user", content: prompt },
+    ], { raw: true });
+    if (!answer) return err(502, "upstream");
+    const parsed = extractJson(answer) ?? {};
+    let start = cleanNum(parsed.startChapter, 0, 9999);
+    let end = cleanNum(parsed.endChapter, 0.5, 9999);
+    const vol = cleanNum(parsed.endVolume, 0.5, 999);
+    let confidence = ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "low";
+    if (start != null && end != null && start > end) [start, end] = [end, start];
+    // A chapter beyond what the manga has published is impossible.
+    if (end != null && base.mangaChapters && end > base.mangaChapters + 3) confidence = "low";
+    if (end == null && vol == null) confidence = "low";
+    payload = {
+      ...base,
+      startChapter: start,
+      endChapter: end,
+      endVolume: vol,
+      confidence,
+      note: cleanText(parsed.note, 220),
+    };
+  } else {
+    payload.confidence = "high";
+  }
+
+  const { error } = await ctx.db.from("manga_bridge").upsert({
+    anime_key: animeKey,
+    anime_title: animeTitle,
+    payload,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) console.error("bridge cache write failed", error.message);
+  return json(200, { ok: true, payload });
+}
+
+/* ── Persistent recap cache ────────────────────────────────────────────
+   A recap is identical for every viewer of the same episode; persisting it
+   means each recap costs provider quota exactly once, across all isolates. */
+const RECAP_DB_TTL_MS = 45 * 24 * 60 * 60 * 1000;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
@@ -532,6 +869,22 @@ Deno.serve(async (req) => {
   } catch { /* no/empty body → invalid below */ }
 
   const mode = body?.mode;
+
+  // JSON modes: no episode context, no grounding.
+  if (mode === "search" || mode === "bridge") {
+    const userId = await userIdPromise;
+    if (!userId) return err(401, "unauthenticated");
+    const chainEnvJ = (Deno.env.get("AI_MODELS") || "").split(",");
+    const modelsJ = (chainEnvJ.some((m) => m.trim()) ? chainEnvJ : [aiModel, fallbackModel, fallbackModel2])
+      .map((m) => m.trim())
+      .filter((m, i, a) => m && a.indexOf(m) === i);
+    const ctx: AIContext = { aiBase, aiKeys, models: modelsJ, db: supabase, userId };
+    const raw = body as Record<string, unknown>;
+    return mode === "search"
+      ? await handleSearch(ctx, raw.query, new Date().toISOString().slice(0, 10))
+      : await handleBridge(ctx, raw);
+  }
+
   if (mode !== "chat" && mode !== "recap") return err(400, "invalid_request");
 
   const animeTitle = typeof body?.animeTitle === "string" ? body.animeTitle.trim() : "";
@@ -617,6 +970,23 @@ Deno.serve(async (req) => {
   const cached = cacheKey ? cacheGet(cacheKey) : null;
   if (cached) return json(200, { ok: true, answer: cached, spoilerBound });
 
+  // Recaps are shared across isolates (and days) through the database.
+  if (mode === "recap" && cacheKey) {
+    try {
+      const { data: hit } = await supabase
+        .from("ai_recap_cache")
+        .select("answer, created_at")
+        .eq("cache_key", cacheKey)
+        .maybeSingle();
+      if (hit?.answer && Date.now() - Date.parse(hit.created_at) < RECAP_DB_TTL_MS) {
+        cacheSet(cacheKey, hit.answer);
+        return json(200, { ok: true, answer: hit.answer, spoilerBound, cached: true });
+      }
+    } catch (e) {
+      console.error("recap cache read failed", e);
+    }
+  }
+
   // Rate-limit AFTER validation so malformed payloads can't lock a user out.
   if (isRateLimited(userId)) return err(429, "rate_limited");
 
@@ -661,6 +1031,12 @@ ${contextMessage}` },
   const answer = await raceModels(aiBase, aiKeys, models, messages);
   if (!answer) return err(502, "upstream");
   if (cacheKey) cacheSet(cacheKey, answer);
+  if (mode === "recap" && cacheKey) {
+    const { error } = await supabase
+      .from("ai_recap_cache")
+      .upsert({ cache_key: cacheKey, answer, created_at: new Date().toISOString() });
+    if (error) console.error("recap cache write failed", error.message);
+  }
 
   return json(200, { ok: true, answer, spoilerBound });
 });

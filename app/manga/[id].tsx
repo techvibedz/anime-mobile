@@ -40,6 +40,7 @@ import {
 } from "../../lib/manga/store";
 import { openMangaReader } from "../../lib/manga/nav";
 import { ChapterRow } from "../../components/ChapterRow";
+import { AnimeAdaptationRail } from "../../components/AnimeAdaptationRail";
 
 const COVER_WIDTH = 110;
 const BAR_HEIGHT = 76;
@@ -295,6 +296,11 @@ export default function MangaDetailScreen() {
             </Pressable>
           )}
         </View>
+      ) : null}
+
+      {/* Reverse bridge: this manga's anime adaptations */}
+      {detail ? (
+        <AnimeAdaptationRail titles={[detail.title, titleParam].filter((x, i, a) => !!x && a.indexOf(x) === i)} />
       ) : null}
 
       <View style={s.rule} />

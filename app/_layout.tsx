@@ -57,6 +57,7 @@ import { getNotificationsEnabled } from "../lib/settings";
 import { toAnimeUrl } from "../lib/favorites";
 import { syncDownloads } from "../lib/downloads";
 import { takePendingInvite } from "../lib/partyInvite";
+import { takePendingMoment } from "../lib/moments";
 import "../global.css";
 
 function AuthGate() {
@@ -77,8 +78,14 @@ function AuthGate() {
       // A watch-party invite that arrived while signed out was stashed by the
       // watch-party screen; after sign-in, head back into the party instead of
       // the home tabs.
-      void takePendingInvite().then((code) => {
-        router.replace(code ? { pathname: "/watch-party", params: { code } } : "/(tabs)");
+      void takePendingInvite().then(async (code) => {
+        if (code) {
+          router.replace({ pathname: "/watch-party", params: { code } });
+          return;
+        }
+        // A shared-moment link tapped while signed out resumes after sign-in.
+        const moment = await takePendingMoment();
+        router.replace(moment ? { pathname: "/moment/[id]", params: { id: moment } } : "/(tabs)");
       });
     }
   }, [user, ready, isConfigured, segments, router]);
@@ -387,6 +394,8 @@ function AuthGate() {
         <Stack.Screen name="report" />
         <Stack.Screen name="live" />
         <Stack.Screen name="watch-party" />
+        <Stack.Screen name="moment/[id]" options={{ animation: "none" }} />
+        <Stack.Screen name="wrapped" />
         <Stack.Screen name="users" />
         <Stack.Screen name="user/[id]" />
         <Stack.Screen name="admin/chats" />

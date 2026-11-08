@@ -376,6 +376,7 @@ function AuthGate() {
         <Stack.Screen name="seasons" />
         <Stack.Screen name="popular/[kind]" />
         <Stack.Screen name="downloads" />
+        <Stack.Screen name="smart-search" />
         <Stack.Screen name="title/[id]" />
         <Stack.Screen name="manga/[id]" />
         <Stack.Screen name="manga-library" />

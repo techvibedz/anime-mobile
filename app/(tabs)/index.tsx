@@ -41,7 +41,7 @@ import { PantoufaWordmark } from "../../components/PantoufaWordmark";
 import { Shimmer } from "../../components/Shimmer";
 import { AdBanner } from "../../components/AdBanner";
 import { MalCardBadge } from "../../components/MalRating";
-import { reconcileCompletionFromEpisodes, useCompletionLookup } from "../../lib/completion";
+import { reconcileCompletionFromEpisodes, useCompletionLookup, type AnimeCompletion } from "../../lib/completion";
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { PosterCard } from "../../components/PosterCard";
 import { StateView } from "../../components/StateView";
@@ -809,6 +809,34 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
   const [items, setItems] = useState<RankedRec[]>(() => forYouMem ?? []);
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  // Anime the user completed — by watching the finale OR with the detail
+  // page's ✓ "completed" mark (no watch history needed). They count as taste
+  // (seeds) and must never be suggested back.
+  const completion = useCompletionLookup();
+  const completedRecs = useMemo(() => {
+    const seen = new Set<string>();
+    const out: AnimeCompletion[] = [];
+    for (const rec of [...completion.byTitle.values(), ...completion.byHref.values()]) {
+      if (seen.has(rec.key) || !(rec.marked || rec.finished)) continue;
+      seen.add(rec.key);
+      out.push(rec);
+    }
+    return out;
+  }, [completion]);
+  const completedTitles = useMemo(() => {
+    const keys = new Set<string>();
+    const canons = new Set<string>();
+    for (const rec of completedRecs) {
+      for (const title of rec.titles) {
+        const k = animeTitleKey(title);
+        if (k) keys.add(k);
+        canons.add(canonTitle(title));
+      }
+    }
+    return { keys, canons };
+  }, [completedRecs]);
+  const completedTitlesRef = useRef(completedTitles);
+  completedTitlesRef.current = completedTitles;
   useEffect(() => {
     if (forYouMem) return;
     let alive = true;
@@ -832,8 +860,14 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
   }, [history]);
 
   const seeds = useMemo(
-    () => pickTasteSeeds((groups ?? []).map((g) => ({ animeTitle: g.animeTitle, animeHref: g.animeHref, watched: g.watched, updatedAt: g.updatedAt })), seedKeyOf, FOR_YOU_SEEDS),
-    [groups],
+    () => pickTasteSeeds([
+      ...(groups ?? []).map((g) => ({ animeTitle: g.animeTitle, animeHref: g.animeHref, watched: g.watched, updatedAt: g.updatedAt })),
+      // Hand-marked completions carry no history; weight them like a full season.
+      ...completedRecs.filter((r) => r.marked && r.titles[0]).map((r) => ({
+        animeTitle: r.titles[0], animeHref: r.hrefs[0] || "", watched: Math.max(12, r.lastEpNum || 0), updatedAt: r.updatedAt,
+      })),
+    ], seedKeyOf, FOR_YOU_SEEDS),
+    [groups, completedRecs],
   );
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
@@ -864,6 +898,8 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
       };
       for (const g of groupsRef.current ?? []) remember(g.animeTitle);
       for (const f of favorites) remember(f.title);
+      for (const k of completedTitlesRef.current.keys) keys.add(k);
+      for (const c of completedTitlesRef.current.canons) canons.add(c);
       const excluded = (item: RecItem) =>
         [item.title, item.titleEnglish].some((title) => {
           if (!title) return false;
@@ -901,7 +937,14 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
     return () => { alive = false; clearTimeout(timer); };
   }, [items]));
 
-  if (items.length === 0) return null;
+  // Filter at render too: a cached rail (or one computed before the ✓ mark)
+  // drops the anime the moment it is marked completed.
+  const visible = useMemo(() => items.filter((item) =>
+    ![item.title, item.titleEnglish].some((title) =>
+      !!title && (completedTitles.keys.has(animeTitleKey(title)) || completedTitles.canons.has(canonTitle(title))))),
+  [items, completedTitles]);
+
+  if (visible.length === 0) return null;
   return (
     <View style={ss.section}>
       <View style={ss.sectionHeader}>
@@ -918,7 +961,7 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
         initialNumToRender={3}
         maxToRenderPerBatch={3}
         windowSize={3}
-        data={items}
+        data={visible}
         keyExtractor={(item) => String(item.anilistId)}
         contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
         renderItem={({ item }) => (

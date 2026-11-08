@@ -28,7 +28,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { cancelAnimation, runOnJS, useAnimatedStyle, useSharedValue, withDecay, withTiming } from "react-native-reanimated";
 import * as ScreenOrientation from "expo-screen-orientation";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { M, MT, MANGA_FILL } from "../../lib/manga/design";
 import { t } from "../../lib/i18n";
@@ -44,7 +44,7 @@ import {
   setMangaChapterRead,
   useReadChapters,
 } from "../../lib/manga/store";
-import { replaceMangaReader } from "../../lib/manga/nav";
+import { openMangaDetail, replaceMangaReader } from "../../lib/manga/nav";
 import { ChapterRow } from "../../components/ChapterRow";
 import { MangaState } from "../../components/MangaUI";
 
@@ -458,6 +458,24 @@ export default function MangaReaderScreen() {
   const mangaTitle = typeof params.title === "string" ? params.title : "";
   const chapterNumber = typeof params.num === "string" ? params.num : "";
   const coverParam = typeof params.cover === "string" ? params.cover : "";
+
+  const navigation = useNavigation();
+  // Title tap → the manga's detail page. If the reader was opened FROM that
+  // detail page, pop back to it instead of stacking a second copy.
+  const openDetail = useCallback(() => {
+    if (!mangaId) return;
+    const detailId = `${source}:${mangaId}`;
+    try {
+      const state = navigation.getState();
+      const prev = state && state.index > 0 ? state.routes[state.index - 1] : null;
+      const prevId = (prev?.params as { id?: string } | undefined)?.id;
+      if (prev?.name === "manga/[id]" && prevId === detailId) {
+        router.back();
+        return;
+      }
+    } catch {}
+    openMangaDetail({ source, id: mangaId, title: mangaTitle, cover: coverParam || null });
+  }, [navigation, source, mangaId, mangaTitle, coverParam]);
 
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
@@ -1156,10 +1174,17 @@ export default function MangaReaderScreen() {
           >
             <Ionicons name="chevron-forward" size={20} color={M.white} />
           </Pressable>
-          <View style={s.topInfo}>
+          <Pressable
+            style={s.topInfo}
+            onPress={openDetail}
+            disabled={!mangaId}
+            accessibilityRole="link"
+            accessibilityLabel={mangaTitle}
+            hitSlop={6}
+          >
             <Text style={s.topTitle} numberOfLines={1}>{mangaTitle}</Text>
             <Text style={s.topSub} numberOfLines={1}>الفصل {chapterNumber}</Text>
-          </View>
+          </Pressable>
           <Pressable
             style={s.roundBtn}
             onPress={() => setSettingsOpen(true)}

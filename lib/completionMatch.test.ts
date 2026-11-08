@@ -2,7 +2,18 @@
 // shows no badge" path. Run:  npx tsx lib/completionMatch.test.ts
 
 import assert from "node:assert";
-import { matchingRecords, sameSource, isBlobRecord, buildCompletedList } from "./completionMatch";
+import { matchingRecords, sameSource, isBlobRecord, buildCompletedList, findContamination, strictMatchingRecords } from "./completionMatch";
+// history.ts pulls in react-native; mirror its two normalizers here.
+const normAnimeKey = (k: string) => {
+  if (!k) return "";
+  try {
+    const u = new URL(k);
+    const labels = u.hostname.replace(/^www\./, "").split(".");
+    const sld = labels.length >= 2 ? labels[labels.length - 2] : u.hostname;
+    return (sld + u.pathname).replace(/\/+$/, "").toLowerCase();
+  } catch { return k.trim().toLowerCase(); }
+};
+const animeTitleKey = (t: string | null | undefined) => (t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const rec = (name: string, hrefs: string[], titles: string[]) => ({ name, hrefs, titles });
 const names = (records: { name: string }[]) => records.map((r) => r.name);
@@ -70,6 +81,48 @@ assert.equal(isBlobRecord({
   const out = buildCompletedList(recs, posters, lower, lower);
   assert.deepEqual(out.map((e) => [e.title, e.image]), [["FRIEREN", "frieren.jpg"], ["Naruto", "naruto.jpg"]]);
   assert.deepEqual(buildCompletedList(recs, [], lower, lower).map((e) => e.image), [null, null], "no poster → null, never a crash");
+}
+
+
+// ── Real data 2026-11-08: One Piece links polluting other anime ──
+{
+  const r = (key: string, hrefs: string[], titles: string[], lastEpNum = 1180) =>
+    ({ key, hrefs, titles, lastEpNum, finished: true, updatedAt: 1 });
+  const op = r("witanime/anime/one-piece", ["https://witanime.you/anime/one-piece/", "https://w1.anime4up.rest/anime/one-piece-gfjgfh/"], ["One Piece"]);
+  const op4 = r("anime4up/anime/one-piece-gfjgfh", ["https://w1.anime4up.rest/anime/one-piece-gfjgfh/", "https://witanime.site/anime/one-piece"], ["One Piece"]);
+  const heroines = r("witanime/anime/one-piece-heroines", ["https://witanime.you/anime/one-piece-heroines/", "https://w1.anime4up.rest/anime/one-piece-gfjgfh/", "https://witanime.you/anime/one-piece/"], ["One Piece: Heroines", "One Piece"]);
+  const mushoku = r("witanime/anime/mushoku-tensei-iii-isekai-ittara-honki-dasu",
+    ["https://witanime.you/anime/mushoku-tensei-iii-isekai-ittara-honki-dasu/", "https://anime3rb.com/titles/mushoku-tensei-iii-isekai-ittara-honki-dasu", "https://witanime.you/anime/one-piece/", "https://w1.anime4up.rest/anime/one-piece-gfjgfh/"],
+    ["Mushoku Tensei III: Isekai Ittara Honki Dasu", "One Piece"]);
+  const all = [op, op4, heroines, mushoku];
+
+  const { cleaned } = findContamination(all, normAnimeKey, animeTitleKey);
+  assert.deepEqual([...cleaned.keys()].sort(), [heroines.key, mushoku.key].sort(), "only the polluted records are flagged");
+  assert.deepEqual(cleaned.get(mushoku.key)!.titles, ["Mushoku Tensei III: Isekai Ittara Honki Dasu"]);
+  assert.equal(cleaned.get(mushoku.key)!.hrefs.length, 2, "One Piece links stripped, own anime3rb link kept");
+  assert.deepEqual(cleaned.get(heroines.key)!.titles, ["One Piece: Heroines"]);
+
+  // A One Piece page write touches only real One Piece copies.
+  const hk = new Set(["witanime/anime/one-piece", "anime4up/anime/one-piece-gfjgfh"]);
+  const tk = new Set([animeTitleKey("One Piece")]);
+  assert.deepEqual(
+    strictMatchingRecords(all, "witanime/anime/one-piece", hk, tk, normAnimeKey, animeTitleKey).map((x) => x.key).sort(),
+    [op.key, op4.key].sort(),
+  );
+  // A season-3 page whose anime4up lookup resolved season 1 must not match the S1 record.
+  const s1 = r("anime4up/anime/mushoku-tensei-isekai-ittara-honki-dasu", ["https://w1.anime4up.rest/anime/mushoku-tensei-isekai-ittara-honki-dasu/"], ["Mushoku Tensei: Isekai Ittara Honki Dasu"], 23);
+  assert.deepEqual(
+    strictMatchingRecords([s1], "witanime/anime/mushoku-tensei-iii-isekai-ittara-honki-dasu",
+      new Set(["anime4up/anime/mushoku-tensei-isekai-ittara-honki-dasu"]), new Set([animeTitleKey("Mushoku Tensei III: Isekai Ittara Honki Dasu")]),
+      normAnimeKey, animeTitleKey),
+    [],
+  );
+
+  // Completed shelf: copies of one anime collapse to a single card.
+  const shelf = buildCompletedList([op, op4], [{ title: "One Piece", href: "https://witanime.you/anime/one-piece/", image: "op.jpg" }], normAnimeKey, animeTitleKey);
+  assert.equal(shelf.length, 1);
+  // Legit cross-source copies (same primary title) are NOT treated as pollution.
+  assert.equal(findContamination([op, op4], normAnimeKey, animeTitleKey).cleaned.size, 0);
 }
 
 console.log("completionMatch.test.ts — all assertions passed");

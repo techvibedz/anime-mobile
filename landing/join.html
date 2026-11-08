@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>دعوة مشاهدة مشتركة — بانتوفة</title>
   <meta name="robots" content="noindex" />
-  <meta name="theme-color" content="#0A0A0B" />
+  <meta name="theme-color" content="#08090C" />
   <link rel="icon" href="./assets/favicon.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -16,9 +16,9 @@
   <style>
     .join { position: relative; z-index: 2; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 40px 20px; text-align: center; }
     .join__logo { width: 76px; height: 76px; border-radius: 22px; box-shadow: 0 16px 40px rgba(0, 0, 0, .5); }
-    .join__kicker { font-family: Outfit, sans-serif; font-weight: 700; letter-spacing: 2px; color: #FF5A2C; font-size: 13px; text-transform: uppercase; }
+    .join__kicker { font-family: Outfit, sans-serif; font-weight: 700; letter-spacing: 2px; color: #8B93FF; font-size: 13px; text-transform: uppercase; }
     .join__title { font-family: Cairo, sans-serif; font-weight: 900; font-size: 30px; color: #F4F1EA; margin: 0; }
-    .join__code { font-family: Outfit, sans-serif; font-weight: 900; font-size: 44px; letter-spacing: 10px; color: #FF5A2C; background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .09); border-radius: 18px; padding: 14px 30px; }
+    .join__code { font-family: Outfit, sans-serif; font-weight: 900; font-size: 44px; letter-spacing: 10px; color: #8B93FF; background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .09); border-radius: 18px; padding: 14px 30px; }
     .join__hint { font-family: Cairo, sans-serif; color: rgba(244, 241, 234, .65); font-size: 15px; line-height: 1.9; max-width: 430px; margin: 0; }
     .join__err { font-family: Cairo, sans-serif; color: #FF6B6B; font-size: 16px; max-width: 430px; }
     .join .btn { min-width: 260px; justify-content: center; }
@@ -42,12 +42,12 @@
       <span>افتح في بانتوفة</span>
     </a>
     <p class="join__hint" id="downloadHint" style="display:none">التطبيق غير مثبّت؟ حمّله ثم افتح الرابط من جديد، أو أدخل الرمز يدويًا في شاشة «المشاهدة المشتركة».</p>
-    <a class="btn btn--ghost" href="https://github.com/techvibedz/anime-mobile/releases/latest">تحميل بانتوفة</a>
+    <a class="btn btn--ghost" href="/download">تحميل بانتوفة</a>
   </main>
 
   <script>
     (function () {
-      var FALLBACK = "https://github.com/techvibedz/anime-mobile/releases/latest";
+      var FALLBACK = location.origin + "/download";
       var code = (new URLSearchParams(location.search).get("code") || "").trim().toUpperCase();
       // Same unambiguous alphabet as the app (genCode in lib/watchPartySync.ts).
       var valid = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4,8}$/.test(code);

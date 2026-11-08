@@ -32,6 +32,9 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
       return rows.filter(rec => rec.hrefs.some(h => hrefs.includes(h)) || rec.titles.some(t => titles.includes(t)));
     },
     sameSource: () => true,
+    anchorKeys: (rec, n) => [...new Set([n(rec.key), n(rec.hrefs[0] || '')].filter(Boolean))],
+    primaryTitleKey: (rec, n) => n(rec.titles[0] || ''),
+    titleCompatible: (rec, keys, n) => keys.size === 0 || !rec.titles[0] || rec.titles.some(t => keys.has(n(t))),
     saveCompletionMap: async () => {}, pushToCloud: async () => {}, notify() {},
   };
   const completion = run(functions('lib/completion.tsx', ['uniq', 'reconcileCompletionFromEpisodes']), context);

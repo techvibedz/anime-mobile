@@ -5,7 +5,7 @@
 export const SUPABASE_URL = "https://iwrphgttbjqifstqttqm.supabase.co";
 export const SUPABASE_ANON =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml3cnBoZ3R0YmpxaWZzdHF0dHFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMTQ1NTgsImV4cCI6MjA5NDU5MDU1OH0.eKooQPiqXAdBvnjvVCWW837pFbXjVdQ_xywinm82EUE";
-export const FALLBACK = "https://github.com/techvibedz/anime-mobile/releases/latest";
+export const FALLBACK = "https://pantoufa-join.pages.dev/download";
 export const ID_RE = /^[A-Za-z0-9]{6,12}$/;
 
 export function esc(v) {

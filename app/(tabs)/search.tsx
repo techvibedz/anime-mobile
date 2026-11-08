@@ -32,8 +32,6 @@ import { useSidebarActions } from "../../components/Sidebar";
 import { C, S, R, TAr, ELEVATION_GLOW, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
-import { AiSearchPanel } from "../../components/AiSearchPanel";
-import { aiSearch, looksLikeNaturalQuery, type AiSearchEntry } from "../../lib/aiSearch";
 
 const PAD = S.paddingContent;
 const GAP = 10;
@@ -169,42 +167,12 @@ export default function SearchScreen() {
   // overwrite the results of a newer query the user already typed.
   const reqSeq = useRef(0);
 
-  // ── Smart (AI) search ──
-  // "idle" = nothing shown (or the suggestion row when the text reads like a
-  // description); the other states mirror AiSearchPanel.
-  const [aiState, setAiState] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const [aiItems, setAiItems] = useState<AiSearchEntry[]>([]);
-  const [aiIntent, setAiIntent] = useState("");
-  const [aiError, setAiError] = useState("");
-  const [aiDismissedFor, setAiDismissedFor] = useState("");
-  const aiSeq = useRef(0);
-  const runAiSearch = useCallback(async (text?: string) => {
-    const q = (text ?? query).trim();
-    if (q.length < 2) return;
-    const seq = ++aiSeq.current;
-    setAiState("loading");
-    setAiError("");
-    const res = await aiSearch(q);
-    if (seq !== aiSeq.current) return;
-    if (res.ok) {
-      setAiItems(res.items);
-      setAiIntent(res.intent);
-      setAiState("done");
-    } else {
-      setAiError(
-        res.reason === "signin" ? t.companionSignIn
-          : res.reason === "rate_limited" ? t.companionRateLimited
-          : res.reason === "unavailable" ? t.companionUnavailable
-          : res.reason === "empty" ? t.aiSearchEmpty
-          : t.companionError,
-      );
-      setAiState("error");
-    }
-  }, [query]);
-  const closeAi = useCallback(() => {
-    ++aiSeq.current;
-    setAiState("idle");
-    setAiDismissedFor(query.trim());
+  // Smart (AI) search lives on its own screen (app/smart-search.tsx), never
+  // mixed into the normal title search results.
+  const openSmartSearch = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = query.trim();
+    router.push(q.length >= 2 ? { pathname: "/smart-search", params: { q } } : "/smart-search");
   }, [query]);
 
   const loadBrowse = useCallback(async (page = 1) => {
@@ -357,10 +325,6 @@ export default function SearchScreen() {
   const onChangeText = useCallback((text: string) => {
     ++reqSeq.current;
     setQuery(text);
-    // A new text invalidates the previous smart results (a running smart
-    // search is dropped too — its answer would be for the old text).
-    ++aiSeq.current;
-    setAiState("idle");
     if (text.trim() === "") setActiveGenre("All");
     if (debounceRef.current) clearTimeout(debounceRef.current);
     // Each keystroke costs a full WebView scrape, so wait until the user
@@ -371,8 +335,6 @@ export default function SearchScreen() {
 
   const handleClear = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    ++aiSeq.current;
-    setAiState("idle");
     setQuery("");
     setActiveGenre("All");
     modeRef.current = "browse";
@@ -460,20 +422,6 @@ export default function SearchScreen() {
 
   const showingSearch = modeRef.current === "search" && query.trim().length > 0;
   const trimmedQuery = query.trim();
-  const aiPanel = aiState !== "idle" ? (
-    <AiSearchPanel
-      state={aiState}
-      query={trimmedQuery}
-      intent={aiIntent}
-      items={aiItems}
-      errorText={aiError}
-      onRun={() => runAiSearch()}
-      onClose={closeAi}
-    />
-  ) : looksLikeNaturalQuery(trimmedQuery) && aiDismissedFor !== trimmedQuery ? (
-    <AiSearchPanel state="suggest" query={trimmedQuery} onRun={() => runAiSearch()} onClose={closeAi} />
-  ) : null;
-
   return (
     <View style={[ss.root, { paddingTop: insets.top }]}>
       {/* ── Search console — one cohesive surface lifted over the grid ── */}
@@ -520,17 +468,16 @@ export default function SearchScreen() {
             accessibilityLabel={t.searchPlaceholder}
             selectionColor={C.accent}
           />
-          {query.trim().length >= 2 && (
-            <Pressable
-              onPress={() => { if (debounceRef.current) clearTimeout(debounceRef.current); runAiSearch(); }}
-              hitSlop={6}
-              style={[ss.aiBtn, aiState === "done" && { backgroundColor: C.accent }]}
-              accessibilityRole="button"
-              accessibilityLabel={t.aiSearchTitle}
-            >
-              <Ionicons name="sparkles" size={16} color={aiState === "done" ? C.textOnAccent : C.accent} />
-            </Pressable>
-          )}
+          <Pressable
+            onPress={openSmartSearch}
+            hitSlop={6}
+            style={ss.aiBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t.aiSearchTitle}
+          >
+            <Ionicons name="sparkles" size={14} color={C.accent} />
+            <Text style={ss.aiBtnText}>{t.smartSearchShort}</Text>
+          </Pressable>
           {query.length > 0 && (
             <Pressable onPress={handleClear} hitSlop={8} style={ss.clearBtn}>
               <Ionicons name="close-circle" size={18} color={C.textMuted} />
@@ -603,25 +550,21 @@ export default function SearchScreen() {
             />
           }
           ListHeaderComponent={showingSearch ? (
-            <View>
-              {aiPanel ? <View style={ss.aiInList}>{aiPanel}</View> : null}
-              <Text style={ss.resultsLabel}>{t.searchResultsFor(query.trim())}</Text>
-            </View>
-          ) : aiPanel ? <View style={ss.aiInList}>{aiPanel}</View> : null}
+            <Text style={ss.resultsLabel}>{t.searchResultsFor(query.trim())}</Text>
+          ) : null}
           ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ paddingVertical: 20 }} /> : null}
           renderItem={renderResult}
         />
       ) : (
         <View style={{ flex: 1 }}>
-          {aiPanel}
-          {aiState !== "done" && (
+          {(
             <StateView
               icon="search-outline"
               variant="empty"
               title={t.noResults}
               message={t.searchSub}
               primary={showingSearch && trimmedQuery.length >= 2
-                ? { label: t.aiSearchTry, onPress: () => runAiSearch(), icon: "sparkles-outline" }
+                ? { label: t.aiSearchTry, onPress: openSmartSearch, icon: "sparkles-outline" }
                 : showingSearch ? { label: t.browseAll, onPress: handleClear, icon: "grid-outline" } : undefined}
             />
           )}
@@ -677,10 +620,10 @@ const ss = StyleSheet.create({
   searchIconActive: { backgroundColor: C.accentGlow },
   clearBtn: { width: 40, height: 48, alignItems: "center", justifyContent: "center" },
   aiBtn: {
-    width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center",
-    backgroundColor: C.accentSoft,
+    direction: "ltr", flexDirection: "row", alignItems: "center", justifyContent: "center",
+    height: 34, paddingHorizontal: 10, borderRadius: 17, backgroundColor: C.accentSoft,
   },
-  aiInList: { marginHorizontal: -PAD, marginBottom: 12 },
+  aiBtnText: { color: C.accent, fontSize: 12, fontFamily: "Cairo_700Bold", marginLeft: 4, includeFontPadding: false },
   input: {
     flex: 1, color: C.text, fontSize: 15, height: 56, paddingHorizontal: 6,
     fontFamily: "Cairo_500Medium",

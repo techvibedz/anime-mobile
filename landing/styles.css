@@ -6,16 +6,16 @@
    ============================================================ */
 :root {
   /* Ink ramp — warm near-black, tonal steps (no glass-by-default) */
-  --ink: #0A0A0B;
+  --ink: #08090C;
   --ink-deep: #050506;
   --surface: #141416;
   --surface-2: #1C1C1F;
 
   /* Ember — the single warm spark (Play · active · primary CTA only) */
-  --ember: #FF5A2C;
-  --ember-deep: #D6431D;
-  --ember-soft: rgba(255, 90, 44, 0.12);
-  --ember-line: rgba(255, 90, 44, 0.24);
+  --ember: #8B93FF;
+  --ember-deep: #A5ABFF;
+  --ember-soft: rgba(139, 147, 255, 0.12);
+  --ember-line: rgba(139, 147, 255, 0.24);
 
   /* Semantic — one meaning each */
   --gold: #E8B84B;
@@ -62,7 +62,7 @@ body {
 a { color: inherit; text-decoration: none; }
 img { display: block; max-width: 100%; }
 h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter-spacing: -0.3px; }
-::selection { background: var(--ember); color: #fff; }
+::selection { background: var(--ember); color: #08090C; }
 
 /* Latin tokens (wordmark, numerals, version, index numerals) */
 .latin { font-family: var(--latin); font-feature-settings: "ss01"; }
@@ -73,8 +73,8 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
 .bg-grid {
   position: fixed; inset: 0; z-index: -4;
   background:
-    radial-gradient(120% 80% at 50% -20%, rgba(255, 90, 44, 0.10), transparent 60%),
-    radial-gradient(90% 60% at 85% 110%, rgba(255, 90, 44, 0.05), transparent 55%),
+    radial-gradient(120% 80% at 50% -20%, rgba(139, 147, 255, 0.10), transparent 60%),
+    radial-gradient(90% 60% at 85% 110%, rgba(139, 147, 255, 0.05), transparent 55%),
     var(--ink);
 }
 .bg-grid::after {
@@ -121,7 +121,7 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
 .nav__links a { color: var(--ash); transition: color .2s; font-size: .95rem; }
 .nav__links a:hover { color: var(--bone); }
 .nav__cta {
-  background: var(--ember); color: #fff !important; font-weight: 700;
+  background: var(--ember); color: #08090C !important; font-weight: 700;
   padding: 9px 20px; border-radius: var(--r-pill);
 }
 .nav__cta:hover { background: var(--ember-deep); }
@@ -135,7 +135,7 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
 .btn__icon { width: 20px; height: 20px; }
 .btn__meta { font-size: .72rem; font-weight: 600; color: rgba(255, 255, 255, 0.75); font-style: normal; }
 /* primary = the single ember action. ambient lift only, no colored halo */
-.btn--primary { color: #fff; background: var(--ember); box-shadow: var(--shadow-card); }
+.btn--primary { color: #08090C; background: var(--ember); box-shadow: var(--shadow-card); }
 .btn--primary:hover { transform: translateY(-2px); background: var(--ember-deep); }
 .btn--lg { padding: 18px 34px; font-size: 1.06rem; }
 /* ghost = hairline outline, bone label (no frosted glass) */
@@ -175,7 +175,7 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
 .hero__art { position: relative; perspective: 1200px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .hero__glow {
   position: absolute; inset: -6% -4% -10% -4%; z-index: 0; border-radius: 50%;
-  background: radial-gradient(circle at 50% 38%, rgba(255, 90, 44, 0.16), transparent 62%);
+  background: radial-gradient(circle at 50% 38%, rgba(139, 147, 255, 0.16), transparent 62%);
   filter: blur(48px);
 }
 .float-card {
@@ -250,7 +250,7 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
 }
 .download-banner::after {
   content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(60% 120% at 8% 0%, rgba(255, 90, 44, 0.10), transparent 60%);
+  background: radial-gradient(60% 120% at 8% 0%, rgba(139, 147, 255, 0.10), transparent 60%);
 }
 .download-banner > div { position: relative; }
 .download-banner h3 { font-size: clamp(1.4rem, 3vw, 2.1rem); color: var(--bone); }
@@ -294,8 +294,8 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
     hairlines instead of glow)
    ============================================================ */
 :root {
-  --app-bg: #0A0A0B; --app-surface: #141416; --app-2: #1C1C1F;
-  --app-ember: #FF5A2C; --app-bone: #F4F1EA; --app-ash: #A8A29A;
+  --app-bg: #08090C; --app-surface: #141416; --app-2: #1C1C1F;
+  --app-ember: #8B93FF; --app-bone: #F4F1EA; --app-ash: #A8A29A;
   --app-dim: #8C867D; --app-faint: #565049; --app-gold: #E8B84B;
   --app-line: rgba(244, 241, 234, 0.08); --app-line2: rgba(244, 241, 234, 0.12);
 }
@@ -346,7 +346,7 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
 .app-hero__desc { font-size: 9px; color: var(--app-ash); line-height: 1.6; max-width: 82%; }
 .app-hero__btns { display: flex; gap: 7px; margin-top: 4px; }
 .app-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: 10px; font-weight: 700; padding: 9px 14px; border-radius: var(--r-pill); flex: 1; }
-.app-btn--accent { color: #fff; background: var(--app-ember); }
+.app-btn--accent { color: #08090C; background: var(--app-ember); }
 .app-btn--ghost { color: var(--app-bone); background: transparent; border: 1px solid var(--app-line2); }
 .app-btn.wide { width: 100%; padding: 11px; font-size: 11px; flex: none; }
 .app-dots { position: absolute; bottom: 9px; inset-inline: 0; display: flex; justify-content: center; gap: 4px; }
@@ -389,7 +389,7 @@ h1, h2, h3 { font-family: var(--ar); font-weight: 800; line-height: 1.18; letter
 /* discover / my list */
 .app-disc__head { display: flex; align-items: center; gap: 9px; padding: 18px 14px 10px; }
 .app-disc__title { font-size: 19px; font-weight: 900; color: var(--app-bone); letter-spacing: -.4px; }
-.app-count { font-family: var(--latin); font-size: 9px; font-weight: 700; color: var(--app-ember); background: var(--app-ember-soft, rgba(255, 90, 44, 0.12)); border: 1px solid var(--ember-line); padding: 2px 9px; border-radius: var(--r-pill); }
+.app-count { font-family: var(--latin); font-size: 9px; font-weight: 700; color: var(--app-ember); background: var(--app-ember-soft, rgba(139, 147, 255, 0.12)); border: 1px solid var(--ember-line); padding: 2px 9px; border-radius: var(--r-pill); }
 .app-search { display: flex; align-items: center; gap: 8px; margin: 0 14px 12px; height: 38px; padding: 0 13px; border-radius: var(--r); font-size: 10px; color: var(--app-dim); background: var(--app-surface); border: 1px solid var(--app-line); }
 .app-search span { font-size: 13px; }
 .app-gchips { display: flex; gap: 7px; padding: 0 14px 12px; overflow: hidden; }

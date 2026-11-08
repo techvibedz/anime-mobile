@@ -6,9 +6,12 @@
 // version.json on every release, so the page stays in sync with zero redeploys.
 const VERSION_JSON_URL =
   'https://raw.githubusercontent.com/techvibedz/anime-mobile/master/version.json';
-// Fallback if raw is rate-limited / cached: latest GitHub release page.
-const RELEASES_FALLBACK =
-  'https://github.com/techvibedz/anime-mobile/releases/latest';
+// Direct-download endpoint (Pages Function) — streams the latest APK as a
+// file, never a GitHub page. Opened as a local file → use the hosted one.
+const DIRECT_DOWNLOAD = location.protocol.startsWith('http')
+  ? location.origin + '/download'
+  : 'https://pantoufa-join.pages.dev/download';
+const RELEASES_FALLBACK = DIRECT_DOWNLOAD;
 
 /* ---------- LIVE: pull latest version + APK url ---------- */
 async function loadLatestRelease() {
@@ -25,14 +28,7 @@ async function loadLatestRelease() {
     if (!res.ok) throw new Error('bad status ' + res.status);
     const data = await res.json();
 
-    const apkUrl = data.apk_url || RELEASES_FALLBACK;
     const version = data.version ? 'v' + data.version : '';
-
-    btns.forEach((b) => {
-      b.href = apkUrl;
-      // hint the browser to download the .apk rather than navigate
-      if (apkUrl.endsWith('.apk')) b.setAttribute('download', '');
-    });
 
     // version chip
     const chip = document.getElementById('versionChip');
@@ -136,7 +132,7 @@ addEventListener('resize', () => {
   // SUMI is hairlines, not glow: faint bone dust + a rare ember ember-spark.
   // Most motes are bone; ~1 in 7 carries a quiet ember to echo the accent.
   const BONE = 'rgba(244,241,234,0.9)';
-  const EMBER = '#FF5A2C';
+  const EMBER = '#8B93FF';
 
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);

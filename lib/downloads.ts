@@ -17,6 +17,8 @@ import * as FileSystem from "expo-file-system/legacy";
 import PantoufaDownloads from "pantoufa-downloads";
 import { resolveDownloadUrl } from "./api";
 import { mapNativeDownload, isMp4Header } from "./downloadStatus";
+import { NoRangeSupport, parallelDownload, parallelDownloadAvailable } from "./parallelDownload";
+import { concurrencyFor } from "./parallelDownloadPlan";
 
 export type DownloadStatus = "resolving" | "downloading" | "completed" | "failed";
 
@@ -60,7 +62,7 @@ const DIR = `${FileSystem.documentDirectory}downloads/`;
 
 let items: DownloadItem[] | null = null;
 const pending = new Set<string>();
-const active = new Map<string, ReturnType<typeof FileSystem.createDownloadResumable>>();
+const active = new Map<string, { cancelAsync(): Promise<unknown> }>();
 const operationVersions = new Map<string, number>();
 const listeners = new Set<() => void>();
 let lastEmit = 0;
@@ -334,7 +336,48 @@ export async function startDownload(meta: DownloadMeta): Promise<string> {
       await PantoufaDownloads.remove(existing.downloadId).catch(() => 0);
     }
 
-    if (resolved.provider === "vid3rb" && PantoufaDownloads) {
+    // Fast path: segmented multi-connection download. Hosts throttle each
+    // connection (vid3rb signs ~825 KB/s into the URL), so one stream is slow
+    // even on fast internet; parallel byte ranges multiply the speed.
+    let parallelDone = false;
+    if (parallelDownloadAvailable()) {
+      await ensureDir();
+      const fileUri = `${DIR}${id}.mp4`;
+      patch(id, { status: "downloading", fileUri, downloadId: undefined, server: meta.server });
+      await persist();
+      emit(true);
+      try {
+        const result = await parallelDownload({
+          url: resolved.url,
+          headers: resolved.headers,
+          dest: fileUri,
+          concurrency: concurrencyFor(resolved.provider),
+          onHandle: (h) => active.set(id, h),
+          onProgress: (written, total) => {
+            if (!isCurrent()) return;
+            patch(id, { bytes: written, totalBytes: total, progress: total > 0 ? written / total : 0 });
+            emit();
+          },
+        });
+        active.delete(id);
+        if (!isCurrent()) return id;
+        const valid = await isMp4File(result.uri);
+        patch(id, valid
+          ? { status: "completed", fileUri: result.uri, progress: 1, bytes: result.bytes, totalBytes: result.bytes }
+          : { status: "failed" });
+        if (!valid) await FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+        await persist();
+        emit(true);
+        parallelDone = true;
+      } catch (e) {
+        active.delete(id);
+        if (!(e instanceof NoRangeSupport)) throw e;
+        // Host ignores Range → fall through to the single-stream paths below.
+      }
+    }
+    if (parallelDone || !isCurrent()) {
+      // handled above
+    } else if (resolved.provider === "vid3rb" && PantoufaDownloads) {
       // Anime3rb is known to work reliably through Android DownloadManager and
       // keeps downloading in the background when the app is closed.
       const downloadId = await PantoufaDownloads.enqueue(

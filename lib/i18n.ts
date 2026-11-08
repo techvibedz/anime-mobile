@@ -811,7 +811,7 @@ export const ar = {
   bridgeSend: "إرسال",
   bridgeThanks: "شكرًا! تم تسجيل تصحيحك",
   bridgeInvalid: "اكتب رقم فصل صحيح",
-  bridgeSearching: "يبحث في مصادر المانجا…",
+  bridgeSearching: "جارٍ البحث…",
   bridgeNotFound: "لم نجد هذه المانجا في مصادرنا بعد",
   bridgeChapterMissing: (ch: number) => `الفصل ${ch} غير متوفر بعد — فتحنا صفحة المانجا`,
   adaptedAsAnime: "مقتبسة كأنمي — شاهدها",

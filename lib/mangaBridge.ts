@@ -135,6 +135,89 @@ export async function voteMangaBridge(key: string, endChapter: number): Promise<
   }
 }
 
+type MangaCard = import("./manga/types").MangaCard;
+
+const MATCH_PREFIX = "@manga_bridge_match_v1:";
+const MATCH_TTL = 14 * 24 * 60 * 60 * 1000;
+const SEARCH_BUDGET_MS = 9_000;
+const DETAIL_BUDGET_MS = 10_000;
+const matchMem = new Map<string, MangaCard | null>();
+const matchInflight = new Map<string, Promise<MangaCard | null>>();
+
+function matchKey(payload: BridgePayload, animeTitle: string): string {
+  return bridgeSearchTitles(payload, animeTitle).join("|").toLowerCase();
+}
+
+/**
+ * Resolve the bridged manga to a source card. Every title variant is searched
+ * IN PARALLEL (each source answers independently) and the lookup settles as
+ * soon as a near-exact title shows up, instead of waiting for the slowest
+ * source of every query in turn. Hits are cached on disk.
+ */
+function resolveBridgeManga(payload: BridgePayload, animeTitle: string): Promise<MangaCard | null> {
+  const key = matchKey(payload, animeTitle);
+  if (!key) return Promise.resolve(null);
+  if (matchMem.has(key)) return Promise.resolve(matchMem.get(key) ?? null);
+  const existing = matchInflight.get(key);
+  if (existing) return existing;
+  const p = (async (): Promise<MangaCard | null> => {
+    try {
+      const raw = await AsyncStorage.getItem(MATCH_PREFIX + key).catch(() => null);
+      if (raw) {
+        const c = JSON.parse(raw) as { at: number; card: MangaCard };
+        if (c?.card && Date.now() - c.at < MATCH_TTL) {
+          matchMem.set(key, c.card);
+          return c.card;
+        }
+      }
+      const { searchMergedManga, strictTitleScore } = await import("./manga/aggregate");
+      const titles = bridgeSearchTitles(payload, animeTitle);
+      let best: { card: MangaCard; score: number } | null = null;
+      const card = await new Promise<MangaCard | null>((resolve) => {
+        let pending = titles.length;
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(best?.card ?? null);
+        };
+        const timer = setTimeout(finish, SEARCH_BUDGET_MS);
+        const consider = (cards: MangaCard[]) => {
+          for (const c of cards) {
+            const score = Math.max(...titles.map((t) => strictTitleScore(t, c.title)));
+            if (score >= 0.86 && (!best || score > best.score)) best = { card: c, score };
+          }
+          if (best && best.score >= 0.98) finish();
+        };
+        if (!pending) finish();
+        for (const title of titles) {
+          searchMergedManga(title, undefined, consider)
+            .then(consider, () => {})
+            .finally(() => {
+              pending -= 1;
+              if (pending <= 0) finish();
+            });
+        }
+      });
+      matchMem.set(key, card);
+      if (card) AsyncStorage.setItem(MATCH_PREFIX + key, JSON.stringify({ at: Date.now(), card })).catch(() => {});
+      return card;
+    } catch {
+      return null;
+    } finally {
+      matchInflight.delete(key);
+    }
+  })();
+  matchInflight.set(key, p);
+  return p;
+}
+
+/** Warm the manga lookup in the background so the read button opens fast. */
+export function prefetchBridgeManga(payload: BridgePayload, animeTitle: string): void {
+  void resolveBridgeManga(payload, animeTitle);
+}
+
 /**
  * Find the bridged manga in the Arabic manga sources and open it at
  * `chapter` (reader), or its detail page when that chapter isn't uploaded.
@@ -144,40 +227,47 @@ export async function openBridgeChapter(
   animeTitle: string,
   chapter: number | null,
 ): Promise<"reader" | "detail" | "notfound"> {
-  const [{ searchMergedManga, strictTitleScore, fetchMergedDetail }, nav] = await Promise.all([
+  const [{ fetchMergedDetail }, nav, card] = await Promise.all([
     import("./manga/aggregate"),
     import("./manga/nav"),
+    resolveBridgeManga(payload, animeTitle),
   ]);
-  const titles = bridgeSearchTitles(payload, animeTitle);
-  let best: { card: import("./manga/types").MangaCard; score: number } | null = null;
-  for (const title of titles) {
-    let cards: import("./manga/types").MangaCard[] = [];
-    try {
-      cards = await searchMergedManga(title);
-    } catch {}
-    for (const card of cards) {
-      const score = Math.max(...titles.map((t) => strictTitleScore(t, card.title)));
-      if (score >= 0.86 && (!best || score > best.score)) best = { card, score };
-    }
-    if (best && best.score >= 0.98) break;
+  if (!card) {
+    matchMem.delete(matchKey(payload, animeTitle)); // allow a retry next tap
+    return "notfound";
   }
-  if (!best) return "notfound";
-  const card = best.card;
   if (chapter != null) {
-    try {
-      const detail = await fetchMergedDetail(card.source, card.id);
-      const ch = pickChapter(detail.chapters, chapter);
-      if (ch) {
-        nav.openMangaReader({
-          source: card.source,
-          mangaId: card.id,
-          mangaTitle: detail.title || card.title,
-          cover: detail.cover ?? card.cover,
-          chapter: { source: ch.source, mangaId: ch.mangaId, id: ch.id, number: ch.number },
-        });
-        return "reader";
-      }
-    } catch {}
+    type Merged = import("./manga/types").MergedMangaDetail;
+    type Hit = { ch: Merged["chapters"][number]; title: string; cover: string | null };
+    // Open as soon as ANY stage (anchor source first, then the cross-source
+    // merge) has the chapter — never wait for the full merge when the first
+    // source already carries it.
+    const hit = await new Promise<Hit | null>((resolve) => {
+      let done = false;
+      const finish = (h: Hit | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(h);
+      };
+      const timer = setTimeout(() => finish(null), DETAIL_BUDGET_MS);
+      const check = (detail: Merged) => {
+        const ch = pickChapter(detail.chapters, chapter);
+        if (ch) finish({ ch, title: detail.title || card.title, cover: detail.cover ?? card.cover ?? null });
+      };
+      fetchMergedDetail(card.source, card.id, { onUpdate: check })
+        .then((d) => { check(d); finish(null); }, () => finish(null));
+    });
+    if (hit) {
+      nav.openMangaReader({
+        source: card.source,
+        mangaId: card.id,
+        mangaTitle: hit.title,
+        cover: hit.cover,
+        chapter: { source: hit.ch.source, mangaId: hit.ch.mangaId, id: hit.ch.id, number: hit.ch.number },
+      });
+      return "reader";
+    }
   }
   nav.openMangaDetail({ source: card.source, id: card.id, title: card.title, cover: card.cover });
   return "detail";

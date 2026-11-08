@@ -5,13 +5,13 @@
 // the next chapter. Users can correct the chapter (one vote each); enough
 // agreeing votes override the AI's answer for everyone.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { C, R } from "../lib/theme";
 import { t } from "../lib/i18n";
-import { openBridgeChapter, voteMangaBridge, type BridgeInfo } from "../lib/mangaBridge";
+import { openBridgeChapter, prefetchBridgeManga, voteMangaBridge, type BridgeInfo } from "../lib/mangaBridge";
 
 export function MangaBridgeCard({
   info,
@@ -71,6 +71,15 @@ export function MangaBridgeCard({
   }, [value, info.key, onVoted]);
 
   const canRead = view.continueChapter != null && (!novel || payload.mangaTitle);
+  const willOpen = !!canRead || view.coversAll;
+
+  // Resolve the manga in the sources while the user reads the card, so the
+  // tap opens the reader almost instantly instead of searching from scratch.
+  useEffect(() => {
+    if (!willOpen) return;
+    const timer = setTimeout(() => prefetchBridgeManga(payload, animeTitle), 1200);
+    return () => clearTimeout(timer);
+  }, [willOpen, payload, animeTitle]);
 
   if (compact) {
     if (!canRead) return null;
@@ -81,7 +90,7 @@ export function MangaBridgeCard({
           <Text style={ss.compactSub} numberOfLines={1}>{t.bridgeContinueFrom(view.continueChapter!)}</Text>
           {msg ? <Text style={ss.msg} numberOfLines={2}>{msg}</Text> : null}
         </View>
-        <Pressable onPress={open} style={ss.readBtn} accessibilityRole="button">
+        <Pressable onPress={open} disabled={opening} style={ss.readBtn} accessibilityRole="button">
           {opening ? <ActivityIndicator size="small" color={C.textOnAccent} /> : <Ionicons name="book" size={14} color={C.textOnAccent} />}
           <Text style={ss.readBtnText}>{t.bridgeRead}</Text>
         </Pressable>
@@ -150,21 +159,21 @@ export function MangaBridgeCard({
       ) : (
         <View style={ss.actions}>
           {canRead && (
-            <Pressable onPress={open} style={({ pressed }) => [ss.readBtn, pressed && { opacity: 0.85 }]} accessibilityRole="button">
+            <Pressable onPress={open} disabled={opening} style={({ pressed }) => [ss.readBtn, ss.readBtnMain, pressed && { opacity: 0.85 }]} accessibilityRole="button">
               {opening ? <ActivityIndicator size="small" color={C.textOnAccent} /> : <Ionicons name="book" size={14} color={C.textOnAccent} />}
-              <Text style={ss.readBtnText}>{opening ? t.bridgeSearching : t.bridgeReadFrom(view.continueChapter!)}</Text>
+              <Text style={ss.readBtnText} numberOfLines={1}>{opening ? t.bridgeSearching : t.bridgeReadFrom(view.continueChapter!)}</Text>
             </Pressable>
           )}
           {view.coversAll && (
-            <Pressable onPress={open} style={({ pressed }) => [ss.readBtn, pressed && { opacity: 0.85 }]} accessibilityRole="button">
+            <Pressable onPress={open} disabled={opening} style={({ pressed }) => [ss.readBtn, ss.readBtnMain, pressed && { opacity: 0.85 }]} accessibilityRole="button">
               {opening ? <ActivityIndicator size="small" color={C.textOnAccent} /> : <Ionicons name="book" size={14} color={C.textOnAccent} />}
-              <Text style={ss.readBtnText}>{opening ? t.bridgeSearching : t.bridgeOpenManga}</Text>
+              <Text style={ss.readBtnText} numberOfLines={1}>{opening ? t.bridgeSearching : t.bridgeOpenManga}</Text>
             </Pressable>
           )}
           {!novel && (
             <Pressable onPress={() => { setEditing(true); setMsg(null); }} style={ss.fixBtn} accessibilityRole="button">
               <Ionicons name="create-outline" size={14} color={C.textSecondary} />
-              <Text style={ss.fixText}>{info.mine != null ? t.bridgeYourVote(info.mine) : t.bridgeFix}</Text>
+              <Text style={ss.fixText} numberOfLines={1}>{info.mine != null ? t.bridgeYourVote(info.mine) : t.bridgeFix}</Text>
             </Pressable>
           )}
         </View>
@@ -196,17 +205,18 @@ const ss = StyleSheet.create({
   tagWarn: { backgroundColor: "rgba(255,206,92,0.10)", borderColor: "rgba(255,206,92,0.30)" },
   tagText: { color: C.textSecondary, fontSize: 10, fontFamily: "Cairo_600SemiBold" },
   note: { color: C.textMuted, fontSize: 12, lineHeight: 19, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 8 },
-  actions: { direction: "ltr", flexDirection: "row-reverse", alignItems: "center", marginTop: 12 },
+  actions: { direction: "ltr", flexDirection: "row-reverse", flexWrap: "wrap", alignItems: "center", marginTop: 12 },
   readBtn: {
     direction: "ltr", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
     minHeight: 44, paddingHorizontal: 16, borderRadius: 12, backgroundColor: C.mint,
   },
-  readBtnText: { color: C.textOnAccent, fontSize: 13, fontFamily: "Cairo_700Bold", marginRight: 6 },
+  readBtnMain: { flexShrink: 1, maxWidth: "100%" },
+  readBtnText: { flexShrink: 1, color: C.textOnAccent, fontSize: 13, fontFamily: "Cairo_700Bold", marginRight: 6 },
   fixBtn: {
     direction: "ltr", flexDirection: "row-reverse", alignItems: "center",
-    minHeight: 44, paddingHorizontal: 12, marginRight: 8,
+    minHeight: 44, paddingHorizontal: 12, marginRight: 8, flexShrink: 1,
   },
-  fixText: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_600SemiBold", marginRight: 4 },
+  fixText: { flexShrink: 1, color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_600SemiBold", marginRight: 4 },
   editRow: { direction: "ltr", flexDirection: "row-reverse", alignItems: "center", marginTop: 12 },
   input: {
     flex: 1, minHeight: 44, borderRadius: 12, paddingHorizontal: 12,
@@ -218,7 +228,7 @@ const ss = StyleSheet.create({
     alignItems: "center", justifyContent: "center", backgroundColor: C.mint,
   },
   sendText: { color: C.bg, fontSize: 13, fontFamily: "Cairo_700Bold" },
-  msg: { color: C.textSecondary, fontSize: 12, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 8 },
+  msg: { color: C.textSecondary, fontSize: 12, lineHeight: 19, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 8 },
   compact: {
     direction: "ltr", flexDirection: "row-reverse", alignItems: "center",
     padding: 12, borderRadius: 14,

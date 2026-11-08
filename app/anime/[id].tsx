@@ -67,6 +67,10 @@ const Clipboard = require("react-native/Libraries/Components/Clipboard/Clipboard
 const BANNER_H = 380;
 const POSTER_W = 150;
 const PAD = S.paddingContent;
+// Episode grid geometry (windowed — see EpisodesTab).
+const EP_GAP = 10;
+const EP_TITLE_H = 30; // title marginTop 10 + one 20px line
+const EP_WIN_BLOCK = 4; // rows; the render window moves in blocks of this size
 
 type TabKey = "episodes" | "related" | "maylike" | "info";
 
@@ -126,12 +130,15 @@ export default function AnimeDetailScreen() {
   // Header scrim: animate only when crossing the threshold, never per frame.
   const headerScrim = useRef(new Animated.Value(0)).current;
   const scrimShown = useRef(false);
+  // Scroll position fan-out for the windowed episode grid (no re-render here).
+  const scrollBus = useMemo(() => makeScrollBus(), []);
   const onDetailScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollBus.emit(e.nativeEvent.contentOffset.y);
     const show = e.nativeEvent.contentOffset.y > 24; // the centred poster starts just under the buttons
     if (show === scrimShown.current) return;
     scrimShown.current = show;
     Animated.timing(headerScrim, { toValue: show ? 1 : 0, duration: 180, useNativeDriver: true }).start();
-  }, [headerScrim]);
+  }, [headerScrim, scrollBus]);
   const tabContentYRef = useRef(0);
   const scrollToEpisodeOffset = useCallback((offset: number) => {
     detailScrollRef.current?.scrollTo({
@@ -503,7 +510,7 @@ export default function AnimeDetailScreen() {
         ref={detailScrollRef}
         showsVerticalScrollIndicator={false}
         onScroll={onDetailScroll}
-        scrollEventThrottle={32}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -675,6 +682,8 @@ export default function AnimeDetailScreen() {
               animeHref={animeHref}
               animeTitle={data.title}
               onJumpToOffset={scrollToEpisodeOffset}
+              scrollBus={scrollBus}
+              tabTopRef={tabContentYRef}
             />
           )}
           {activeTab === "related" && <RelatedTab items={relations} loading={relationsLoading} />}
@@ -932,6 +941,17 @@ function trustedSources(
 
 /* ── Tab: Episodes ──────────────────────────── */
 
+type ScrollBus = { y: () => number; emit: (y: number) => void; subscribe: (fn: (y: number) => void) => () => void };
+function makeScrollBus(): ScrollBus {
+  let last = 0;
+  const subs = new Set<(y: number) => void>();
+  return {
+    y: () => last,
+    emit: (y) => { last = y; subs.forEach((fn) => fn(y)); },
+    subscribe: (fn) => { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+}
+
 function EpisodesTab({
   episodes,
   episodes4up,
@@ -943,6 +963,8 @@ function EpisodesTab({
   animeHref,
   animeTitle,
   onJumpToOffset,
+  scrollBus,
+  tabTopRef,
 }: {
   episodes: AnimeDetail["episodes"];
   episodes4up: Episode[];
@@ -954,6 +976,9 @@ function EpisodesTab({
   animeHref: string;
   animeTitle: string;
   onJumpToOffset: (offset: number) => void;
+  scrollBus: ScrollBus;
+  /** Y of the tab content inside the page ScrollView. */
+  tabTopRef: { current: number };
 }) {
   const [sortDesc, setSortDesc] = useState(true); // true = newest first
   // Filler/canon data (animefillerlist / MAL) + the canon-only preference.
@@ -977,8 +1002,6 @@ function EpisodesTab({
   const [jumpError, setJumpError] = useState(false);
   const [highlightedEpisode, setHighlightedEpisode] = useState<number | null>(null);
   const gridYRef = useRef(0);
-  const episodeOffsetsRef = useRef(new Map<number, number>());
-  const pendingJumpEpisodeRef = useRef<number | null>(null);
   // Live per-episode download state, keyed by the episode's primary href, so each
   // grid card can show idle / progress / done and trigger an offline save.
   const [downloads, setDownloads] = useState<Record<string, { status: DownloadStatus; progress: number }>>({});
@@ -1008,14 +1031,6 @@ function EpisodesTab({
     });
   }, [animeTitle, poster, animeHref]);
 
-  // Render in chunks so anime with 500+ episodes don't freeze the JS thread.
-  // FIRST is a cheap first paint that mounts the moment data lands — so building
-  // the grid never janks the screen-open transition or starves touch feedback
-  // while the user is mid-tap. Once interactions settle we expand to PAGE (the
-  // full first window); "show more" appends another PAGE each tap.
-  const FIRST = 12;
-  const PAGE = 80;
-  const [visibleCount, setVisibleCount] = useState(FIRST);
 
   // Union the episode lists across ALL THREE sources, keyed by episode number,
   // so the grid is as complete as the *most up-to-date* source — not just
@@ -1103,36 +1118,49 @@ function EpisodesTab({
     [completed, animeTitle],
   );
 
-  // Reset to the cheap first batch when the sort flips so the user sees the top
-  // of the NEW order instantly.
+  useEffect(() => { setHighlightedEpisode(null); }, [sortDesc]);
+
+  // ── Windowed grid ──
+  // The grid lives inside the page ScrollView, so it can't be a FlatList. It
+  // used to mount every card (or 80 per "show more" tap) — 1,000+ episodes
+  // meant tens of thousands of views and a choppy scroll. Rows are a fixed
+  // height, so we render only the rows near the viewport and stand in spacers
+  // for the rest; every episode stays reachable by scrolling, no "show more".
+  const { width: winW, height: winH } = useWindowDimensions();
+  const cardW = Math.floor((winW - PAD * 2 - EP_GAP) / 2);
+  const [rowH, setRowH] = useState(() => Math.round(cardW * 9 / 16) + 2 + EP_TITLE_H + EP_GAP);
+  const totalRows = Math.ceil(sorted.length / 2);
+  const [win, setWin] = useState<[number, number]>([0, Math.min(totalRows, EP_WIN_BLOCK * 2)]);
+  const computeWindow = useCallback((y: number) => {
+    const top = tabTopRef.current + gridYRef.current;
+    const first = Math.floor((y - top) / rowH);
+    const last = Math.ceil((y + winH - top) / rowH);
+    const start = Math.max(0, Math.floor((first - EP_WIN_BLOCK) / EP_WIN_BLOCK) * EP_WIN_BLOCK);
+    const end = Math.min(totalRows, Math.max(EP_WIN_BLOCK * 2, Math.ceil((last + EP_WIN_BLOCK) / EP_WIN_BLOCK) * EP_WIN_BLOCK));
+    setWin((cur) => (cur[0] === start && cur[1] === end ? cur : [start, end]));
+  }, [rowH, winH, totalRows]);
   useEffect(() => {
-    episodeOffsetsRef.current.clear();
-    pendingJumpEpisodeRef.current = null;
-    setHighlightedEpisode(null);
-    setVisibleCount(FIRST);
-  }, [sortDesc]);
+    computeWindow(scrollBus.y());
+    return scrollBus.subscribe(computeWindow);
+  }, [scrollBus, computeWindow]);
 
-  // NOTE: an earlier effect auto-expanded to PAGE (80 cards) after interactions.
-  // That mounted ~1,000 views inside a plain ScrollView on every detail open —
-  // the largest render cost on the screen — while the user only ever sees ~6
-  // cards. The grid now stays at FIRST until "show more" is tapped.
+  const [winStart, winEnd] = win;
+  const visibleRows = useMemo(() => {
+    const rows: GridEpisode[][] = [];
+    for (let r = winStart; r < winEnd; r++) {
+      const row = sorted.slice(r * 2, r * 2 + 2);
+      if (row.length) rows.push(row);
+    }
+    return rows;
+  }, [sorted, winStart, winEnd]);
+  const onMeasureCard = useCallback((h: number) => {
+    const next = Math.round(h) + EP_GAP;
+    setRowH((cur) => (Math.abs(cur - next) < 1 ? cur : next));
+  }, []);
 
-  const visible = sorted.slice(0, visibleCount);
-  const hasMore = visibleCount < sorted.length;
-
-  const scrollToEpisodeNumber = useCallback((episodeNumber: number) => {
-    const offset = episodeOffsetsRef.current.get(episodeNumber);
-    if (offset == null) return false;
-    onJumpToOffset(gridYRef.current + offset);
-    return true;
-  }, [onJumpToOffset]);
-
-  const handleEpisodeLayout = useCallback((episodeNumber: number, offset: number) => {
-    episodeOffsetsRef.current.set(episodeNumber, offset);
-    if (pendingJumpEpisodeRef.current !== episodeNumber) return;
-    pendingJumpEpisodeRef.current = null;
-    requestAnimationFrame(() => scrollToEpisodeNumber(episodeNumber));
-  }, [scrollToEpisodeNumber]);
+  const scrollToEpisodeIndex = useCallback((index: number) => {
+    onJumpToOffset(gridYRef.current + Math.floor(index / 2) * rowH);
+  }, [onJumpToOffset, rowH]);
 
   const jumpToEpisode = useCallback(() => {
     const normalized = episodeQuery
@@ -1151,12 +1179,8 @@ function EpisodesTab({
     Keyboard.dismiss();
     setJumpError(false);
     setHighlightedEpisode(wanted);
-    if (index < visibleCount && scrollToEpisodeNumber(wanted)) {
-      return;
-    }
-    pendingJumpEpisodeRef.current = wanted;
-    startTransition(() => setVisibleCount((count) => Math.max(count, Math.min(sorted.length, index + PAGE))));
-  }, [episodeQuery, sorted, visibleCount, scrollToEpisodeNumber]);
+    scrollToEpisodeIndex(index);
+  }, [episodeQuery, sorted, scrollToEpisodeIndex]);
 
   if (mergedEps.length === 0) {
     return (
@@ -1244,10 +1268,14 @@ function EpisodesTab({
 
       {/* Episode grid: 2 columns for thumbnail cards */}
       <View
-        style={ss.epGrid}
-        onLayout={(event) => { gridYRef.current = event.nativeEvent.layout.y; }}
+        style={{ height: Math.max(0, totalRows * rowH - EP_GAP) }}
+        onLayout={(event) => { gridYRef.current = event.nativeEvent.layout.y; computeWindow(scrollBus.y()); }}
       >
-        {visible.map((ep, i) => {
+       <View style={{ height: winStart * rowH }} />
+       {visibleRows.map((row, ri) => (
+        <View key={`r${winStart + ri}`} style={ss.epRow}>
+        {row.map((ep, ci) => {
+          const i = ri * 2 + ci;
           const primary = ep.href || ep.href4up || ep.href3rb || "";
           // Cheap per-card check: href set membership (any source) OR the
           // precomputed cross-source episode-number set. No NFKD per card.
@@ -1258,12 +1286,13 @@ function EpisodesTab({
             (ep.number != null && !!watchedNumbers?.has(ep.number));
           return (
             <EpisodeGridCard
-              key={`${ep.number}-${i}`}
+              key={ep.number != null ? `n${ep.number}` : `i${winStart * 2 + i}`}
               ep={ep}
+              width={cardW}
               kind={filler?.kinds[ep.number ?? -1]}
               watched={watched}
               highlighted={ep.number === highlightedEpisode}
-              onLayout={handleEpisodeLayout}
+              onMeasure={i === 0 ? onMeasureCard : undefined}
               isLast={mergedEps.length > 1 && ep.number === lastEpNum}
               poster={poster}
               animeHref={animeHref}
@@ -1275,27 +1304,9 @@ function EpisodesTab({
             />
           );
         })}
+        </View>
+       ))}
       </View>
-      {hasMore && (
-        <Pressable
-          onPress={() => startTransition(() => setVisibleCount((n) => n + PAGE))}
-          style={{
-            marginTop: 12,
-            paddingVertical: 14,
-            borderRadius: R.lg,
-            backgroundColor: C.surfaceLight,
-            alignItems: "center",
-            justifyContent: "center",
-            flexDirection: "row",
-            gap: 6,
-          }}
-        >
-          <Ionicons name="chevron-down" size={16} color={C.text} />
-          <Text style={{ color: C.text, fontWeight: "600", fontSize: 13 }}>
-            {t.showMore(sorted.length - visibleCount)}
-          </Text>
-        </Pressable>
-      )}
       <DownloadPicker visible={!!dlPicker} meta={dlPicker} onClose={() => setDlPicker(null)} />
     </>
   );
@@ -1309,9 +1320,10 @@ type GridEpisode = Episode & { href4up: string | null; href3rb: string | null };
 
 const EpisodeGridCard = memo(function EpisodeGridCard({
   ep,
+  width,
   watched,
   highlighted,
-  onLayout,
+  onMeasure,
   isLast,
   poster,
   animeHref,
@@ -1325,7 +1337,9 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
   ep: GridEpisode;
   watched: boolean;
   highlighted: boolean;
-  onLayout: (episodeNumber: number, offset: number) => void;
+  width: number;
+  /** Set on one card per window so the parent can learn the real row height. */
+  onMeasure?: (height: number) => void;
   isLast: boolean;
   poster: string;
   animeHref: string;
@@ -1337,7 +1351,6 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
   /** Filler/canon classification (undefined = canon / unknown). */
   kind?: EpKind;
 }) {
-  const { width } = useWindowDimensions();
   const dlDone = dl?.status === "completed";
   const dlBusy = dl?.status === "downloading" || dl?.status === "resolving";
   const dlPct = Math.round((dl?.progress ?? 0) * 100);
@@ -1378,19 +1391,19 @@ const EpisodeGridCard = memo(function EpisodeGridCard({
       }}
       onLongPress={() => onToggleWatched(ep)}
       delayLongPress={300}
-      onLayout={(event) => onLayout(ep.number, event.nativeEvent.layout.y)}
+      onLayout={onMeasure ? (event) => onMeasure(event.nativeEvent.layout.height) : undefined}
       style={({ pressed }) => [
         ss.epCard,
-        { width: (width - PAD * 2 - 10) / 2 },
+        { width },
         highlighted && ss.epCardHighlighted,
         pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
       ]}
     >
       <View style={[ss.epCardThumb, watched && ss.epCardThumbWatched]}>
         {ep.screenshot ? (
-          <Image source={{ uri: posterUrl(ep.screenshot, (width - PAD * 2 - 10) / 2) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+          <Image source={{ uri: posterUrl(ep.screenshot, width) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={ep.screenshot} transition={120} />
         ) : poster ? (
-          <Image source={{ uri: posterUrl(poster, (width - PAD * 2 - 10) / 2) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" transition={200} />
+          <Image source={{ uri: posterUrl(poster, width) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={poster} transition={120} />
         ) : null}
         {watched && <View style={ss.watchedDim} />}
         <LinearGradient
@@ -1863,7 +1876,9 @@ const ss = StyleSheet.create({
   },
 
   // Episodes — grid (2 columns)
-  epGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 10 },
+  // Explicit 2-card rows (not wrap + gap: RN 0.81 Yoga mis-lays gap with
+  // row-reverse). direction ltr keeps Arabic-locale devices from re-flipping.
+  epRow: { direction: "ltr", flexDirection: "row-reverse", justifyContent: "space-between", marginBottom: EP_GAP },
   epCard: { borderRadius: R.lg },
   epCardHighlighted: {
     backgroundColor: C.accentSoft, shadowColor: C.accent,

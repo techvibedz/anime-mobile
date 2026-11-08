@@ -185,23 +185,16 @@ function openHeroItem(item: FeaturedItem, details: boolean) {
 const HeroSlide = memo(function HeroSlide({ item, width, height, active, reduced }: {
   item: FeaturedItem; width: number; height: number; active: boolean; reduced: boolean;
 }) {
-  // Slow "Ken Burns" push-in on the visible slide only; native driver, one value.
-  const scale = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    scale.setValue(1);
-    if (!active || reduced) return;
-    const anim = Animated.timing(scale, { toValue: 1.08, duration: 7000, easing: Easing.out(Easing.quad), useNativeDriver: true, isInteraction: false });
-    anim.start();
-    return () => anim.stop();
-  }, [active, reduced, scale]);
+  // No "Ken Burns" zoom: the slow scale ran every frame (a new 7s push-in each
+  // 6s page), so the full-bleed art + two big scrims were re-composited on
+  // every frame the user scrolled from the top of the feed — the main source
+  // of dropped frames on mid/low-end phones. A static plate scrolls cleanly.
   // Episode-only slides have no separate details page target besides the anime.
   const canDetail = !isEpisodeUrl(item.href) || !!toAnimeUrl(item.href);
   return (
     <View style={[ss.heroSlide, { width, height }]}>
       {item.image ? (
-        <Animated.View style={[ABSOLUTE_FILL, { transform: [{ scale }] }]}>
-          <Image source={{ uri: posterUrl(item.image, width * 1.5, 1200) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={250} />
-        </Animated.View>
+        <Image source={{ uri: posterUrl(item.image, width * 1.5, 1200) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={250} />
       ) : null}
       {/* Top scrim keeps the status bar + floating top bar legible over bright art. */}
       <LinearGradient colors={["rgba(8,9,12,0.78)", "rgba(8,9,12,0)"]} style={ss.heroTopScrim} />
@@ -563,54 +556,9 @@ export default function HomeScreen() {
         {/* ── Sections ─────────────────────── */}
         <ForYouRail history={history} width={CARD_W} />
 
-        {visibleSections.map((section, si) => {
-          // The new-episodes rail always shows the newest 10 (fuller list
-          // behind the See all button); anime rails keep the wider preview.
-          const MAX_PREVIEW = section.type === "episode" ? 10 : 15;
-          const previewItems = section.items.slice(0, MAX_PREVIEW);
-          const hasMore = section.items.length > MAX_PREVIEW;
-          const openAll = () => {
-            const localized = SECTION_LABELS[section.id] || section.title;
-            router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(localized)}&type=${section.type}`);
-          };
-          return (
-            <Rise key={section.id} style={ss.section} delay={Math.min(si, 6) * 70}>
-              <View style={ss.sectionHeader}>
-                <View style={ss.sectionTitleRow}>
-                  <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
-                  <View style={ss.sectionTick} />
-                </View>
-                <Pressable style={({ pressed }) => [ss.seeAllBtn, pressed && ss.pressedSoft]} onPress={openAll} accessibilityRole="button" hitSlop={6}>
-                  <Ionicons name="chevron-back" size={13} color={C.accent} />
-                  <Text style={ss.seeAllText}>{t.seeAllShort}</Text>
-                </Pressable>
-              </View>
-              <FlatList<AnimeItem | EpisodeItem>
-                horizontal
-                inverted
-                showsHorizontalScrollIndicator={false}
-                initialNumToRender={3}
-                maxToRenderPerBatch={3}
-                windowSize={3}
-                data={previewItems}
-                keyExtractor={(item, i) => item.href || String(i)}
-                contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
-                renderItem={({ item, index }) => section.type === "anime"
-                  // Rank numerals only mean something on the "most watched" rails.
-                  ? <AnimeCardView item={item as AnimeItem} rank={section.id.startsWith("top_") ? index + 1 : undefined} />
-                  : <EpisodeCardView item={item as EpisodeItem} onPress={openEpisodePopup} />}
-                ListFooterComponent={hasMore ? (
-                  <Pressable style={ss.seeAllCard} onPress={openAll}>
-                    <View style={ss.seeAllCircle}>
-                      <Ionicons name="arrow-back" size={20} color={C.accent} />
-                    </View>
-                    <Text style={ss.seeAllCardText}>{t.seeAllShort}</Text>
-                  </Pressable>
-                ) : null}
-              />
-            </Rise>
-          );
-        })}
+        {visibleSections.map((section, si) => (
+          <HomeRail key={section.id} section={section} index={si} onEpisodePress={openEpisodePopup} />
+        ))}
 
         {/* Banner ad at the end of the feed (no-op until configured) */}
         <AdBanner style={{ marginTop: S.xxl }} />
@@ -749,6 +697,67 @@ function EpisodeActionSheet({ episode, onClose, onWatch, watchLabel }: {
     </Modal>
   );
 }
+
+/* ── Home rail (memoized) ──
+   Isolated so home-level state (unread badge, history refresh on focus, the
+   episode sheet, the 5-min poll) doesn't re-render every poster in every rail. */
+const HomeRail = memo(function HomeRail({ section, index: si, onEpisodePress }: {
+  section: HomeSection;
+  index: number;
+  onEpisodePress: (item: EpisodeItem) => void;
+}) {
+  const isTop = section.id.startsWith("top_");
+  const renderItem = useCallback(({ item, index }: { item: AnimeItem | EpisodeItem; index: number }) => (
+    section.type === "anime"
+      // Rank numerals only mean something on the "most watched" rails.
+      ? <AnimeCardView item={item as AnimeItem} rank={isTop ? index + 1 : undefined} />
+      : <EpisodeCardView item={item as EpisodeItem} onPress={onEpisodePress} />
+  ), [section.type, isTop, onEpisodePress]);
+  // The new-episodes rail always shows the newest 10 (fuller list
+  // behind the See all button); anime rails keep the wider preview.
+  const MAX_PREVIEW = section.type === "episode" ? 10 : 15;
+  const previewItems = useMemo(() => section.items.slice(0, MAX_PREVIEW), [section.items, MAX_PREVIEW]);
+  const hasMore = section.items.length > MAX_PREVIEW;
+  const openAll = () => {
+    const localized = SECTION_LABELS[section.id] || section.title;
+    router.push(`/see-all/${encodeURIComponent(section.id)}?title=${encodeURIComponent(localized)}&type=${section.type}`);
+  };
+  return (
+    <Rise key={section.id} style={ss.section} delay={Math.min(si, 6) * 70}>
+      <View style={ss.sectionHeader}>
+        <View style={ss.sectionTitleRow}>
+          <Text style={ss.sectionTitle}>{SECTION_LABELS[section.id] || section.title}</Text>
+          <View style={ss.sectionTick} />
+        </View>
+        <Pressable style={({ pressed }) => [ss.seeAllBtn, pressed && ss.pressedSoft]} onPress={openAll} accessibilityRole="button" hitSlop={6}>
+          <Ionicons name="chevron-back" size={13} color={C.accent} />
+          <Text style={ss.seeAllText}>{t.seeAllShort}</Text>
+        </Pressable>
+      </View>
+      <FlatList<AnimeItem | EpisodeItem>
+        horizontal
+        inverted
+        showsHorizontalScrollIndicator={false}
+        initialNumToRender={4}
+        maxToRenderPerBatch={4}
+        windowSize={5}
+        removeClippedSubviews
+        data={previewItems}
+        keyExtractor={(item, i) => item.href || String(i)}
+        contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
+        renderItem={renderItem}
+        ListFooterComponent={hasMore ? (
+          <Pressable style={ss.seeAllCard} onPress={openAll}>
+            <View style={ss.seeAllCircle}>
+              <Ionicons name="arrow-back" size={20} color={C.accent} />
+            </View>
+            <Text style={ss.seeAllCardText}>{t.seeAllShort}</Text>
+          </Pressable>
+        ) : null}
+      />
+    </Rise>
+  );
+});
 
 /* ── Anime Card (cinematic) ──────────────────── */
 

@@ -16,7 +16,7 @@ import { t } from "../lib/i18n";
 
 export default function WrappedScreen() {
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
+  const { width } = useWindowDimensions();
   const { user } = useAuth();
   const name = profileName(user, "");
   const [stats, setStats] = useState<WrappedStats | null>(null);
@@ -66,8 +66,9 @@ export default function WrappedScreen() {
     if (!ok) await shareLink();
   }, [stats, busy, shareLink]);
 
-  // Fit the 9:16 card on screen with room for the buttons.
-  const cardW = Math.min(width - 32, Math.round((height - insets.top - insets.bottom - 190) * 9 / 16), 420);
+  // Full-width card: it grows with its content and the screen scrolls, so
+  // long names/titles never get clipped.
+  const cardW = Math.min(width - 32, 420);
 
   return (
     <View style={[ss.root, { paddingTop: insets.top }]}>

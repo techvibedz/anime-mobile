@@ -1,4 +1,5 @@
 // AniList title detail — used for Upcoming anime (and their relations), which
+import { noteScrollActivity } from "../../lib/scrollIdle";
 // aren't on our sources yet, so everything here comes from AniList: banner,
 // synopsis, trailer, studios, air date, genres and the relation graph. Tapping
 // "ابحث في مصادرنا" jumps to Discover pre-searched (useful once it airs), and a
@@ -133,7 +134,7 @@ export default function TitleDetailScreen() {
 
   return (
     <View style={ss.root}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}>
+      <ScrollView onScroll={noteScrollActivity} scrollEventThrottle={32} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}>
         {/* Banner */}
         <View style={ss.banner}>
           {banner ? (

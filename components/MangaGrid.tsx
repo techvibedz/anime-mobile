@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { FlatList, View } from "react-native";
+import { noteScrollActivity } from "../lib/scrollIdle";
 import type { MangaCard } from "../lib/manga/types";
 import type { useCardLayout } from "../lib/cardLayout";
 import { upgradeMangaCover } from "../lib/manga/cover";
@@ -16,7 +17,7 @@ export function MangaGrid({ cards, metrics, bottomInset, footer, empty, corner, 
   subtitle?: (card: MangaCard) => string | undefined;
 }) {
   return (
-    <FlatList
+    <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
       key={`${metrics.layout}:${metrics.columns}`}
       data={cards}
       numColumns={metrics.columns}

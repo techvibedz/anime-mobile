@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, memo, startTransition } from "react";
+import { noteScrollActivity } from "../../lib/scrollIdle";
 import {
   View,
   Text,
@@ -523,7 +524,7 @@ export default function SearchScreen() {
       {loading ? (
         <SkeletonGrid width={cards.cardWidth} layout={cards.layout} />
       ) : items.length > 0 ? (
-        <FlatList
+        <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
           style={stale && searching ? { opacity: 0.45 } : undefined}
           key={`${cards.layout}-${cards.columns}`}
           data={items}

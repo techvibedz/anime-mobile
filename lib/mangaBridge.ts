@@ -18,6 +18,7 @@ import {
   type BridgeView,
   type BridgeVote,
 } from "./mangaBridgeCore";
+import { BRIDGE_MATCH_EXACT, bridgeNames, bridgeQueryPlan, rankBridgeCards } from "./mangaBridgeMatch";
 
 export * from "./mangaBridgeCore";
 
@@ -137,74 +138,154 @@ export async function voteMangaBridge(key: string, endChapter: number): Promise<
 
 type MangaCard = import("./manga/types").MangaCard;
 
-const MATCH_PREFIX = "@manga_bridge_match_v1:";
+const MATCH_PREFIX = "@manga_bridge_match_v2:";
 const MATCH_TTL = 14 * 24 * 60 * 60 * 1000;
-const SEARCH_BUDGET_MS = 9_000;
+/** Whole lookup budget; wave 2 starts early if wave 1 is slow or empty. */
+const SEARCH_BUDGET_MS = 14_000;
+const WAVE2_AFTER_MS = 4_500;
 const DETAIL_BUDGET_MS = 10_000;
-const matchMem = new Map<string, MangaCard | null>();
-const matchInflight = new Map<string, Promise<MangaCard | null>>();
+const ANILIST_BUDGET_MS = 5_000;
+const matchMem = new Map<string, MangaCard[]>();
+const matchInflight = new Map<string, Promise<MangaCard[]>>();
 
 function matchKey(payload: BridgePayload, animeTitle: string): string {
-  return bridgeSearchTitles(payload, animeTitle).join("|").toLowerCase();
+  return [payload.anilistMangaId ?? "", ...bridgeSearchTitles(payload, animeTitle)].join("|").toLowerCase();
 }
 
 /**
- * Resolve the bridged manga to a source card. Every title variant is searched
- * IN PARALLEL (each source answers independently) and the lookup settles as
- * soon as a near-exact title shows up, instead of waiting for the slowest
- * source of every query in turn. Hits are cached on disk.
+ * Extra names for the work from AniList: the manga entry itself when the
+ * payload knows its id, else the anime's SOURCE relation. Covers payloads the
+ * AI left without titles and adds the official synonyms sources title by.
  */
-function resolveBridgeManga(payload: BridgePayload, animeTitle: string): Promise<MangaCard | null> {
+async function anilistNames(payload: BridgePayload, animeTitle: string): Promise<string[]> {
+  const fields = "title { romaji english } synonyms";
+  const relation = `relations { edges { relationType node { type ${fields} } } }`;
+  const body = payload.anilistMangaId
+    ? { query: `query($id:Int){ Media(id:$id, type:MANGA){ ${fields} } }`, variables: { id: payload.anilistMangaId } }
+    : payload.anilistAnimeId
+      ? { query: `query($id:Int){ Media(id:$id, type:ANIME){ ${relation} } }`, variables: { id: payload.anilistAnimeId } }
+      : { query: `query($s:String){ Media(search:$s, type:ANIME){ ${relation} } }`, variables: { s: animeTitle } };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ANILIST_BUDGET_MS);
+  try {
+    const res = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return [];
+    const media = (await res.json())?.data?.Media;
+    type Node = { type?: string; title?: { romaji?: string; english?: string }; synonyms?: string[] };
+    const node: Node | undefined = payload.anilistMangaId
+      ? media
+      : (media?.relations?.edges ?? []).find(
+          (e: { relationType?: string; node?: Node }) => e?.relationType === "SOURCE" && e.node?.type === "MANGA",
+        )?.node;
+    if (!node) return [];
+    return [node.title?.english, node.title?.romaji, ...(node.synonyms ?? [])].filter(
+      (x): x is string => typeof x === "string" && !!x.trim(),
+    );
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Resolve the bridged manga to ranked source cards (best first). Wave 1
+ * searches the full names in parallel; wave 2 (colon halves, key words,
+ * AniList names) starts when wave 1 settles without an exact hit or runs
+ * slow. Every returned card is scored against ALL names, so a short query
+ * like "kimetsu" still lands on "Kimetsu No Yaiba". Hits are cached on disk.
+ */
+function resolveBridgeManga(payload: BridgePayload, animeTitle: string): Promise<MangaCard[]> {
   const key = matchKey(payload, animeTitle);
-  if (!key) return Promise.resolve(null);
-  if (matchMem.has(key)) return Promise.resolve(matchMem.get(key) ?? null);
+  if (!key) return Promise.resolve([]);
+  const cached = matchMem.get(key);
+  if (cached?.length) return Promise.resolve(cached);
   const existing = matchInflight.get(key);
   if (existing) return existing;
-  const p = (async (): Promise<MangaCard | null> => {
+  const p = (async (): Promise<MangaCard[]> => {
     try {
       const raw = await AsyncStorage.getItem(MATCH_PREFIX + key).catch(() => null);
       if (raw) {
-        const c = JSON.parse(raw) as { at: number; card: MangaCard };
-        if (c?.card && Date.now() - c.at < MATCH_TTL) {
-          matchMem.set(key, c.card);
-          return c.card;
+        const c = JSON.parse(raw) as { at: number; cards: MangaCard[] };
+        if (c?.cards?.length && Date.now() - c.at < MATCH_TTL) {
+          matchMem.set(key, c.cards);
+          return c.cards;
         }
       }
-      const { searchMergedManga, strictTitleScore } = await import("./manga/aggregate");
-      const titles = bridgeSearchTitles(payload, animeTitle);
-      let best: { card: MangaCard; score: number } | null = null;
-      const card = await new Promise<MangaCard | null>((resolve) => {
-        let pending = titles.length;
+      const { searchMergedManga } = await import("./manga/aggregate");
+      const thin = !payload.mangaTitle && !payload.mangaTitleEnglish;
+      const aniP = anilistNames(payload, animeTitle);
+      // A payload without titles has nothing better to search than AniList's names.
+      let names = bridgeNames(payload, animeTitle, thin ? await aniP : []);
+      const pool = new Map<string, MangaCard>();
+      const rank = () => rankBridgeCards(names, [...pool.values()]);
+      const searched = new Set<string>();
+
+      const ranked = await new Promise<ReturnType<typeof rank>>((resolve) => {
         let done = false;
+        let pending = 0;
+        let wave2Started = false;
         const finish = () => {
           if (done) return;
           done = true;
-          clearTimeout(timer);
-          resolve(best?.card ?? null);
+          clearTimeout(budget);
+          clearTimeout(wave2Timer);
+          resolve(rank());
         };
-        const timer = setTimeout(finish, SEARCH_BUDGET_MS);
         const consider = (cards: MangaCard[]) => {
-          for (const c of cards) {
-            const score = Math.max(...titles.map((t) => strictTitleScore(t, c.title)));
-            if (score >= 0.86 && (!best || score > best.score)) best = { card: c, score };
-          }
-          if (best && best.score >= 0.98) finish();
+          if (done) return;
+          for (const c of cards) pool.set(`${c.source}|${c.id}`, c);
+          const top = rank()[0];
+          if (top && top.score >= BRIDGE_MATCH_EXACT) finish();
         };
-        if (!pending) finish();
-        for (const title of titles) {
-          searchMergedManga(title, undefined, consider)
-            .then(consider, () => {})
-            .finally(() => {
-              pending -= 1;
-              if (pending <= 0) finish();
-            });
-        }
+        const settle = () => {
+          pending -= 1;
+          if (pending > 0 || done) return;
+          if (!wave2Started) startWave2();
+          else finish();
+        };
+        const run = (queries: string[]) => {
+          for (const q of queries) {
+            const k = q.toLowerCase();
+            if (searched.has(k)) continue;
+            searched.add(k);
+            pending += 1;
+            searchMergedManga(q, undefined, consider).then(consider, () => {}).finally(settle);
+          }
+        };
+        const startWave2 = () => {
+          if (wave2Started || done) return;
+          wave2Started = true;
+          pending += 1; // hold the wave open until its queries are queued
+          void aniP.then((extra) => {
+            if (!done && extra.length && !thin) names = bridgeNames(payload, animeTitle, extra);
+            if (!done) {
+              const plan = bridgeQueryPlan(names);
+              run([...plan.first, ...plan.second]);
+            }
+            settle();
+          });
+        };
+        const budget = setTimeout(finish, SEARCH_BUDGET_MS);
+        const wave2Timer = setTimeout(startWave2, WAVE2_AFTER_MS);
+        const first = bridgeQueryPlan(names).first;
+        if (first.length) run(first);
+        else startWave2();
       });
-      matchMem.set(key, card);
-      if (card) AsyncStorage.setItem(MATCH_PREFIX + key, JSON.stringify({ at: Date.now(), card })).catch(() => {});
-      return card;
+
+      const cards = ranked.slice(0, 4).map((r) => r.card);
+      if (cards.length) {
+        matchMem.set(key, cards);
+        AsyncStorage.setItem(MATCH_PREFIX + key, JSON.stringify({ at: Date.now(), cards })).catch(() => {});
+      }
+      return cards;
     } catch {
-      return null;
+      return [];
     } finally {
       matchInflight.delete(key);
     }
@@ -221,47 +302,67 @@ export function prefetchBridgeManga(payload: BridgePayload, animeTitle: string):
 /**
  * Find the bridged manga in the Arabic manga sources and open it at
  * `chapter` (reader), or its detail page when that chapter isn't uploaded.
+ * The top candidates are checked in parallel; the best-ranked one that
+ * actually carries the chapter wins, so a near-duplicate card with an empty
+ * or short chapter list never blocks the jump.
  */
 export async function openBridgeChapter(
   payload: BridgePayload,
   animeTitle: string,
   chapter: number | null,
 ): Promise<"reader" | "detail" | "notfound"> {
-  const [{ fetchMergedDetail }, nav, card] = await Promise.all([
+  const [{ fetchMergedDetail }, nav, cards] = await Promise.all([
     import("./manga/aggregate"),
     import("./manga/nav"),
     resolveBridgeManga(payload, animeTitle),
   ]);
-  if (!card) {
-    matchMem.delete(matchKey(payload, animeTitle)); // allow a retry next tap
-    return "notfound";
-  }
+  if (!cards.length) return "notfound";
+  const card = cards[0];
   if (chapter != null) {
     type Merged = import("./manga/types").MergedMangaDetail;
-    type Hit = { ch: Merged["chapters"][number]; title: string; cover: string | null };
-    // Open as soon as ANY stage (anchor source first, then the cross-source
-    // merge) has the chapter — never wait for the full merge when the first
-    // source already carries it.
+    type Hit = { card: MangaCard; ch: Merged["chapters"][number]; title: string; cover: string | null };
+    const candidates = cards.slice(0, 3);
     const hit = await new Promise<Hit | null>((resolve) => {
       let done = false;
+      // undefined = still loading · null = no such chapter · Hit = has it
+      const hits: (Hit | null | undefined)[] = candidates.map(() => undefined);
       const finish = (h: Hit | null) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         resolve(h);
       };
-      const timer = setTimeout(() => finish(null), DETAIL_BUDGET_MS);
-      const check = (detail: Merged) => {
-        const ch = pickChapter(detail.chapters, chapter);
-        if (ch) finish({ ch, title: detail.title || card.title, cover: detail.cover ?? card.cover ?? null });
+      // The best-ranked candidate whose answer is known wins: a hit at index
+      // i opens once every better-ranked candidate has missed.
+      const decide = () => {
+        for (const h of hits) {
+          if (h === undefined) return;
+          if (h) return finish(h);
+        }
+        finish(null);
       };
-      fetchMergedDetail(card.source, card.id, { onUpdate: check })
-        .then((d) => { check(d); finish(null); }, () => finish(null));
+      const timer = setTimeout(() => finish(hits.find((h) => h) ?? null), DETAIL_BUDGET_MS);
+      candidates.forEach((c, i) => {
+        // Any stage (anchor source first, then the cross-source merge) counts.
+        const check = (detail: Merged) => {
+          if (hits[i]) return;
+          const ch = pickChapter(detail.chapters, chapter);
+          if (ch) {
+            hits[i] = { card: c, ch, title: detail.title || c.title, cover: detail.cover ?? c.cover ?? null };
+            decide();
+          }
+        };
+        const miss = () => {
+          if (hits[i] === undefined) hits[i] = null;
+          decide();
+        };
+        fetchMergedDetail(c.source, c.id, { onUpdate: check }).then((d) => { check(d); miss(); }, miss);
+      });
     });
     if (hit) {
       nav.openMangaReader({
-        source: card.source,
-        mangaId: card.id,
+        source: hit.card.source,
+        mangaId: hit.card.id,
         mangaTitle: hit.title,
         cover: hit.cover,
         chapter: { source: hit.ch.source, mangaId: hit.ch.mangaId, id: hit.ch.id, number: hit.ch.number },

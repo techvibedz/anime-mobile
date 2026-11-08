@@ -10,12 +10,76 @@ import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { getMalRating, peekMalRating } from "../lib/animeInfo";
+import { whenScrollIdle } from "../lib/scrollIdle";
 import { C, R } from "../lib/theme";
 
 const MAL_BLUE = "#2e51a2";
 
 function fmt(score: number): string {
   return Number.isInteger(score) ? String(score) : score.toFixed(2).replace(/0$/, "");
+}
+
+/* ── Scroll-aware badge resolver ──
+ * A screenful of posters mounts dozens of badges at once (home fills ~10 rails),
+ * and each lookup used to do its own disk read, network fetch and re-render
+ * the moment it settled — usually mid-fling, which is exactly the "rows feel
+ * laggy" stutter. Lookups now START only while nothing is scrolling, and
+ * settled scores are handed to their badges together in ONE batched render
+ * once the scroll is idle. */
+type ScoreCb = (score: number | null) => void;
+const waiters = new Map<string, Set<ScoreCb>>();
+const started = new Set<string>();
+const settled = new Map<string, number | null>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let startQueued = false;
+
+function scheduleFlush(): void {
+  if (flushTimer) return;
+  flushTimer = setTimeout(async () => {
+    await whenScrollIdle(250);
+    flushTimer = null;
+    const done = [...settled];
+    settled.clear();
+    // setState calls in one task are batched by React 18 → a single commit.
+    for (const [title, score] of done) {
+      const cbs = waiters.get(title);
+      waiters.delete(title);
+      started.delete(title);
+      if (cbs) for (const cb of cbs) cb(score);
+    }
+  }, 120);
+}
+
+function startPending(): void {
+  if (startQueued) return;
+  startQueued = true;
+  void whenScrollIdle(350).then(() => {
+    startQueued = false;
+    for (const title of waiters.keys()) {
+      if (started.has(title)) continue;
+      started.add(title);
+      getMalRating(title)
+        .catch(() => null)
+        .then((s) => {
+          settled.set(title, s);
+          scheduleFlush();
+        });
+    }
+  });
+}
+
+function requestMalScore(title: string, cb: ScoreCb): () => void {
+  let set = waiters.get(title);
+  if (!set) waiters.set(title, (set = new Set()));
+  set.add(cb);
+  startPending();
+  return () => {
+    const s = waiters.get(title);
+    if (!s) return;
+    s.delete(cb);
+    // Nobody is waiting and it never started: drop it (scrolled past).
+    if (!s.size && !started.has(title)) waiters.delete(title);
+  };
 }
 
 /** Resolve a title's MAL score; null while loading or when there's no match. */
@@ -31,9 +95,7 @@ export function useMalRating(title: string | null | undefined): number | null {
     const p = peekMalRating(title);
     if (p !== undefined) { setScore(p); return; } // already known — no fetch
     setScore(null);
-    let cancelled = false;
-    getMalRating(title).then((s) => { if (!cancelled) setScore(s); });
-    return () => { cancelled = true; };
+    return requestMalScore(title, setScore);
   }, [title]);
   return score;
 }

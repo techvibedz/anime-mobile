@@ -1,4 +1,5 @@
 // Weekly schedule — "what new episode airs each day this week".
+import { noteScrollActivity } from "../lib/scrollIdle";
 //
 // Data comes from Witanime's own schedule page (lib/schedule): every row already
 // carries a real poster and a playable /anime/<slug> link, so a tap opens the
@@ -129,7 +130,7 @@ export default function ScheduleScreen() {
           </Pressable>
         </View>
       ) : (
-        <FlatList
+        <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
           data={activeItems ?? []}
           keyExtractor={(item) => String(item.id)}
           showsVerticalScrollIndicator={false}

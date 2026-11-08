@@ -29,6 +29,7 @@ import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from 
 import type { FavoriteList } from "../../lib/favorites";
 import { getCompletedSets, isEpisodeWatched, isEpisodeTracked, animeTitleKey, normHref, toggleWatched, subscribeHistory, type CompletedSets } from "../../lib/history";
 import { recordAnimeCompletion, setAnimeMarkedCompleted, useAnimeCompletion } from "../../lib/completion";
+import { noteScrollActivity } from "../../lib/scrollIdle";
 import { getDownloads, subscribeDownloads, type DownloadStatus, type DownloadMeta } from "../../lib/downloads";
 import { fetchAnimeInfo, fetchAnimeMal, fetchAnimeRelations, fetchSeasonInfo, peekMalRating } from "../../lib/animeInfo";
 import { seasonLabelAr } from "../../lib/seasonLabel";
@@ -133,6 +134,7 @@ export default function AnimeDetailScreen() {
   // Scroll position fan-out for the windowed episode grid (no re-render here).
   const scrollBus = useMemo(() => makeScrollBus(), []);
   const onDetailScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    noteScrollActivity();
     scrollBus.emit(e.nativeEvent.contentOffset.y);
     const show = e.nativeEvent.contentOffset.y > 24; // the centred poster starts just under the buttons
     if (show === scrimShown.current) return;

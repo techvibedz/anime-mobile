@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, memo } from "react";
+import { noteScrollActivity } from "../../lib/scrollIdle";
 import {
   View,
   Text,
@@ -182,7 +183,7 @@ export default function SeeAllScreen() {
     <View style={[s.root, { paddingTop: insets.top }]}>
       <ScreenHeader title={title ? decodeURIComponent(title) : t.seeAllShort} right={<CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />} />
 
-      <FlatList
+      <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
         key={`${cards.layout}-${cards.columns}`}
         data={items}
         numColumns={cards.columns}

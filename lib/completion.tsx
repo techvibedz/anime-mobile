@@ -12,7 +12,7 @@
 // anime4up / anime3rb), so a poster card from ANY source rail can resolve the
 // badge regardless of which source URL it was opened/recorded under.
 
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { normAnimeKey, animeTitleKey, getCompletedSets, subscribeHistory, getHistoryByAnime } from "./history";
 import { sameSource, isBlobRecord, buildCompletedList, strictMatchingRecords, findContamination, anchorKeys, primaryTitleKey, titleCompatible, type CompletedEntry } from "./completionMatch";
@@ -752,10 +752,25 @@ export function buildLookup(map: Record<string, AnimeCompletion>): CompletionLoo
 const EMPTY = buildLookup({});
 const CompletionContext = createContext<CompletionLookup>(EMPTY);
 
+// Badges subscribe to the lookup directly (not through the context) and only
+// re-render when THEIR record's visible state changes. A context consumer
+// re-renders on every rebuild — one completion write used to re-render every
+// poster badge on every mounted screen at once.
+let currentLookup: CompletionLookup = EMPTY;
+const lookupSubs = new Set<() => void>();
+function publishLookup(next: CompletionLookup): void {
+  currentLookup = next;
+  for (const fn of lookupSubs) {
+    try { fn(); } catch {}
+  }
+}
+const recSig = (r: AnimeCompletion | null) =>
+  r ? `${r.key}|${r.finished ? 1 : 0}|${r.caughtUp ? 1 : 0}|${r.marked ? 1 : 0}` : "";
+
 export function CompletionProvider({ children }: { children: React.ReactNode }) {
   const [lookup, setLookup] = useState<CompletionLookup>(EMPTY);
   const refresh = useCallback(() => {
-    getCompletionMap().then((m) => setLookup(buildLookup(m))).catch(() => {});
+    getCompletionMap().then((m) => { const next = buildLookup(m); publishLookup(next); setLookup(next); }).catch(() => {});
   }, []);
   useEffect(() => {
     refresh();
@@ -787,5 +802,23 @@ export function useAnimeCompletion(
   hrefs?: (string | null | undefined)[],
   titles?: (string | null | undefined)[],
 ): AnimeCompletion | null {
-  return useCompletionLookup().get({ hrefs, titles });
+  // Stable identity for the inputs (call sites pass fresh arrays every render).
+  const inputKey = `${(hrefs || []).join("\u0001")}\u0002${(titles || []).join("\u0001")}`;
+  const args = useRef({ hrefs, titles });
+  args.current = { hrefs, titles };
+  const [rec, setRec] = useState<AnimeCompletion | null>(() => currentLookup.get({ hrefs, titles }));
+  const sig = useRef(recSig(rec));
+  useEffect(() => {
+    const update = () => {
+      const next = currentLookup.get(args.current);
+      const nextSig = recSig(next);
+      if (nextSig === sig.current) return;
+      sig.current = nextSig;
+      setRec(next);
+    };
+    update(); // inputs changed (recycled card) or the lookup moved since mount
+    lookupSubs.add(update);
+    return () => { lookupSubs.delete(update); };
+  }, [inputKey]);
+  return rec;
 }

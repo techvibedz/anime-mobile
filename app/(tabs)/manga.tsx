@@ -1,4 +1,5 @@
 // Manga hub — one combined feed for every source.
+import { noteScrollActivity } from "../../lib/scrollIdle";
 //
 // There are no source tabs and no source names anywhere: home rails, search
 // and genre browse all fan out to every source and merge by normalized title,
@@ -344,7 +345,7 @@ export default function MangaHubScreen() {
           )}
         </>
       ) : (
-        <ScrollView
+        <ScrollView onScroll={noteScrollActivity} scrollEventThrottle={32}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}
           refreshControl={
@@ -392,7 +393,7 @@ export default function MangaHubScreen() {
           {continueReading.length > 0 && (
             <View style={s.section}>
               <SectionHeader title={t.mangaContinueReading} />
-              <FlatList horizontal inverted data={continueReading} keyExtractor={(item) => `${item.source}:${item.id}`}
+              <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32} horizontal inverted data={continueReading} keyExtractor={(item) => `${item.source}:${item.id}`}
                 showsHorizontalScrollIndicator={false} contentContainerStyle={s.railContent}
                 renderItem={({ item }) => <ContinueCard item={item} onRemove={confirmRemoveContinue} />} />
             </View>
@@ -414,7 +415,7 @@ export default function MangaHubScreen() {
               {home.sections.map((section) => (
                 <View key={section.id} style={s.section}>
                   <SectionHeader title={section.title} index={home.sections.indexOf(section) + 1} />
-                  <FlatList
+                  <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
                     horizontal
                     inverted
                     data={section.items}

@@ -10,6 +10,7 @@
 
 import { memo, useEffect, useRef, useState } from "react";
 import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
+import { noteScrollActivity } from "../lib/scrollIdle";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { getRail, type RailItem, type RailKind } from "../lib/sourceRails";
@@ -69,7 +70,7 @@ export const SourceRail = memo(function SourceRail({
         </Pressable>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: PAD, gap: 12 }}>
+      <ScrollView onScroll={noteScrollActivity} scrollEventThrottle={32} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: PAD, gap: 12 }}>
         {items.slice(0, RAIL_SHOW).map((item) => (
           <CatalogCard key={item.id} item={toCard(item)} width={CARD_W} onPress={() => openItem(item)} />
         ))}

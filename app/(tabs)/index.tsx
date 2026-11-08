@@ -734,13 +734,13 @@ const HomeRail = memo(function HomeRail({ section, index: si, onEpisodePress }: 
           <Text style={ss.seeAllText}>{t.seeAllShort}</Text>
         </Pressable>
       </View>
-      <FlatList<AnimeItem | EpisodeItem>
+      <FlatList<AnimeItem | EpisodeItem> onScroll={noteScrollActivity} scrollEventThrottle={32}
         horizontal
         inverted
         showsHorizontalScrollIndicator={false}
         initialNumToRender={4}
         maxToRenderPerBatch={4}
-        windowSize={5}
+        windowSize={3}
         removeClippedSubviews
         data={previewItems}
         keyExtractor={(item, i) => item.href || String(i)}
@@ -954,7 +954,7 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
           <View style={ss.sectionTick} />
         </View>
       </View>
-      <FlatList
+      <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
         horizontal
         inverted
         showsHorizontalScrollIndicator={false}

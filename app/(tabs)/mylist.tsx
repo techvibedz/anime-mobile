@@ -1,4 +1,5 @@
 import { useState, useCallback, memo } from "react";
+import { noteScrollActivity } from "../../lib/scrollIdle";
 import {
   View,
   Text,
@@ -139,7 +140,7 @@ export default function MyListScreen() {
           />
         )
       ) : (
-        <FlatList<FavoriteAnime | CompletedEntry>
+        <FlatList<FavoriteAnime | CompletedEntry> onScroll={noteScrollActivity} scrollEventThrottle={32}
           key={`${cards.layout}-${cards.columns}-${showingCompleted ? "done" : "list"}`}
           data={data}
           numColumns={cards.columns}

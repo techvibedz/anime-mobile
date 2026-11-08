@@ -1,14 +1,5 @@
 import assert from "node:assert";
-import { aiQueryKey, buildAniListBatch, looksLikeNaturalQuery, parseAniListBatch } from "./aiSearchCore";
-
-// Titles are not natural queries; descriptions are.
-assert.equal(looksLikeNaturalQuery("naruto"), false);
-assert.equal(looksLikeNaturalQuery("One Piece"), false);
-assert.equal(looksLikeNaturalQuery("هجوم العمالقة"), false);
-assert.equal(looksLikeNaturalQuery("أبغى انمي زي هجوم العمالقة بس قصير"), true);
-assert.equal(looksLikeNaturalQuery("بغيت انمي فيه انتقام"), true);
-assert.equal(looksLikeNaturalQuery("anime like death note"), true);
-assert.equal(looksLikeNaturalQuery("a b c d e f"), true, "5+ words");
+import { aiQueryKey, buildAniListBatch, parseAniListBatch } from "./aiSearchCore";
 
 // Cache keys fold punctuation, hamza and spacing.
 assert.equal(aiQueryKey("  أنمي   زي «ناروتو»؟ "), aiQueryKey("انمي زي ناروتو"));

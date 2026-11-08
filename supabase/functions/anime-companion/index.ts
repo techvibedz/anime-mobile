@@ -548,7 +548,7 @@ function searchSystemPrompt(today: string): string {
     "مهمتك: فهم طلبه بدقة واقتراح أعمال أنمي حقيقية تطابقه.",
     "",
     "القواعد:",
-    "- اقترح من 6 إلى 10 أعمال أنمي حقيقية موجودة فعلًا (مسلسلات أو أفلام). ممنوع اختراع عناوين.",
+    "- اقترح 10 أعمال أنمي حقيقية موجودة فعلًا (مسلسلات أو أفلام). ممنوع اختراع عناوين.",
     "- title: الاسم الرسمي كما على AniList أو MyAnimeList (روماجي أو إنجليزي)، بلا رقم موسم إلا إذا طُلب موسم بعينه.",
     "- إن ذكر عملًا كمثال («زي هجوم العمالقة») فلا تضعه في النتائج إلا إذا طلبه هو نفسه.",
     "- احترم كل القيود: الطول (قصير = 26 حلقة أو أقل، فيلم)، الحالة (مكتمل/مستمر)، التصنيف، الحقبة، المزاج، الجمهور، الدبلجة.",
@@ -565,11 +565,28 @@ function searchSystemPrompt(today: string): string {
   ].join("\n");
 }
 
-async function handleSearch(ctx: AIContext, rawQuery: unknown, today: string): Promise<Response> {
+/** Max "show more" pages (10 titles each) per query. */
+const SEARCH_MAX_PAGE = 5;
+
+async function handleSearch(
+  ctx: AIContext,
+  rawQuery: unknown,
+  today: string,
+  rawPage?: unknown,
+  rawExclude?: unknown,
+): Promise<Response> {
   const query = cleanText(rawQuery, 300);
   if (query.length < 2) return err(400, "invalid_request");
-  const key = searchCacheKey(query);
-  if (!key) return err(400, "invalid_request");
+  const baseKey = searchCacheKey(query);
+  if (!baseKey) return err(400, "invalid_request");
+  // "Show more": page N asks for 10 NEW titles, excluding everything the
+  // client already shows. Page 1 keeps the original cache key so old clients
+  // and old cache rows still match.
+  const page = Math.min(SEARCH_MAX_PAGE, Math.max(1, Math.floor(Number(rawPage) || 1)));
+  const exclude = page > 1 && Array.isArray(rawExclude)
+    ? rawExclude.map((t) => cleanText(t, 120)).filter((t) => t.length >= 2).slice(0, 60)
+    : [];
+  const key = page > 1 ? `${baseKey}|p${page}` : baseKey;
 
   try {
     const { data: hit } = await ctx.db
@@ -588,12 +605,22 @@ async function handleSearch(ctx: AIContext, rawQuery: unknown, today: string): P
 
   const answer = await raceModels(ctx.aiBase, ctx.aiKeys, ctx.models, [
     { role: "system", content: searchSystemPrompt(today) },
-    { role: "user", content: query },
+    {
+      role: "user",
+      content: exclude.length
+        ? [
+          query,
+          "",
+          "هذه الأعمال اقتُرحت بالفعل، لا تكرر أيًّا منها ولا مواسمها الأخرى؛ اقترح 10 أعمال جديدة مختلفة تطابق نفس الطلب:",
+          ...exclude,
+        ].join("\n")
+        : query,
+    },
   ], { raw: true });
   if (!answer) return err(502, "upstream");
 
   const parsed = extractJson(answer);
-  const seen = new Set<string>();
+  const seen = new Set<string>(exclude.map((t) => t.toLowerCase()));
   const results: { title: string; reason: string }[] = [];
   for (const r of Array.isArray(parsed?.results) ? parsed.results : []) {
     const title = cleanText(r?.title, 120);
@@ -881,7 +908,7 @@ Deno.serve(async (req) => {
     const ctx: AIContext = { aiBase, aiKeys, models: modelsJ, db: supabase, userId };
     const raw = body as Record<string, unknown>;
     return mode === "search"
-      ? await handleSearch(ctx, raw.query, new Date().toISOString().slice(0, 10))
+      ? await handleSearch(ctx, raw.query, new Date().toISOString().slice(0, 10), raw.page, raw.exclude)
       : await handleBridge(ctx, raw);
   }
 

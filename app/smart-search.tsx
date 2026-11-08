@@ -19,7 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 import { AniListPosterCard } from "../components/AniListPosterCard";
 import { StateView } from "../components/StateView";
-import { aiSearch, type AiSearchEntry } from "../lib/aiSearch";
+import { AI_SEARCH_MAX_PAGE, aiSearch, type AiSearchEntry } from "../lib/aiSearch";
 import { C, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 
@@ -41,7 +41,19 @@ export default function SmartSearchScreen() {
   const [items, setItems] = useState<AiSearchEntry[]>([]);
   const [intent, setIntent] = useState("");
   const [error, setError] = useState("");
+  // "Show more" paging: the query the results belong to, the last page
+  // loaded, and the footer state (idle / loading / exhausted / error).
+  const [page, setPage] = useState(1);
+  const [lastQuery, setLastQuery] = useState("");
+  const [more, setMore] = useState<"idle" | "loading" | "end" | "error">("idle");
   const seq = useRef(0);
+
+  const failText = (reason: string) =>
+    reason === "signin" ? t.companionSignIn
+      : reason === "rate_limited" ? t.companionRateLimited
+      : reason === "unavailable" ? t.companionUnavailable
+      : reason === "empty" ? t.aiSearchEmpty
+      : t.companionError;
 
   const run = useCallback(async (value?: string) => {
     const q = (value ?? text).trim();
@@ -51,6 +63,9 @@ export default function SmartSearchScreen() {
     const my = ++seq.current;
     setState("loading");
     setError("");
+    setMore("idle");
+    setPage(1);
+    setLastQuery(q);
     const res = await aiSearch(q);
     if (my !== seq.current) return;
     if (res.ok) {
@@ -59,16 +74,31 @@ export default function SmartSearchScreen() {
       setState(res.items.length ? "done" : "error");
       if (!res.items.length) setError(t.aiSearchEmpty);
     } else {
-      setError(
-        res.reason === "signin" ? t.companionSignIn
-          : res.reason === "rate_limited" ? t.companionRateLimited
-          : res.reason === "unavailable" ? t.companionUnavailable
-          : res.reason === "empty" ? t.aiSearchEmpty
-          : t.companionError,
-      );
+      setError(failText(res.reason));
       setState("error");
     }
   }, [text]);
+
+  const loadMore = useCallback(async () => {
+    if (state !== "done" || more === "loading" || more === "end" || !lastQuery) return;
+    if (page >= AI_SEARCH_MAX_PAGE) { setMore("end"); return; }
+    const my = seq.current;
+    const next = page + 1;
+    setMore("loading");
+    const res = await aiSearch(lastQuery, { page: next, exclude: items.map((it) => it.title) });
+    if (my !== seq.current) return;
+    if (!res.ok) {
+      setMore(res.reason === "empty" ? "end" : "error");
+      if (res.reason !== "empty") setError(failText(res.reason));
+      return;
+    }
+    const have = new Set(items.map((it) => it.anilistId));
+    const fresh = res.items.filter((it) => !have.has(it.anilistId));
+    setPage(next);
+    if (!fresh.length) { setMore("end"); return; }
+    setItems((prev) => [...prev, ...fresh]);
+    setMore(next >= AI_SEARCH_MAX_PAGE ? "end" : "idle");
+  }, [state, more, lastQuery, page, items]);
 
   const canRun = text.trim().length >= 2 && state !== "loading";
 
@@ -149,6 +179,31 @@ export default function SmartSearchScreen() {
         keyExtractor={(it) => String(it.anilistId)}
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={header}
+        ListFooterComponent={state === "done" && items.length ? (
+          <View style={ss.moreWrap}>
+            {more === "end" ? (
+              <Text style={ss.moreEnd}>{t.aiSearchNoMore}</Text>
+            ) : (
+              <>
+                {more === "error" && error ? <Text style={ss.moreEnd}>{error}</Text> : null}
+                <Pressable
+                  onPress={loadMore}
+                  disabled={more === "loading"}
+                  style={({ pressed }) => [ss.moreBtn, pressed && { opacity: 0.8 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.aiSearchMore}
+                >
+                  {more === "loading"
+                    ? <ActivityIndicator size="small" color={C.accent} />
+                    : <Ionicons name={more === "error" ? "refresh" : "sparkles-outline"} size={16} color={C.accent} />}
+                  <Text style={ss.moreText}>
+                    {more === "loading" ? t.aiSearchMoreLoading : more === "error" ? t.retry : t.aiSearchMore}
+                  </Text>
+                </Pressable>
+              </>
+            )}
+          </View>
+        ) : null}
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
         renderItem={({ item }) => (
           <View style={ss.row}>
@@ -199,4 +254,12 @@ const ss = StyleSheet.create({
   rowTitle: { color: C.text, fontSize: 15, fontFamily: "Cairo_700Bold", textAlign: "right" },
   meta: { color: C.textMuted, fontSize: 11, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 2 },
   reason: { color: C.textSecondary, fontSize: 12, lineHeight: 20, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 6 },
+  moreWrap: { marginTop: 22, alignItems: "stretch" },
+  moreBtn: {
+    direction: "ltr", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
+    height: 46, borderRadius: R.pill,
+    backgroundColor: "rgba(139,147,255,0.10)", borderWidth: 1, borderColor: "rgba(139,147,255,0.36)",
+  },
+  moreText: { color: C.accent, fontSize: 14, fontFamily: "Cairo_700Bold", marginRight: 8 },
+  moreEnd: { color: C.textMuted, fontSize: 12, fontFamily: "Cairo_500Medium", textAlign: "center", marginBottom: 10 },
 });

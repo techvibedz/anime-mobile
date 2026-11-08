@@ -26,6 +26,7 @@ const slots = [];
 let cursor = 0, dirty = false, effects = [];
 const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => value === b[i]);
 const react = {
+  memo(fn) { return fn; },
   useState(initial) {
     const i = cursor++;
     if (!slots[i]) slots[i] = { value: typeof initial === "function" ? initial() : initial };

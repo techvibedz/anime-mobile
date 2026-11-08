@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type ViewStyle } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
@@ -31,7 +31,12 @@ export function MangaLayoutControl({ layout, onChange }: { layout: CardLayout; o
 // are re-served at display size through Photon where the host allows it. A
 // screenful of full-size covers used to saturate the image loader and stall
 // every other image in the app for ~50s. `displayWidth` is the cover's dp width.
-export function MangaCover({ uri, alts, style, label, displayWidth = 280 }: { uri?: string | null; alts?: (string | null | undefined)[]; style?: ViewStyle; label: string; displayWidth?: number }) {
+type CoverProps = { uri?: string | null; alts?: (string | null | undefined)[]; style?: ViewStyle; label: string; displayWidth?: number };
+// Callers often pass a fresh `alts` array (`.map(upgradeMangaCover)`) each
+// render; compare its contents so a parent re-render doesn't redo the cover.
+const sameAlts = (a?: (string | null | undefined)[], b?: (string | null | undefined)[]) =>
+  a === b || (!!a && !!b && a.length === b.length && a.every((v, i) => v === b[i])) || (!a?.length && !b?.length);
+export const MangaCover = memo(function MangaCover({ uri, alts, style, label, displayWidth = 280 }: CoverProps) {
   const [failed, setFailed] = useState<string[]>([]);
   // AniList cover for this title, looked up only once every source cover failed.
   const [rescue, setRescue] = useState<{ label: string; url: string } | null>(null);
@@ -61,9 +66,10 @@ export function MangaCover({ uri, alts, style, label, displayWidth = 280 }: { ur
       recyclingKey={uri} transition={reducedMotion ? 0 : 120} accessibilityLabel={label} onError={() => setFailed((f) => [...f, src])} />
       : <View style={s.coverFallback}><Ionicons name="book-outline" size={28} color={M.muted} /><Text style={s.coverFallbackText} numberOfLines={3}>{label}</Text></View>}
   </View>;
-}
+}, (a, b) => a.uri === b.uri && a.label === b.label && a.style === b.style
+  && a.displayWidth === b.displayWidth && sameAlts(a.alts, b.alts));
 
-export function MangaCardTile({ image, imageAlts, title, width, layout = "comfortable", subtitle, rank, topRight, onPress }: {
+export const MangaCardTile = memo(function MangaCardTile({ image, imageAlts, title, width, layout = "comfortable", subtitle, rank, topRight, onPress }: {
   image?: string | null; imageAlts?: (string | null)[]; title: string; width: number; layout?: CardLayout; subtitle?: string;
   rank?: number; topRight?: ReactNode; onPress: () => void;
 }) {
@@ -83,7 +89,7 @@ export function MangaCardTile({ image, imageAlts, title, width, layout = "comfor
     </Pressable>
     {topRight && <View style={[s.corner, list && s.listCorner]}>{topRight}</View>}
   </View>;
-}
+});
 
 export function MangaState({ icon, variant = "empty", title, message, primary, dark = false }: {
   icon: keyof typeof Ionicons.glyphMap; variant?: "empty" | "error" | "loading" | "offline";

@@ -29,7 +29,7 @@ const imports={react,'react-native':native,'react/jsx-runtime':{jsx,jsxs:jsx},'r
   '@expo/vector-icons':{Ionicons:'Icon'},'expo-linear-gradient':{LinearGradient:'Gradient'},
   '../lib/auth':{useAuth:()=>({user:null,isConfigured:false})},'../lib/presence':{isAdmin:()=>false},'../lib/profile':{profileName:(u,f)=>f,profileAvatar:()=>null},
   '../lib/history':{},'../lib/favorites':{},'../lib/theme':theme,'../lib/i18n':{t},
-  'expo-constants':{expoConfig:{version:'test'}},'expo-application':{},'../assets/icon.png':'bundled-app-logo', '../lib/motion':{useReducedMotion:()=>true}};
+  'expo-constants':{expoConfig:{version:'test'}},'expo-application':{},'../assets/icon.png':'bundled-app-logo', '../lib/motion':{useReducedMotion:()=>true},'../lib/scrollIdle':{msSinceScroll:()=>1e9,noteScrollActivity(){},whenScrollIdle:async()=>{}}};
 const {drawer}=load('components/Sidebar.tsx',imports,'\nexports.drawer = Sidebar;');
 function walk(node){
   if(!node||typeof node!=='object')return [];
@@ -70,6 +70,7 @@ let focus, onAppState, reduced=false, drawerOpen=false, removed=0, stopped=0, co
 const timers=new Map(); let nextTimer=0;
 const values=[];
 const motionConfigs=[];
+let sinceScroll=1e9;
 const animated={...native.Animated,
   Value:class{constructor(v){this.value=v;values.push(this)}setValue(v){this.value=v}interpolate(){return 0}},
   timing:(value,config)=>{motionConfigs.push(config);return {value,config}},spring:(value,config)=>{motionConfigs.push(config);return {value,config}},
@@ -80,7 +81,7 @@ const {PantoufaWordmark}=load('components/PantoufaWordmark.tsx',{
   ...imports,react:{...react,useFocusEffect:undefined},
   'react-native':{...native,Animated:animated,AppState:appState,Easing:{cubic:0,inOut:x=>x,out:x=>x}},
   'expo-router':{useFocusEffect:fn=>{focus=fn}},'./Sidebar':{useSidebar:()=>({open:drawerOpen})},
-  '../lib/motion':{useReducedMotion:()=>reduced},
+  '../lib/motion':{useReducedMotion:()=>reduced},'../lib/scrollIdle':{msSinceScroll:()=>sinceScroll},
 },'',{setTimeout:(fn,ms)=>{timers.set(++nextTimer,{fn,ms});return nextTimer},clearTimeout:id=>timers.delete(id)});
 function nextTick(){const [id,timer]=timers.entries().next().value;timers.delete(id);timer.fn();return timer.ms}
 const brand=PantoufaWordmark();
@@ -90,10 +91,17 @@ const blur=focus();
 assert.equal(timers.size,1);assert.equal(nextTick(),1800);
 assert.ok(motionConfigs.every(c=>c.useNativeDriver&&c.isInteraction===false),'animation must not block feed interactions');
 completion({finished:true});assert.equal(timers.size,1);
-assert.equal([...timers.values()][0].ms,3000,'bursts should repeat after a three-second rest');
+assert.equal([...timers.values()][0].ms,6000,'bursts should repeat after a six-second rest');
+// While the feed scrolls the burst waits instead of animating over it.
+sinceScroll=100;const startsBefore=motionConfigs.length;assert.equal(nextTick(),6000);
+assert.equal(motionConfigs.length,startsBefore,'no burst while scrolling');assert.equal([...timers.values()][0].ms,2500);
+sinceScroll=1e9;nextTick();completion({finished:true});
+// Capped: the third burst is the last one this focus.
+nextTick();completion({finished:true});const capped=motionConfigs.length;nextTick();
+assert.equal(motionConfigs.length,capped,'bursts must stop after the cap');assert.equal(timers.size,0);
 appState.currentState='background';onAppState('background');
 assert.equal(timers.size,0);assert.ok(values.every(v=>v.value===0),'background must reset the title');
-appState.currentState='active';onAppState('active');assert.equal(timers.size,1);
+appState.currentState='active';onAppState('active');assert.equal(timers.size,1,'foreground resets the burst cap');
 nextTick();blur();assert.equal(timers.size,0);assert.equal(removed,1);assert.ok(stopped>=2);
 completion({finished:true});assert.equal(timers.size,0,'late completion after blur must not restart');
 reduced=true;PantoufaWordmark();assert.equal(focus(),undefined);assert.equal(timers.size,0);

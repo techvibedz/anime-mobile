@@ -4,9 +4,11 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
 import { useSidebar } from "./Sidebar";
 import { useReducedMotion } from "../lib/motion";
+import { msSinceScroll } from "../lib/scrollIdle";
 import { C, ABSOLUTE_FILL } from "../lib/theme";
 
 const LETTERS = "Pantoufa".split("");
+const MAX_BURSTS = 3;
 
 /** A short signature burst, followed by a three-second rest. */
 export const PantoufaWordmark = memo(function PantoufaWordmark() {
@@ -26,8 +28,14 @@ export const PantoufaWordmark = memo(function PantoufaWordmark() {
       sweep.setValue(0);
       letters.forEach(letter => letter.setValue(0));
     };
+    // The burst used to loop every ~4.6s forever, so the floating top bar
+    // (8 springing letters + sweep, drawn over the feed) re-composited during
+    // every scroll. Now: a few bursts per focus, never while the feed moves.
+    let plays = 0;
     const play = () => {
       if (!alive || AppState.currentState !== "active") return;
+      if (msSinceScroll() < 2500) { timer = setTimeout(play, 2500); return; }
+      if (++plays > MAX_BURSTS) return;
       sweep.setValue(0);
       burst = Animated.parallel([
         Animated.timing(sweep, { toValue: 1, duration: 1600, easing: Easing.inOut(Easing.cubic), useNativeDriver: true, isInteraction: false }),
@@ -37,13 +45,13 @@ export const PantoufaWordmark = memo(function PantoufaWordmark() {
         ]))),
       ]);
       burst.start(({ finished }) => {
-        if (alive && finished && AppState.currentState === "active") timer = setTimeout(play, 3000);
+        if (alive && finished && AppState.currentState === "active") timer = setTimeout(play, 6000);
       });
     };
     if (AppState.currentState === "active") timer = setTimeout(play, 1800);
     const sub = AppState.addEventListener("change", state => {
       reset();
-      if (state === "active") timer = setTimeout(play, 1800);
+      if (state === "active") { plays = 0; timer = setTimeout(play, 1800); }
     });
     return () => { alive = false; reset(); sub.remove(); };
   }, [reduced, open, sweep, letters]));

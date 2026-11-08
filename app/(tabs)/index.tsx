@@ -141,7 +141,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured, topInset }: { featur
         scrollEventThrottle={16}
       >
         {featured.map((item, i) => (
-          <HeroSlide key={item.href || i} item={item} width={SW} height={heroH} active={i === heroIndex} reduced={reduced} />
+          <HeroSlide key={item.href || i} item={item} width={SW} height={heroH} near={Math.abs(i - heroIndex) <= 1 || (heroIndex === featured.length - 1 && i === 0)} />
         ))}
       </ScrollView>
       {featured.length > 1 && (
@@ -182,9 +182,14 @@ function openHeroItem(item: FeaturedItem, details: boolean) {
   }
 }
 
-const HeroSlide = memo(function HeroSlide({ item, width, height, active, reduced }: {
-  item: FeaturedItem; width: number; height: number; active: boolean; reduced: boolean;
+const HeroSlide = memo(function HeroSlide({ item, width, height, near }: {
+  item: FeaturedItem; width: number; height: number; near: boolean;
 }) {
+  // Full-bleed art is the biggest bitmap on the page (~1.5x screen width).
+  // Only the visible slide and its neighbours hold one; a far slide keeps its
+  // plain plate until the carousel gets close, so 6+ decoded heroes don't sit
+  // in memory (GC + texture pressure = scroll hitches on low-RAM phones).
+  // Neighbours are always mounted, so the slide paged to is never blank.
   // No "Ken Burns" zoom: the slow scale ran every frame (a new 7s push-in each
   // 6s page), so the full-bleed art + two big scrims were re-composited on
   // every frame the user scrolled from the top of the feed — the main source
@@ -193,7 +198,7 @@ const HeroSlide = memo(function HeroSlide({ item, width, height, active, reduced
   const canDetail = !isEpisodeUrl(item.href) || !!toAnimeUrl(item.href);
   return (
     <View style={[ss.heroSlide, { width, height }]}>
-      {item.image ? (
+      {item.image && near ? (
         <Image source={{ uri: posterUrl(item.image, width * 1.5, 1200) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={item.href} transition={250} />
       ) : null}
       {/* Top scrim keeps the status bar + floating top bar legible over bright art. */}
@@ -944,6 +949,12 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
       !!title && (completedTitles.keys.has(animeTitleKey(title)) || completedTitles.canons.has(canonTitle(title))))),
   [items, completedTitles]);
 
+  // Stable renderItem: a completion/history update re-renders this rail, but
+  // must not rebuild every mounted card.
+  const renderRec = useCallback(({ item }: { item: RankedRec }) => (
+    <AniListPosterCard entry={item} width={width} topRight={<MalCardBadge title={item.title} />} />
+  ), [width]);
+
   if (visible.length === 0) return null;
   return (
     <View style={ss.section}>
@@ -964,14 +975,8 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
         data={visible}
         keyExtractor={(item) => String(item.anilistId)}
         contentContainerStyle={{ paddingHorizontal: PAD, gap: 14 }}
-        renderItem={({ item }) => (
-          <AniListPosterCard
-            key={item.anilistId}
-            entry={item}
-            width={width}
-            topRight={<MalCardBadge title={item.title} />}
-          />
-        )}
+        renderItem={renderRec}
+        removeClippedSubviews
       />
     </View>
   );

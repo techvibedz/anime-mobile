@@ -9,7 +9,7 @@ import { noteScrollActivity } from "../../lib/scrollIdle";
 // genre catalog) and a "load more" pager over the sources' genre pages.
 import { MangaLayoutControl, MangaCover, MangaCardTile, MangaSkeleton, MangaState } from "../../components/MangaUI";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -256,6 +256,9 @@ export default function MangaHubScreen() {
       },
     ]);
   }, []);
+  const renderContinue = useCallback(({ item }: { item: MangaProgress }) => (
+    <ContinueCard item={item} onRemove={confirmRemoveContinue} />
+  ), [confirmRemoveContinue]);
 
   const activeFilterCount =
     (filters.type ? 1 : 0) + (filters.status ? 1 : 0) + (filters.sort !== "default" ? 1 : 0) + genres.length;
@@ -347,6 +350,7 @@ export default function MangaHubScreen() {
       ) : (
         <ScrollView onScroll={noteScrollActivity} scrollEventThrottle={32}
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews
           contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}
           refreshControl={
             <RefreshControl
@@ -395,7 +399,7 @@ export default function MangaHubScreen() {
               <SectionHeader title={t.mangaContinueReading} />
               <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32} horizontal inverted data={continueReading} keyExtractor={(item) => `${item.source}:${item.id}`}
                 showsHorizontalScrollIndicator={false} contentContainerStyle={s.railContent}
-                renderItem={({ item }) => <ContinueCard item={item} onRemove={confirmRemoveContinue} />} />
+                renderItem={renderContinue} initialNumToRender={2} maxToRenderPerBatch={2} windowSize={3} removeClippedSubviews />
             </View>
           )}
           {loading && !home ? (
@@ -412,35 +416,8 @@ export default function MangaHubScreen() {
             <>
               {home.featured[0] && <HeroBanner card={home.featured[0]} />}
 
-              {home.sections.map((section) => (
-                <View key={section.id} style={s.section}>
-                  <SectionHeader title={section.title} index={home.sections.indexOf(section) + 1} />
-                  <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
-                    horizontal
-                    inverted
-                    data={section.items}
-                    keyExtractor={(item) => `${section.id}:${item.source}:${item.id}`}
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={s.railContent}
-                    initialNumToRender={6}
-                    maxToRenderPerBatch={6}
-                    windowSize={5}
-                    renderItem={({ item, index }) =>
-                      section.kind === "latest" ? (
-                        <LatestCard card={item} />
-                      ) : (
-                        <MangaCardTile
-                          image={upgradeMangaCover(item.cover)}
-                          imageAlts={item.coverAlts?.map(upgradeMangaCover)}
-                          title={item.title}
-                          width={RAIL_W}
-                          rank={section.kind === "ranked" ? index + 1 : undefined}
-                          onPress={() => openMangaDetail(item)}
-                        />
-                      )
-                    }
-                  />
-                </View>
+              {home.sections.map((section, i) => (
+                <MangaRail key={section.id} section={section} index={i + 1} />
               ))}
             </>
           ) : null}
@@ -608,7 +585,7 @@ function FilterPill({ label, onRemove }: { label: string; onRemove: () => void }
   );
 }
 
-function ContinueCard({ item, onRemove }: { item: MangaProgress; onRemove: (item: MangaProgress) => void }) {
+const ContinueCard = memo(function ContinueCard({ item, onRemove }: { item: MangaProgress; onRemove: (item: MangaProgress) => void }) {
   const progress = item.total > 0 ? Math.min(1, (item.page + 1) / item.total) : 0;
   const cover = upgradeMangaCover(item.cover);
   return (
@@ -651,12 +628,47 @@ function ContinueCard({ item, onRemove }: { item: MangaProgress; onRemove: (item
       <Pressable style={s.continueRemoveBtn} onPress={() => onRemove(item)} accessibilityRole="button" accessibilityLabel={t.remove}><Ionicons name="close" size={17} color={M.muted} /></Pressable>
     </View>
   );
-}
+});
 
-function LatestCard({ card }: { card: MangaCard }) {
-  return <MangaCardTile image={upgradeMangaCover(card.cover)} imageAlts={card.coverAlts?.map(upgradeMangaCover)} title={card.title} width={RAIL_W}
-    subtitle={card.latest || card.type || undefined} onPress={() => openMangaDetail(card)} />;
-}
+// One rail cell. Memoized on the card object, with the cover URLs computed
+// once per card: the hub has a dozen useStates (search, filters, sheets), and
+// every one of their updates used to rebuild every mounted cover in every
+// rail — new alt arrays + new onPress closures defeated any memo below.
+const MangaRailCard = memo(function MangaRailCard({ card, latest, rank }: { card: MangaCard; latest: boolean; rank?: number }) {
+  const image = useMemo(() => upgradeMangaCover(card.cover), [card.cover]);
+  const alts = useMemo(() => card.coverAlts?.map(upgradeMangaCover), [card.coverAlts]);
+  const onPress = useCallback(() => openMangaDetail(card), [card]);
+  return <MangaCardTile image={image} imageAlts={alts} title={card.title} width={RAIL_W}
+    subtitle={latest ? (card.latest || card.type || undefined) : undefined} rank={rank} onPress={onPress} />;
+});
+
+const railKey = (item: MangaCard) => `${item.source}:${item.id}`;
+
+const MangaRail = memo(function MangaRail({ section, index }: { section: MangaHome["sections"][number]; index: number }) {
+  const latest = section.kind === "latest";
+  const ranked = section.kind === "ranked";
+  const renderItem = useCallback(({ item, index: i }: { item: MangaCard; index: number }) => (
+    <MangaRailCard card={item} latest={latest} rank={ranked ? i + 1 : undefined} />
+  ), [latest, ranked]);
+  return (
+    <View style={s.section}>
+      <SectionHeader title={section.title} index={index} />
+      <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
+        horizontal
+        inverted
+        data={section.items}
+        keyExtractor={railKey}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={s.railContent}
+        initialNumToRender={4}
+        maxToRenderPerBatch={4}
+        windowSize={3}
+        removeClippedSubviews
+        renderItem={renderItem}
+      />
+    </View>
+  );
+});
 
 function SearchSkeleton() {
   return (

@@ -1742,7 +1742,7 @@ export function parseUp4Servers(html: string): RawServer[] {
     // oid/id/hash) reach the provider as "amp;id" and resolve to nothing.
     const src = normalizeEmbedUrl((m[1] || "").replace(/&amp;/g, "&").trim());
     if (!src || src.indexOf("http") !== 0 || seen.has(src)) continue;
-    if (/google|facebook|pyppo|popads|disqus/.test(src)) continue;
+    if (/google|facebook|pyppo|popads|disqus/.test(src) && !/\/\/(?:drive|docs)\.google\.com\//.test(src)) continue;
     try {
       const h = new URL(src).hostname.toLowerCase();
       if (!h || h === "undefined" || h === "null" || h.indexOf(".") < 0) continue;
@@ -1852,7 +1852,7 @@ export function parseWitServers(html: string): RawServer[] {
   for (let i = 0; i < reg.length; i++) {
     const url = witDecodeServer(reg[i], cfg[i]);
     if (!url || url.indexOf("http") !== 0 || seen.has(url)) continue;
-    if (/google|facebook|pyppo|popads|disqus/.test(url)) continue;
+    if (/google|facebook|pyppo|popads|disqus/.test(url) && !/\/\/(?:drive|docs)\.google\.com\//.test(url)) continue;
     try {
       const h = new URL(url).hostname.toLowerCase();
       if (!h || h === "undefined" || h === "null" || h.indexOf(".") < 0) continue;
@@ -3180,6 +3180,83 @@ async function fetchEmbed(url: string, timeoutMs: number, referer?: string): Pro
 
 function mediaType(url: string): "hls" | "mp4" {
   return /\.m3u8(\?|$)/i.test(url) ? "hls" : "mp4";
+}
+
+// ── Google Drive ("google" server on witanime's older shows) ────────────────
+// The gate lands on drive.google.com/file/d/<id>/preview — an iframe player
+// whose googlevideo streams are cookie-bound, so the WebView collector never
+// captured a playable URL. The file's own download endpoint serves the
+// ORIGINAL upload (full quality, Range-seekable progressive MP4) without
+// cookies, which is the smoothest thing the native player can get.
+const GDRIVE_HOST_RE = /(^|\.)(drive|docs)\.google\.com$|^drive\.usercontent\.google\.com$/i;
+
+export function googleDriveFileId(raw: string): string | null {
+  let url: URL;
+  try { url = new URL(raw); } catch { return null; }
+  if (!GDRIVE_HOST_RE.test(url.hostname)) return null;
+  const id = url.pathname.match(/\/file\/(?:u\/\d+\/)?d\/([A-Za-z0-9_-]{10,})/)?.[1] ||
+    url.searchParams.get("id") || url.searchParams.get("docid") || "";
+  return /^[A-Za-z0-9_-]{10,}$/.test(id) ? id : null;
+}
+
+export function googleDriveDownloadUrl(id: string): string {
+  return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(id)}&export=download&confirm=t`;
+}
+
+/** Big files (every episode) answer the download URL with a "can't scan for
+ * viruses" page; its form carries the one-time uuid that unlocks the file. */
+export function googleDriveConfirmUrl(html: string): string | null {
+  const form = html.match(/<form[^>]*id=["']download-form["'][^>]*>([\s\S]*?)<\/form>/i);
+  if (!form) return null;
+  const action = htmlDecode(form[0].match(/action=["']([^"']+)["']/i)?.[1] || "");
+  let url: URL;
+  try { url = new URL(action, "https://drive.usercontent.google.com/"); } catch { return null; }
+  if (!GDRIVE_HOST_RE.test(url.hostname)) return null;
+  for (const input of form[1].match(/<input[^>]*>/gi) || []) {
+    const name = input.match(/name=["']([^"']+)["']/i)?.[1];
+    const value = input.match(/value=["']([^"']*)["']/i)?.[1];
+    if (name && value !== undefined) url.searchParams.set(name, htmlDecode(value));
+  }
+  return url.searchParams.get("id") ? url.toString() : null;
+}
+
+type DriveProbe = { media: boolean; html: string; dead: boolean; finalUrl: string };
+async function probeGoogleDrive(url: string): Promise<DriveProbe> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 12000);
+  try {
+    // Range keeps a media hit to 2 bytes (RN's fetch buffers whole bodies).
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": BROWSER_UA, Range: "bytes=0-1", Accept: "*/*" },
+    });
+    const type = res.headers.get("content-type") || "";
+    const finalUrl = res.url || url;
+    if ((res.status === 206 || res.ok) && !/text\/html|json/i.test(type)) return { media: true, html: "", dead: false, finalUrl };
+    const html = res.status < 500 ? await res.text().catch(() => "") : "";
+    return { media: false, html, dead: res.status === 404 || res.status === 410, finalUrl };
+  } catch {
+    return { media: false, html: "", dead: false, finalUrl: url };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function extractGoogleDrive(embedUrl: string): Promise<{ url: string; type: "mp4" } | null> {
+  const id = googleDriveFileId(embedUrl);
+  if (!id) return null;
+  let candidate = googleDriveDownloadUrl(id);
+  for (let step = 0; step < 2; step++) {
+    const probe = await probeGoogleDrive(candidate);
+    // Return the URL we asked for, not a redirected googleusercontent hop:
+    // those are short-lived and IP/session-pinned, the download URL is not.
+    if (probe.media) return { url: candidate, type: "mp4" };
+    if (probe.dead) { markDeadEmbed(embedUrl); return null; }
+    const confirm = googleDriveConfirmUrl(probe.html);
+    if (!confirm || confirm === candidate) return null;
+    candidate = confirm;
+  }
+  return null;
 }
 
 // Dean-Edwards unpacker — same algorithm as the WebView collector's.

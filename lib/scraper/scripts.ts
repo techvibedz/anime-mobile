@@ -885,7 +885,7 @@ export const EXTRACT_VIDEO_SERVERS = `(function(){${HELPERS}
 ${providerClassifierScript("provider")}
 function badIframe(src) {
   if (!src || src.indexOf('http') !== 0) return true;
-  if (/google|facebook|pyppo|popads|disqus/.test(src)) return true;
+  if (/google|facebook|pyppo|popads|disqus/.test(src) && !/(?:drive|docs)[.]google[.]com[/]/.test(src)) return true;
   // Reject malformed hosts. witanime's loadIframe() decode occasionally
   // produces 'https://undefined/<encoded>' which dies with ERR_NAME_NOT_RESOLVED.
   try {

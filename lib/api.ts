@@ -47,6 +47,7 @@ import {
   extractShare4max,
   extractDoodstream,
   extractVoe,
+  extractGoogleDrive,
   extractPackedEmbed,
   isKnownDeadEmbed,
   probeEmbedDead,
@@ -125,7 +126,9 @@ const RECENT_CACHE_PREFIX = "@recent_v10:";
 const RECENT_CACHE_TTL = 10 * 60 * 1000; // 10 min — new episodes land often
 // v9: lists built before the witanime handshake/gate fixes could carry a junk
 // "witanime.site/" target (a 404 gate parsed as a server) and miss mirrors.
-const SERVERS_CACHE_PREFIX = "@servers_v9:";
+// v10: witanime's "google" server (Drive) used to be cached as an unresolved
+// generic gate/embed; it now classifies as gdrive and plays natively.
+const SERVERS_CACHE_PREFIX = "@servers_v10:";
 // Resolved Witanime ANIME pages per source title (see fetchCompleteVideoServers).
 // Remembers what a free-text search resolved to so later episodes of the same
 // anime skip the site's rate-limited /search and only fetch the anime page.
@@ -2280,6 +2283,12 @@ async function resolveVideoFresh(iframeUrl: string, provider: string, priority: 
     const resolved = success(r);
     if (resolved) return resolved;
   }
+  // witanime's "google" server → the original Drive upload as a progressive MP4.
+  if (provider === "gdrive") {
+    const r = await extractGoogleDrive(iframeUrl).catch(() => null);
+    const resolved = success(r);
+    if (resolved) return resolved;
+  }
   if (provider === "mega") {
     const url = await PantoufaDownloads?.startMegaStream(iframeUrl).catch(() => null);
     const resolved = success(url ? { url, type: "mp4" } : null);
@@ -2305,7 +2314,7 @@ async function resolveVideoFresh(iframeUrl: string, provider: string, priority: 
   // that wait was most of the "server stuck loading" reports in device logs.
   // Providers with a direct extractor already fetched the page above (and
   // recorded a dead one); only the WebView-only ones need the extra probe.
-  const fetchedAbove = ["mp4upload", "streamwish", "videas", "videa", "vk", "share4max", "doodstream", "voe", "luluvdo", "streamruby"].includes(provider);
+  const fetchedAbove = ["mp4upload", "streamwish", "videas", "videa", "vk", "share4max", "doodstream", "voe", "luluvdo", "streamruby", "gdrive"].includes(provider);
   if (isKnownDeadEmbed(iframeUrl) || (!fetchedAbove && await probeEmbedDead(iframeUrl).catch(() => false))) {
     return { success: false, error: "dead-embed" };
   }

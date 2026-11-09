@@ -85,6 +85,10 @@ export const PROVIDER_POLICIES: Record<string, ProviderPolicy> = {
   vikingfile: { patterns: ["vik(?:i|1)ngfile"], rank: 8, resolution: "directThenWebView", failureMode: "failed", supported: true },
   mega: { patterns: ["mega\\.nz"], rank: 12, resolution: "direct", failureMode: "failed", supported: true },
   vid3rb: { patterns: ["vid3rb", "anime3rb"], rank: -1, resolution: "direct", failureMode: "failed", supported: true, downloadable: true },
+  // witanime's "google" server: Drive's /preview player. Direct = the original
+  // upload via drive.usercontent; failureMode webview keeps the Drive player
+  // as a fallback when Google refuses the download (quota exceeded).
+  gdrive: { patterns: ["drive\\.google\\.com", "docs\\.google\\.com\\/file", "drive\\.usercontent\\.google\\.com"], rank: 6, resolution: "directThenWebView", failureMode: "webview", supported: true, downloadable: true },
   luluvdo: { patterns: ["luluvdo", "lulustream", "luluvid"], rank: 9, resolution: "directThenWebView", failureMode: "failed", supported: true },
   yonaplay: { patterns: ["yonaplay"], rank: 99, resolution: "webview", failureMode: "failed", supported: false },
   generic: { patterns: [], rank: 10, resolution: "webview", failureMode: "webview", supported: true },
@@ -310,6 +314,7 @@ export function validateMediaUrl(raw: string, provider = "generic"): boolean {
       return /\.(?:m3u8|mp4)$/i.test(url.pathname) || /^\/video\//i.test(url.pathname);
     }
     if (provider === "doodstream" && url.searchParams.has("token") && url.searchParams.has("expiry")) return true;
+    if (provider === "gdrive" && /^drive\.usercontent\.google\.com$/i.test(url.hostname)) return url.pathname === "/download" && url.searchParams.has("id");
     if (provider === "vikingfile") return /\.(?:mp4|mkv|webm|ogg)$/i.test(url.pathname);
     if (provider === "vk" && /(^|\.)(?:vkuser\.net|okcdn\.ru)$/i.test(url.hostname)) return url.searchParams.has("sig") && url.searchParams.has("expires");
     if (provider === "dailymotion" && /(^|\.)(?:dailymotion\.com|dmcdn\.net)$/i.test(url.hostname)) return true;
@@ -361,6 +366,9 @@ export function videoPlaybackHeaders(videoUrl: string, iframeUrl: string, provid
   // fetches it with credentials omitted); sending a Referer/Origin from the
   // embed host can trip the WAF, so keep this request bare.
   if (provider === "anime4upcdn") return headers;
+  // Drive's download endpoint is a plain cookieless file URL; an Origin/Referer
+  // from the witanime gate or drive.google.com only invites a CORS-style 403.
+  if (provider === "gdrive") return headers;
   let referer = "";
   let origin = "";
   try {

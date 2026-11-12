@@ -646,7 +646,7 @@ const REL_CACHE_PREFIX = "@anime_relations_v8:";
 
 // POST a GraphQL query to AniList, retrying the transient failures that occur
 // in the wild (429 rate-limit, 5xx). Returns parsed JSON or null.
-async function anilistPost(query: string, variables: Record<string, unknown>): Promise<any | null> {
+export async function anilistPost(query: string, variables: Record<string, unknown>): Promise<any | null> {
   for (let attempt = 0; attempt < 3; attempt++) {
     // Capped: this sits on the anime3rb server lookup path, and an AniList that
     // hangs (instead of its current fast 403) must not stall the watch screen.

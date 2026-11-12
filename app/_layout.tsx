@@ -397,6 +397,7 @@ function AuthGate() {
         <Stack.Screen name="watch-party" />
         <Stack.Screen name="moment/[id]" options={{ animation: "none" }} />
         <Stack.Screen name="wrapped" />
+        <Stack.Screen name="for-you" />
         <Stack.Screen name="users" />
         <Stack.Screen name="user/[id]" />
         <Stack.Screen name="admin/chats" />

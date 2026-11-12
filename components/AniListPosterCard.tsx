@@ -24,16 +24,20 @@ export interface AniListPosterCardProps {
   footer?: ReactNode;
 }
 
+/** Open an AniList entry's detail page now (cached source page, else the
+ *  pending placeholder the detail screen resolves behind its skeleton). */
+export function openAniListEntry(entry: AniListResolveEntry): void {
+  const cached = peekResolvedHrefSync(entry.anilistId);
+  if (cached) {
+    router.push(`/anime/${encodeURIComponent(cached)}`);
+    return;
+  }
+  void resolveEntryToSource(entry);
+  router.push(`/anime/${encodeURIComponent(pendingAniListHref(entry))}`);
+}
+
 export function AniListPosterCard({ entry, width, layout, titleLines = 2, topRight, footer }: AniListPosterCardProps) {
-  const open = useCallback(() => {
-    const cached = peekResolvedHrefSync(entry.anilistId);
-    if (cached) {
-      router.push(`/anime/${encodeURIComponent(cached)}`);
-      return;
-    }
-    void resolveEntryToSource(entry);
-    router.push(`/anime/${encodeURIComponent(pendingAniListHref(entry))}`);
-  }, [entry]);
+  const open = useCallback(() => openAniListEntry(entry), [entry]);
 
   return (
     <PosterCard

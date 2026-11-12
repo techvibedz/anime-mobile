@@ -108,6 +108,7 @@ function Sidebar() {
     { title: t.discover, items: [
       { icon: "home-outline", label: t.home, path: "/(tabs)", match: "/" },
       { icon: "search-outline", label: t.discover, path: "/(tabs)/search", match: "/search" },
+      { icon: "finger-print-outline", label: t.tasteTitle, path: "/for-you", match: "/for-you" },
       { icon: "book-outline", label: t.mangaTab, path: "/(tabs)/manga", match: "/manga" },
       { icon: "calendar-outline", label: t.scheduleTitle, path: "/schedule", match: "/schedule" },
       { icon: "sparkles-outline", label: t.upcomingTitle, path: "/upcoming", match: "/upcoming" },

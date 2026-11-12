@@ -31,6 +31,7 @@ import { canonTitle } from "../../lib/relations";
 import { fetchAnimeRecommendations } from "../../lib/animeInfo";
 import type { RecItem } from "../../lib/animeInfo";
 import { pickTasteSeeds, rankRecommendations, type RankedRec } from "../../lib/recommend";
+import { computeTaste, readTasteBundle, viewFromBundle, type TasteBundle } from "../../lib/taste";
 import { AniListPosterCard } from "../../components/AniListPosterCard";
 import { prewarmEntries } from "../../lib/anilistResolve";
 import { msSinceScroll, noteScrollActivity, whenScrollIdle } from "../../lib/scrollIdle";
@@ -942,12 +943,46 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
     return () => { alive = false; clearTimeout(timer); };
   }, [items]));
 
+  // Taste engine (lib/taste): when it has a ranking, the rail shows its top
+  // picks (they learn from finished AND dropped shows). Recomputed in the
+  // background at most every few hours; the AniList-recs ranking above stays
+  // as the fallback for new users / before the first taste run.
+  const [tasteItems, setTasteItems] = useState<RankedRec[] | null>(null);
+  const applyTaste = useCallback(async (b: TasteBundle | null) => {
+    if (!b) return;
+    const v = await viewFromBundle(b, "all", 15);
+    if (!v.ranked.length) return;
+    setTasteItems(v.ranked.map((sc) => ({
+      anilistId: sc.media.id,
+      title: sc.media.title,
+      titleEnglish: sc.media.titleEnglish,
+      image: sc.media.image,
+      format: sc.media.format,
+      seasonYear: sc.media.seasonYear,
+      rating: sc.match,
+      score: sc.score,
+    })));
+  }, []);
+  useFocusEffect(useCallback(() => {
+    if (seedKey === null) return;
+    let alive = true;
+    void readTasteBundle().then((b) => { if (alive) void applyTaste(b); });
+    // Background refresh — computeTaste is a no-op when nothing changed.
+    const timer = setTimeout(() => { void (async () => {
+      await whenScrollIdle();
+      if (!alive) return;
+      const b = await computeTaste();
+      if (alive) await applyTaste(b);
+    })().catch(() => {}); }, 8000);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [seedKey, applyTaste]));
+
   // Filter at render too: a cached rail (or one computed before the ✓ mark)
   // drops the anime the moment it is marked completed.
-  const visible = useMemo(() => items.filter((item) =>
+  const visible = useMemo(() => (tasteItems ?? items).filter((item) =>
     ![item.title, item.titleEnglish].some((title) =>
       !!title && (completedTitles.keys.has(animeTitleKey(title)) || completedTitles.canons.has(canonTitle(title))))),
-  [items, completedTitles]);
+  [items, tasteItems, completedTitles]);
 
   // Stable renderItem: a completion/history update re-renders this rail, but
   // must not rebuild every mounted card.
@@ -964,6 +999,10 @@ const ForYouRail = memo(function ForYouRail({ history, width }: { history: Watch
           <Text style={ss.sectionTitle}>{t.recsForYou}</Text>
           <View style={ss.sectionTick} />
         </View>
+        <Pressable style={({ pressed }) => [ss.seeAllBtn, pressed && ss.pressedSoft]} onPress={() => router.push("/for-you")} accessibilityRole="button" hitSlop={6}>
+          <Ionicons name="chevron-back" size={13} color={C.accent} />
+          <Text style={ss.seeAllText}>{t.tasteSeeAll}</Text>
+        </Pressable>
       </View>
       <FlatList onScroll={noteScrollActivity} scrollEventThrottle={32}
         horizontal

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import {
+  exactSlugFor,
+  withExactSlugFirst,
   parseMangalikChapter,
   parseMangalikChapters,
   parseMangalikDetail,
@@ -315,6 +317,17 @@ async function main() {
   assert.equal(parseMangalikChapter("", base), null);
   assert.equal(parseMangalikChapter('<div class="reading-content"><img src="https://x/logo.png"></div>', base), null);
   assert.deepEqual(parseMangalikChapters(""), []);
+
+  // Exact-slug surfacing: WP search buries /manga/one-piece/ under spinoffs.
+  assert.equal(exactSlugFor("One Piece"), "one-piece");
+  assert.equal(exactSlugFor("  Kaguya-sama: Love Is War "), "kaguya-sama-love-is-war");
+  assert.equal(exactSlugFor("ون بيس"), null);
+  assert.equal(exactSlugFor("ab"), null);
+  const op = { source: "mangalik" as const, id: "one-piece", title: "One Piece", cover: null };
+  const spin = { source: "mangalik" as const, id: "one-piece-academy", title: "One Piece Academy", cover: null };
+  assert.deepEqual(withExactSlugFirst([spin], op).map((c) => c.id), ["one-piece", "one-piece-academy"]);
+  assert.deepEqual(withExactSlugFirst([spin, op], op).map((c) => c.id), ["one-piece-academy", "one-piece"]);
+  assert.deepEqual(withExactSlugFirst([spin], null).map((c) => c.id), ["one-piece-academy"]);
 
   console.log("mangalik source tests passed");
 }

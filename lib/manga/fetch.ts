@@ -18,22 +18,70 @@ const DIRECT_TIMEOUTS = [5000, 8000] as const;
 // the same page at the same moment; both wait on the same browser trip.
 const webViewInflight = new Map<string, Promise<string | null>>();
 
+// ── per-host circuit breaker ─────────────────────────────────────────────────
+// The scraper WebView bus is SERIAL and shared with anime scraping. A source
+// that is down (mangawy's backend 500s, hijala behind an interactive Turnstile
+// the hidden WebView can never click — both 2026-11-13) would otherwise queue a
+// 28s browser job for every search/detail/match lookup, stalling the whole app.
+// After BREAKER_THRESHOLD consecutive WebView failures on a host, skip its
+// WebView fallback for BREAKER_COOLDOWN_MS. The cheap direct GET still runs
+// every time, and any success (direct or WebView) closes the breaker at once.
+const BREAKER_THRESHOLD = 2;
+const BREAKER_COOLDOWN_MS = 10 * 60_000;
+const hostFailures = new Map<string, { count: number; openUntil: number }>();
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** True while the host's WebView fallback is suspended. */
+export function isMangaHostDown(url: string): boolean {
+  const state = hostFailures.get(hostOf(url));
+  return !!state && state.openUntil > Date.now();
+}
+
+export function markHostOk(url: string): void {
+  hostFailures.delete(hostOf(url));
+}
+
+export function markHostFailed(url: string): void {
+  const host = hostOf(url);
+  const state = hostFailures.get(host) ?? { count: 0, openUntil: 0 };
+  state.count += 1;
+  if (state.count >= BREAKER_THRESHOLD) state.openUntil = Date.now() + BREAKER_COOLDOWN_MS;
+  hostFailures.set(host, state);
+}
+
+/** Test hook. */
+export function resetMangaHostBreaker(): void {
+  hostFailures.clear();
+}
+
 async function fetchViaWebView(url: string, marker: string, rawText = false): Promise<string | null> {
+  if (isMangaHostDown(url)) return null;
   const key = `${rawText}|${marker}|${url}`;
   const existing = webViewInflight.get(key);
   if (existing) return existing;
   const pending = (async () => {
+    let html: string | null = null;
     try {
       const result = (await enqueue({
         url,
         injectAfter: EXTRACT_RENDERED_HTML(marker, rawText, 27_000),
         timeoutMs: 28_000,
       })) as { html?: string } | null;
-      const html = result?.html;
-      return typeof html === "string" && html.length > 0 && !looksLikeCfChallenge(html) && (!marker || html.includes(marker)) ? html : null;
+      const raw = result?.html;
+      html = typeof raw === "string" && raw.length > 0 && !looksLikeCfChallenge(raw) && (!marker || raw.includes(marker)) ? raw : null;
+      return html;
     } catch {
       return null;
     } finally {
+      if (html) markHostOk(url);
+      else markHostFailed(url);
       webViewInflight.delete(key);
     }
   })();
@@ -53,7 +101,10 @@ export async function fetchMangaHtml(
   marker = "",
 ): Promise<string | null> {
   const direct = await fetchHtml(url, referer, DIRECT_TIMEOUTS);
-  if (direct && !looksLikeCfChallenge(direct) && (!marker || direct.includes(marker))) return direct;
+  if (direct && !looksLikeCfChallenge(direct) && (!marker || direct.includes(marker))) {
+    markHostOk(url);
+    return direct;
+  }
   return fetchViaWebView(url, marker);
 }
 
@@ -88,7 +139,10 @@ export async function fetchMangaRawText(url: string, referer?: string): Promise<
         // Read the body BEFORE clearing the timer — a stalled body read is
         // bounded by the same abort window.
         const text = await res.text();
-        if (text && !looksLikeCfChallenge(text)) return text;
+        if (text && !looksLikeCfChallenge(text)) {
+          markHostOk(url);
+          return text;
+        }
         break;
       }
       if (res.status === 404 || res.status === 410) return null;

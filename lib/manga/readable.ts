@@ -6,6 +6,7 @@
 // moves on to the other sources' copies of the same chapter number.
 
 import { fetchMangaChapter } from "./api";
+import { HIJALA_SITE, hijalaChapterUrl } from "./sources/hijala";
 import type { ChapterCopy, MangaReaderData } from "./types";
 
 /** The Referer each source's image host expects (hot-link protection). */
@@ -16,7 +17,7 @@ export function chapterImageReferer(copy: ChapterCopy): string {
     case "mangalik":
       return `https://lekmanga.site/manga/${encodeURIComponent(copy.mangaId)}/${encodeURIComponent(copy.id)}/`;
     case "hijala":
-      return `https://hijala.com/${encodeURIComponent(copy.id)}/`;
+      return hijalaChapterUrl(copy.mangaId, copy.id) ?? `${HIJALA_SITE}/`;
     default:
       return `https://mangawy.org/series/${encodeURIComponent(copy.mangaId)}/chapter/${encodeURIComponent(copy.id)}`;
   }

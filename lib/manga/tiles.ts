@@ -26,8 +26,10 @@
 // left|right 2–12 vs top|bottom 67–255 mean pixel diff, so _001 = left).
 
 /** Hosts whose tall strips are tiled (Photon / wsrv crops). */
-const TILE_HOST = /(^|\.)(hijala\.com|googleusercontent\.com|bp\.blogspot\.com)$/i;
-const PHOTON_HOST = /(^|\.)hijala\.com$/i;
+// hijala.org (2026-11 move): strips are still 1080x13652 etc.; Photon crops
+// its /hijala-cdn/ files exactly (verified 2026-11-13).
+const TILE_HOST = /(^|\.)(hijala\.(?:com|org)|googleusercontent\.com|bp\.blogspot\.com)$/i;
+const PHOTON_HOST = /(^|\.)hijala\.(?:com|org)$/i;
 
 /** Strips taller than this (height / width) are tiled. ~3.5 keeps ordinary
  * pages and short strips on the single-image path. */

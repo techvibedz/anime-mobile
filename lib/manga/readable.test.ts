@@ -28,7 +28,7 @@ async function main() {
   // Referers per source (moved out of the reader).
   assert.equal(chapterImageReferer(asq), asq.id);
   assert.equal(chapterImageReferer(lik), "https://lekmanga.site/manga/naruto/700/");
-  assert.equal(chapterImageReferer({ source: "hijala", mangaId: "x", id: "x-3" }), "https://hijala.com/x-3/");
+  assert.equal(chapterImageReferer({ source: "hijala", mangaId: "x", id: "3" }), "https://hijala.org/series/x/chapter-3");
   assert.equal(chapterImageReferer(wy), "https://mangawy.org/series/naruto/chapter/700");
 
   // Live primary: no alternates lookup, one probe pair.

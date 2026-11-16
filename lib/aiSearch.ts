@@ -16,7 +16,8 @@ export type AiSearchResult =
   | { ok: true; intent: string; items: AiSearchEntry[] }
   | { ok: false; reason: AiFailure | "empty" };
 
-const CACHE_PREFIX = "@ai_search_v1:";
+// v2: answers before the live-season grounding (2026-11) recommended 2024 shows.
+const CACHE_PREFIX = "@ai_search_v2:";
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 const mem = new Map<string, { at: number; intent: string; items: AiSearchEntry[] }>();
 

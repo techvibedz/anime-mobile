@@ -20,7 +20,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
 import { MangaPageImage } from "../../components/MangaPageImage";
-import { cachedImageSize, isTileHost, pageColumns, planPage, probeImageSize, type ImageSize, type PageLayout } from "../../lib/manga/tiles";
+import { cachedImageSize, isTileHost, pageColumns, parseImageSize, planPage, probeImageSize, type ImageSize, type PageLayout } from "../../lib/manga/tiles";
 import { normFuzzy } from "../../lib/fuzzy";
 import { chapterNumberKey } from "../../lib/manga/aggregate";
 import { useReducedMotion } from "../../lib/motion";
@@ -105,6 +105,37 @@ async function loadRatioCache(): Promise<void> {
   }
 }
 
+// Hosts that ignore Range (answer 200 with the whole file) — probing them
+// would download every page twice, so they fall back to measured heights.
+const rangeBlockedHosts = new Set<string>();
+const hostOf = (uri: string) => uri.match(/^https?:\/\/([^/]+)/i)?.[1]?.toLowerCase() ?? "";
+
+/** Header-only size probe (first 32 KB) that seeds the page's ratio. Skips
+ * hosts that don't honour Range. */
+async function probePageRatio(uri: string, headers: Record<string, string>): Promise<void> {
+  if (ratioCache.has(uri)) return;
+  const host = hostOf(uri);
+  if (!host || rangeBlockedHosts.has(host)) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(uri, { signal: controller.signal, headers: { ...headers, Range: "bytes=0-32767" } });
+    if (res.status !== 206) {
+      if (res.ok) rangeBlockedHosts.add(host);
+      return;
+    }
+    const size = parseImageSize(new Uint8Array(await res.arrayBuffer()).subarray(0, 32768));
+    if (size && !ratioCache.has(uri)) {
+      noteNaturalWidth(uri, size.width);
+      rememberRatio(uri, size.height / size.width);
+    }
+  } catch {
+    // network hiccup — the page measures itself when it renders
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function persistRatioCache(): void {
   const out: Record<string, number> = {};
   let count = 0;
@@ -115,10 +146,15 @@ function persistRatioCache(): void {
   void AsyncStorage.setItem(RATIOS_KEY, JSON.stringify(out)).catch(() => {});
 }
 
+// The continuous reader's getItemLayout reads ratioCache; it re-lays out when
+// a page's real ratio becomes known.
+const ratioListeners = new Set<() => void>();
+
 function rememberRatio(uri: string, ratio: number): void {
   if (!(ratio > 0) || ratioCache.get(uri) === ratio) return;
   if (ratio > 0.4 && ratio < 16) recentRatio = ratio;
   ratioCache.set(uri, ratio);
+  for (const listener of ratioListeners) listener();
   if (ratioCache.size > 4500) {
     const keys = ratioCache.keys();
     for (let i = 0; i < 1500; i++) {
@@ -435,6 +471,14 @@ function verticalDims(
     default:
       return { width: screenW, height: screenW * ratio, contentFit: "contain" };
   }
+}
+
+/** A continuous-mode page's box height — must match what VerticalPage draws. */
+function verticalPageHeight(uri: string, fallbackRatio: number, fit: FitMode, screenW: number, screenH: number, dpr: number): number {
+  const ratio = ratioCache.get(uri) ?? fallbackRatio;
+  return ratio > 0
+    ? verticalDims(fit, screenW, screenH, ratio, naturalWidthCache.get(uri) ?? 0, dpr).height
+    : screenW * 1.45;
 }
 
 // A fixed decode target avoids decoding again at every measured-height change.
@@ -949,6 +993,74 @@ export default function MangaReaderScreen() {
 
   // Stable identities so VirtualizedList cells don't re-render when only the
   // visible page index changes (progress ticks re-render this whole screen).
+  // Pages whose ratio isn't known yet are sized like the chapter's known pages
+  // (webtoon strips are all ~the same shape), not a generic 1.45.
+  const fallbackRatio = useMemo(() => {
+    if (!pages) return 0;
+    let sum = 0;
+    let n = 0;
+    for (const uri of pages) {
+      const r = ratioCache.get(uri);
+      if (r && r > 0.4 && r < 16) { sum += r; n++; }
+    }
+    return n ? sum / n : recentRatio;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pages, ratioTick]);
+  // Exact cumulative page offsets for getItemLayout. Without them the list's
+  // length was estimated from the few measured (often placeholder) cells, so
+  // a long fling ran into that provisional end and stopped dead.
+  const pageOffsets = useMemo(() => {
+    if (!pages) return [0];
+    const out = new Array<number>(pages.length + 1);
+    out[0] = 0;
+    for (let i = 0; i < pages.length; i++) {
+      out[i + 1] = out[i] + verticalPageHeight(pages[i], fallbackRatio, prefs.fit, width, height, dpr);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pages, fallbackRatio, prefs.fit, width, height, dpr, ratioTick]);
+  const getVerticalItemLayout = useCallback(
+    (_: unknown, i: number) => ({
+      length: (pageOffsets[i + 1] ?? 0) - (pageOffsets[i] ?? 0),
+      offset: pageOffsets[i] ?? 0,
+      index: i,
+    }),
+    [pageOffsets],
+  );
+
+  // Ratios that become known (probe / decode) re-lay out the list, batched.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const listener = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        setRatioTick((tick) => tick + 1);
+      }, 120);
+    };
+    ratioListeners.add(listener);
+    return () => {
+      ratioListeners.delete(listener);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  // Probe every page's size up front (header bytes only, 3 at a time) so the
+  // whole strip has its real length before the user flings through it.
+  useEffect(() => {
+    if (!pages || prefs.mode !== "vertical") return;
+    let alive = true;
+    const queue = pages.filter((uri) => pageColumns(uri).length === 1 && !ratioCache.has(uri));
+    const worker = async () => {
+      while (alive && queue.length) {
+        const uri = queue.shift()!;
+        await probePageRatio(uri, imageHeaders);
+      }
+    };
+    for (let i = 0; i < 3; i++) void worker();
+    return () => { alive = false; };
+  }, [pages, prefs.mode, imageHeaders]);
+
   const renderVerticalItem = useCallback(
     ({ item, index: page }: { item: string; index: number }) => (
       <VerticalPage
@@ -961,9 +1073,10 @@ export default function MangaReaderScreen() {
         fit={prefs.fit}
         dpr={dpr}
         ratioTick={ratioTick}
+        fallbackRatio={fallbackRatio}
       />
     ),
-    [imageHeaders, onPageDisplayed, width, height, prefs.fit, dpr, ratioTick],
+    [imageHeaders, onPageDisplayed, width, height, prefs.fit, dpr, ratioTick, fallbackRatio],
   );
   const maintainVisible = useMemo(() => ({ minIndexForVisible: 0 }), []);
 
@@ -1001,6 +1114,7 @@ export default function MangaReaderScreen() {
               extraData={ratioTick}
               keyExtractor={(uri, i) => `${i}:${uri}`}
               renderItem={renderVerticalItem}
+              getItemLayout={getVerticalItemLayout}
               onViewableItemsChanged={onViewableItemsChanged}
               viewabilityConfig={viewabilityConfig}
               // A page's height changes after its bitmap decodes (placeholder →
@@ -1676,12 +1790,13 @@ function PageGrid({ layout, pageUri, width, height, page, headers, dpr, onDispla
  * event (no `useImage` — holding a decoded full-res ref per windowed cell is
  * an OOM risk on mid-range devices), with the persisted ratio cache providing
  * the exact container before the bitmap arrives. */
-const VerticalPage = memo(function VerticalPage({ uri, page, headers, onDisplayed, screenWidth, screenHeight, fit, dpr, ratioTick }: {
+const VerticalPage = memo(function VerticalPage({ uri, page, headers, onDisplayed, screenWidth, screenHeight, fit, dpr, ratioTick, fallbackRatio }: {
   uri: string; page: number; headers: Record<string, string>; onDisplayed: (uri: string) => void;
-  screenWidth: number; screenHeight: number; fit: FitMode; dpr: number; ratioTick: number;
+  screenWidth: number; screenHeight: number; fit: FitMode; dpr: number; ratioTick: number; fallbackRatio: number;
 }) {
-  const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? recentRatio);
-  useEffect(() => { setRatio(ratioCache.get(uri) ?? recentRatio); }, [uri, ratioTick]);
+  // Same source of truth as the list's getItemLayout (verticalPageHeight).
+  const [ratio, setRatio] = useState(() => ratioCache.get(uri) ?? fallbackRatio);
+  useEffect(() => { setRatio(ratioCache.get(uri) ?? fallbackRatio); }, [uri, ratioTick, fallbackRatio]);
   // Giant strips (hijala) and split-column pages (`01_001` + `01_002`) are
   // probed for their real sizes, then drawn as a grid of full-density tiles
   // (lib/manga/tiles.ts) instead of one bitmap the GPU can't hold or two

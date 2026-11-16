@@ -542,7 +542,137 @@ function searchCacheKey(q: string): string {
     .slice(0, 300);
 }
 
-function searchSystemPrompt(today: string): string {
+/* ── Live season catalog (grounds "what's airing now" requests) ──────────
+   The models' training data stops around 2024, so "trending / airing now /
+   new" requests came back with 2023-24 shows. AniList's live season data is
+   injected into the search prompt so the model picks from what is actually
+   airing. Cached per isolate + in ai_search_cache (shared by cold isolates). */
+type Season = "WINTER" | "SPRING" | "SUMMER" | "FALL";
+const SEASONS: Season[] = ["WINTER", "SPRING", "SUMMER", "FALL"];
+const SEASON_AR: Record<Season, string> = { WINTER: "شتاء", SPRING: "ربيع", SUMMER: "صيف", FALL: "خريف" };
+
+function seasonAt(d: Date, offset = 0): { season: Season; year: number } {
+  const idx = Math.floor(d.getUTCMonth() / 3) + offset;
+  const year = d.getUTCFullYear() + Math.floor(idx / 4);
+  return { season: SEASONS[((idx % 4) + 4) % 4], year };
+}
+
+/** "FALL2026" — part of the search cache key so answers refresh each season. */
+function seasonTag(d = new Date()): string {
+  const s = seasonAt(d);
+  return `${s.season}${s.year}`;
+}
+
+const LIVE_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+const LIVE_CATALOG_KEY = "__live_catalog_v1__";
+let liveCatalogMem: { at: number; tag: string; text: string } | null = null;
+
+const LIVE_QUERY = `query($s:MediaSeason,$y:Int,$ns:MediaSeason,$ny:Int,$ps:MediaSeason,$py:Int,$yr:Int){
+cur:Page(perPage:40){media(type:ANIME,season:$s,seasonYear:$y,sort:POPULARITY_DESC,isAdult:false){...F}}
+trend:Page(perPage:25){media(type:ANIME,status:RELEASING,sort:TRENDING_DESC,isAdult:false){...F}}
+next:Page(perPage:20){media(type:ANIME,season:$ns,seasonYear:$ny,sort:POPULARITY_DESC,isAdult:false){...F}}
+prev:Page(perPage:25){media(type:ANIME,season:$ps,seasonYear:$py,sort:POPULARITY_DESC,isAdult:false){...F}}
+best:Page(perPage:30){media(type:ANIME,seasonYear:$yr,sort:SCORE_DESC,isAdult:false,popularity_greater:15000){...F}}
+}
+fragment F on Media{title{romaji english} format status episodes averageScore genres nextAiringEpisode{episode} startDate{year month}}`;
+
+function liveLine(m: any): string | null {
+  const romaji = String(m?.title?.romaji ?? "").trim();
+  const english = String(m?.title?.english ?? "").trim();
+  if (!romaji && !english) return null;
+  if (Array.isArray(m?.genres) && m.genres.includes("Hentai")) return null;
+  const name = english && english.toLowerCase() !== romaji.toLowerCase() ? `${romaji} / ${english}` : romaji || english;
+  const parts = [name, String(m?.format ?? "").replace("_", " ")];
+  const total = typeof m?.episodes === "number" ? m.episodes : null;
+  const next = typeof m?.nextAiringEpisode?.episode === "number" ? m.nextAiringEpisode.episode : null;
+  if (m?.status === "RELEASING") parts.push(`يُعرض الآن، الحلقة ${next ? next - 1 : "?"}${total ? "/" + total : ""}`);
+  else if (m?.status === "FINISHED") parts.push(`مكتمل${total ? " " + total + " حلقة" : ""}`);
+  else if (m?.status === "NOT_YET_RELEASED") {
+    const sd = m?.startDate;
+    parts.push(`لم يبدأ بعد${sd?.year ? ` (${sd.year}${sd.month ? "-" + String(sd.month).padStart(2, "0") : ""})` : ""}`);
+  }
+  if (typeof m?.averageScore === "number") parts.push(`${m.averageScore}%`);
+  if (Array.isArray(m?.genres) && m.genres.length) parts.push(m.genres.slice(0, 3).join(", "));
+  return "- " + parts.filter(Boolean).join(" | ");
+}
+
+async function buildLiveCatalog(now: Date): Promise<string | null> {
+  const cur = seasonAt(now), nxt = seasonAt(now, 1), prv = seasonAt(now, -1);
+  try {
+    const res = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        query: LIVE_QUERY,
+        variables: { s: cur.season, y: cur.year, ns: nxt.season, ny: nxt.year, ps: prv.season, py: prv.year, yr: cur.year },
+      }),
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json())?.data;
+    if (!data) return null;
+    const seen = new Set<string>();
+    const section = (label: string, list: any[] | undefined, max: number) => {
+      const lines: string[] = [];
+      for (const m of list ?? []) {
+        const k = String(m?.title?.romaji ?? m?.title?.english ?? "").toLowerCase();
+        if (!k || seen.has(k)) continue;
+        const line = liveLine(m);
+        if (!line) continue;
+        seen.add(k);
+        lines.push(line);
+        if (lines.length >= max) break;
+      }
+      return lines.length ? [label, ...lines, ""] : [];
+    };
+    const out = [
+      ...section(`الأكثر رواجًا الآن (Trending، يُعرض حاليًا):`, data.trend?.media, 25),
+      ...section(`أنميات موسم ${SEASON_AR[cur.season]} ${cur.year} (الموسم الحالي، الأشهر أولًا):`, data.cur?.media, 35),
+      ...section(`أنميات موسم ${SEASON_AR[prv.season]} ${prv.year} (الموسم الماضي):`, data.prev?.media, 20),
+      ...section(`الأعلى تقييمًا في ${cur.year}:`, data.best?.media, 20),
+      ...section(`قادم: موسم ${SEASON_AR[nxt.season]} ${nxt.year}:`, data.next?.media, 15),
+    ];
+    return out.length ? out.join("\n").trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getLiveCatalog(db: AIContext["db"]): Promise<string | null> {
+  const now = new Date();
+  const tag = seasonTag(now);
+  if (liveCatalogMem && liveCatalogMem.tag === tag && Date.now() - liveCatalogMem.at < LIVE_CATALOG_TTL_MS) {
+    return liveCatalogMem.text;
+  }
+  try {
+    const { data: hit } = await db
+      .from("ai_search_cache")
+      .select("payload, created_at")
+      .eq("query_key", LIVE_CATALOG_KEY)
+      .maybeSingle();
+    const p = hit?.payload as { tag?: string; text?: string } | undefined;
+    if (p?.text && p.tag === tag && Date.now() - Date.parse(hit!.created_at) < LIVE_CATALOG_TTL_MS) {
+      liveCatalogMem = { at: Date.parse(hit!.created_at), tag, text: p.text };
+      return p.text;
+    }
+  } catch (e) {
+    console.error("live catalog read failed", e);
+  }
+  const text = await buildLiveCatalog(now);
+  if (!text) return liveCatalogMem?.text ?? null;
+  liveCatalogMem = { at: Date.now(), tag, text };
+  const { error } = await db
+    .from("ai_search_cache")
+    .upsert({ query_key: LIVE_CATALOG_KEY, payload: { tag, text }, created_at: new Date().toISOString() });
+  if (error) console.error("live catalog write failed", error.message);
+  return text;
+}
+
+/** Requests about what's airing / new / trending — cached for a day, not a week. */
+const TIME_SENSITIVE_RE =
+  /حالي|حاليا|الحين|دابا|درك|ضرك|دلوقت|توا|هاد الموسم|هذا الموسم|الموسم|جديد|جدد|ترند|رائج|رايج|مشهور الان|مستمر|يعرض|تعرض|نازل|ينزل|قادم|الجاي|هذي السنه|هذه السنه|هاد العام|السنه|العام|202\d|trend|airing|current|new|latest|recent|this season|this year|upcoming|ongoing|popular now|actuel|nouveau|en cours|saison/i;
+
+function searchSystemPrompt(today: string, live: string | null): string {
   return [
     "أنت خبير ترشيحات أنمي دقيق. يصف المستخدم ما يريد مشاهدته بأي لهجة عربية (جزائرية، مغربية، مصرية، خليجية، شامية، فصحى) أو بالإنجليزية أو الفرنسية أو بحروف لاتينية.",
     "مهمتك: فهم طلبه بدقة واقتراح أعمال أنمي حقيقية تطابقه.",
@@ -557,7 +687,17 @@ function searchSystemPrompt(today: string): string {
     "- ممنوع تمامًا أي محتوى إباحي أو hentai أو ecchi صريح.",
     "- reason: سبب واحد قصير بالعربية (حتى 14 كلمة) يوضح لماذا يطابق الطلب، بلا حرق.",
     "- intent: إعادة صياغة قصيرة جدًا بالعربية لما فهمته (حتى 10 كلمات).",
-    `- تاريخ اليوم: ${today}.`,
+    `- تاريخ اليوم: ${today}. معرفتك المدمجة قديمة (تتوقف تقريبًا عند 2024)، فلا تعتبر أعمال 2023-2024 «جديدة» أو «حالية».`,
+    ...(live
+      ? [
+        "- إن طلب أنميات حالية/جديدة/رائجة/تُعرض الآن/هذا الموسم/هذه السنة/قادمة فاختر من «البيانات الحية» أدناه أولًا (هي الحقيقة الآن)، ورتّبها حسب الطلب، واكتب العنوان كما هو فيها (الجزء قبل /).",
+        "- لعمل مستمر في موسم جديد، اكتب عنوان الموسم الحالي كما يظهر في البيانات الحية.",
+        "- لغير ذلك من الطلبات رشّح من كل الحقب كالمعتاد، ويمكنك إضافة أعمال حديثة من البيانات الحية إن طابقت.",
+        "",
+        `البيانات الحية من AniList (محدّثة ${today}):`,
+        live,
+      ]
+      : []),
     "",
     "أجب بـ JSON فقط، بلا أي نص قبله أو بعده:",
     '{"intent":"...","results":[{"title":"...","reason":"..."}]}',
@@ -586,7 +726,12 @@ async function handleSearch(
   const exclude = page > 1 && Array.isArray(rawExclude)
     ? rawExclude.map((t) => cleanText(t, 120)).filter((t) => t.length >= 2).slice(0, 60)
     : [];
-  const key = page > 1 ? `${baseKey}|p${page}` : baseKey;
+  // Season-tagged so answers (incl. the stale pre-live-data ones) refresh
+  // every season; time-sensitive phrasings refresh daily.
+  const timeSensitive = TIME_SENSITIVE_RE.test(query);
+  const ttl = timeSensitive ? 24 * 60 * 60 * 1000 : SEARCH_TTL_MS;
+  const tagged = `${seasonTag()}|${baseKey}`;
+  const key = page > 1 ? `${tagged}|p${page}` : tagged;
 
   try {
     const { data: hit } = await ctx.db
@@ -594,7 +739,7 @@ async function handleSearch(
       .select("payload, created_at")
       .eq("query_key", key)
       .maybeSingle();
-    if (hit?.payload && Date.now() - Date.parse(hit.created_at) < SEARCH_TTL_MS) {
+    if (hit?.payload && Date.now() - Date.parse(hit.created_at) < ttl) {
       return json(200, { ok: true, cached: true, ...hit.payload });
     }
   } catch (e) {
@@ -603,8 +748,9 @@ async function handleSearch(
 
   if (isRateLimited(ctx.userId)) return err(429, "rate_limited");
 
+  const live = await getLiveCatalog(ctx.db);
   const answer = await raceModels(ctx.aiBase, ctx.aiKeys, ctx.models, [
-    { role: "system", content: searchSystemPrompt(today) },
+    { role: "system", content: searchSystemPrompt(today, live) },
     {
       role: "user",
       content: exclude.length

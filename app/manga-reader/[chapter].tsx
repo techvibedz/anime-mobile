@@ -274,7 +274,11 @@ function useZoomGestures({
   const pinch = useMemo(
     () =>
       Gesture.Pinch()
-        .blocksExternalGesture(scrollGesture as never)
+        // NOT blocksExternalGesture: a one-finger touch keeps the pinch
+        // undecided until lift, so a swipe landing mid-fling stopped the fling
+        // and its drag never reached the list. The list is frozen during a
+        // real pinch via scrollEnabled={!pinching} instead.
+        .simultaneousWithExternalGesture(scrollGesture as never)
         .onStart((event) => {
           cancelAnimation(scale);
           cancelAnimation(tx);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { isMangaHostDown, markHostFailed, markHostOk, resetMangaHostBreaker } from "./fetch";
+import { isMangaHostDown, markHostDead, markHostFailed, markHostOk, resetMangaHostBreaker } from "./fetch";
 
 // Per-host breaker: a dead source (hijala Turnstile, mangawy 500s) must stop
 // queueing 28s WebView jobs on the shared serial scraper bus.
@@ -17,5 +17,11 @@ markHostOk("https://hijala.com/");
 assert.equal(isMangaHostDown(a), false, "any success closes it");
 markHostFailed(a);
 assert.equal(isMangaHostDown(a), false, "success reset the count");
+// A site reporting its own backend failure opens the breaker immediately.
+resetMangaHostBreaker();
+markHostDead("https://mangawy.org/");
+assert.equal(isMangaHostDown("https://mangawy.org/series/x"), true, "dead backend opens at once");
+markHostOk("https://mangawy.org/");
+assert.equal(isMangaHostDown("https://mangawy.org/series/x"), false);
 console.log("manga fetch breaker OK");
 process.exit(0);

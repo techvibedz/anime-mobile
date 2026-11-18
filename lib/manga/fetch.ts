@@ -48,6 +48,11 @@ export function markHostOk(url: string): void {
   hostFailures.delete(hostOf(url));
 }
 
+/** Open the breaker at once — the site itself told us its backend is down. */
+export function markHostDead(url: string): void {
+  hostFailures.set(hostOf(url), { count: BREAKER_THRESHOLD, openUntil: Date.now() + BREAKER_COOLDOWN_MS });
+}
+
 export function markHostFailed(url: string): void {
   const host = hostOf(url);
   const state = hostFailures.get(host) ?? { count: 0, openUntil: 0 };
@@ -99,11 +104,18 @@ export async function fetchMangaHtml(
   url: string,
   referer?: string,
   marker = "",
+  /** Text the site renders when its OWN backend failed. The browser would load
+   * the same broken backend, so skip the 28s WebView trip and open the breaker. */
+  deadMarker?: string,
 ): Promise<string | null> {
   const direct = await fetchHtml(url, referer, DIRECT_TIMEOUTS);
   if (direct && !looksLikeCfChallenge(direct) && (!marker || direct.includes(marker))) {
     markHostOk(url);
     return direct;
+  }
+  if (direct && deadMarker && direct.includes(deadMarker)) {
+    markHostDead(url);
+    return null;
   }
   return fetchViaWebView(url, marker);
 }

@@ -15,6 +15,9 @@ import { withTimeout } from "../../requestCache";
 import { fetchMangaHtml, fetchMangaRawText } from "../fetch";
 
 const SITE = "https://mangawy.org";
+// mangawy's SSR shell prints this ("couldn't load the series") when its API is
+// down (500s, seen 2026-11-13 and again 2026-11-18): no browser render helps.
+export const MANGAWY_BACKEND_DOWN = "تعذر تحميل السلاسل";
 
 // ponytail: regex HTML parse — mangawy is Nuxt SSR, so home/detail/chapter all
 // ship in the first response; swap for a DOM parser only if the markup churns.
@@ -388,7 +391,7 @@ export const mangawySource: MangaSource = {
   label: "مانجاوي",
 
   async home(): Promise<MangaHome> {
-    const html = await fetchMangaHtml(`${SITE}/`, undefined, "series/");
+    const html = await fetchMangaHtml(`${SITE}/`, undefined, "series/", MANGAWY_BACKEND_DOWN);
     const home = html ? parseMangawyHome(html) : null;
     if (!home) throw new Error("mangawy: home fetch or parse failed");
     return home;

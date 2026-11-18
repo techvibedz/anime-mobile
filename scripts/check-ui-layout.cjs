@@ -124,9 +124,12 @@ for(width of [320,390,800]) {
   // Full-bleed hero: HERO_H (520) plus the status-bar inset it runs under.
   const slide=walk(hero).find(n=>n.props && n.props.width===width && n.props.height===520+24);
   assert.ok(slide,'hero must use the current viewport width, even after resize');
-  const episode=Episode({ep:{number:1,href:'preview'},byNum:[]});
+  // The grid computes the card width from the live window and passes it down.
+  const passed=Math.floor((width-theme.S.paddingContent*2-10)/2);
+  const episode=Episode({ep:{number:1,href:'preview'},byNum:[],width:passed});
   const cardWidth=style(episode).width;
-  assert.equal(cardWidth*2+10,width-theme.S.paddingContent*2,'two episode cards must fit the current content width');
+  assert.equal(cardWidth,passed,'episode card must use the width the grid passes');
+  assert.ok(cardWidth*2+10<=width-theme.S.paddingContent*2,'two episode cards must fit the current content width');
 }
 console.log('Android UI: real drawer logo, navigation, sizing, Back, live widths and title animation lifecycle passed');
 

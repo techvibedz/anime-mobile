@@ -58,11 +58,33 @@ interface ReaderPrefs {
   direction: ReaderDirection;
   rotation: RotationPref;
   fit: FitMode;
+  /** Auto-scroll speed level, 1 (slowest) … AUTO_LEVELS (fastest). */
+  autoSpeed: number;
 }
 
 const PREFS_KEY = "manga_reader_prefs_v2";
 const RATIOS_KEY = "manga_page_ratios_v1";
-const DEFAULT_PREFS: ReaderPrefs = { mode: "vertical", direction: "rtl", rotation: "auto", fit: "width" };
+const DEFAULT_PREFS: ReaderPrefs = { mode: "vertical", direction: "rtl", rotation: "auto", fit: "width", autoSpeed: 4 };
+
+// ── auto-scroll ──────────────────────────────────────────────────────────────
+// Continuous mode scrolls at AUTO_PX_PER_SEC[level-1] (dp/s); the paged modes
+// turn a page every AUTO_PAGE_SECONDS[level-1] seconds.
+const AUTO_PX_PER_SEC = [20, 35, 50, 70, 95, 125, 160, 200, 250, 320];
+const AUTO_PAGE_SECONDS = [14, 12, 10, 8.5, 7, 6, 5, 4, 3.2, 2.5];
+const AUTO_LEVELS = AUTO_PX_PER_SEC.length;
+
+/** Screen stays on while auto-scrolling (nobody touches the phone). Required
+ * lazily: an install whose binary lacks the native module must not crash. */
+function setKeepAwake(on: boolean): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const keepAwake = require("expo-keep-awake") as typeof import("expo-keep-awake");
+    if (on) void keepAwake.activateKeepAwakeAsync("manga-autoscroll").catch(() => {});
+    else void Promise.resolve(keepAwake.deactivateKeepAwake("manga-autoscroll")).catch(() => {});
+  } catch {
+    // native module missing on this build — the screen timeout still applies
+  }
+}
 
 const FIT_MODES: FitMode[] = ["width", "screen", "height", "stretch", "original", "smart"];
 
@@ -423,6 +445,7 @@ async function loadReaderPrefs(): Promise<ReaderPrefs> {
       direction: parsed.direction === "ltr" ? "ltr" : "rtl",
       rotation: parsed.rotation === "locked" ? "locked" : "auto",
       fit: FIT_MODES.includes(parsed.fit as FitMode) ? (parsed.fit as FitMode) : "width",
+      autoSpeed: typeof parsed.autoSpeed === "number" ? clamp(Math.round(parsed.autoSpeed), 1, AUTO_LEVELS) : DEFAULT_PREFS.autoSpeed,
     };
   } catch {
     return DEFAULT_PREFS;
@@ -567,6 +590,13 @@ export default function MangaReaderScreen() {
   const [ratioTick, setRatioTick] = useState(0);
   // Keep the next-chapter network request out of active drags and flings.
   const [scrolling, setScrolling] = useState(false);
+  // Auto-scroll: `autoOn` is the user's toggle; `autoPaused` their pause.
+  const [autoOn, setAutoOn] = useState(false);
+  const [autoPaused, setAutoPaused] = useState(false);
+  const [appActive, setAppActive] = useState(true);
+  // Latest list geometry from onScroll, plus the offset the auto-scroll loop
+  // last commanded (onScroll lags it by a frame or two).
+  const autoScrollRef = useRef({ offset: 0, expected: -1, contentH: 0, viewH: 0 });
 
   const verticalRef = useRef<FlatList<string>>(null);
   const pagedRef = useRef<FlatList<string>>(null);
@@ -931,6 +961,89 @@ export default function MangaReaderScreen() {
     [pages, prefs.mode, prefs.direction, reducedMotion, beginInteraction],
   );
 
+  // ── auto-scroll ────────────────────────────────────────────────────────────
+  const autoRunning =
+    autoOn && !autoPaused && appActive && !scrolling && !pinching && !listOpen && !jumpOpen && !!pages && prefsLoaded && progressReady;
+
+  const stopAuto = useCallback(() => {
+    setAutoOn(false);
+    setAutoPaused(false);
+  }, []);
+  const toggleAuto = useCallback(() => {
+    setAutoPaused(false);
+    autoScrollRef.current.expected = -1;
+    setAutoOn((on) => {
+      if (!on) setChrome(false);
+      return !on;
+    });
+  }, []);
+  const changeAutoSpeed = useCallback((delta: number) => {
+    setPrefs((p) => ({ ...p, autoSpeed: clamp(p.autoSpeed + delta, 1, AUTO_LEVELS) }));
+  }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => setAppActive(state === "active"));
+    return () => sub.remove();
+  }, []);
+
+  // A new chapter starts with auto-scroll off; the user re-arms it.
+  useEffect(() => {
+    setAutoOn(false);
+    setAutoPaused(false);
+  }, [chapterSource, chapterId]);
+
+  useEffect(() => {
+    if (!autoOn) return;
+    setKeepAwake(true);
+    return () => setKeepAwake(false);
+  }, [autoOn]);
+
+  // Continuous mode: per-frame scrollToOffset at the chosen speed.
+  useEffect(() => {
+    if (!autoRunning || prefs.mode !== "vertical") return;
+    const pxPerSec = AUTO_PX_PER_SEC[clamp(prefs.autoSpeed, 1, AUTO_LEVELS) - 1];
+    const st = autoScrollRef.current;
+    st.expected = -1;
+    let last = 0;
+    let raf = 0;
+    const frame = (ts: number) => {
+      const dt = last ? Math.min(ts - last, 64) / 1000 : 0;
+      last = ts;
+      // Trust our own commanded offset unless the list moved by itself (a page
+      // above re-measured and maintainVisibleContentPosition shifted it).
+      const base = st.expected >= 0 && Math.abs(st.offset - st.expected) < 40 ? st.expected : st.offset;
+      const next = base + pxPerSec * dt;
+      const max = st.contentH > 0 ? Math.max(0, st.contentH - st.viewH) : Infinity;
+      if (next >= max - 1) {
+        verticalRef.current?.scrollToOffset({ offset: max, animated: false });
+        setAutoOn(false);
+        setChrome(true);
+        return;
+      }
+      st.expected = next;
+      verticalRef.current?.scrollToOffset({ offset: next, animated: false });
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [autoRunning, prefs.mode, prefs.autoSpeed]);
+
+  // Paged modes: turn the page on a timer (restarts whenever the page changes).
+  useEffect(() => {
+    if (!autoRunning || prefs.mode === "vertical" || zoomed) return;
+    const seconds = AUTO_PAGE_SECONDS[clamp(prefs.autoSpeed, 1, AUTO_LEVELS) - 1];
+    const timer = setTimeout(() => {
+      const totalNow = pagesRef.current?.length ?? 0;
+      if (indexRef.current >= totalNow - 1) {
+        setAutoOn(false);
+        setChrome(true);
+        return;
+      }
+      jumpTo(indexRef.current + 1);
+    }, seconds * 1000);
+    return () => clearTimeout(timer);
+  }, [autoRunning, prefs.mode, prefs.autoSpeed, zoomed, index, jumpTo]);
+
   // ── chrome / taps ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!chrome || !pages || screenReader || listOpen || settingsOpen || jumpOpen) return;
@@ -950,6 +1063,13 @@ export default function MangaReaderScreen() {
   }, []);
 
   const hideChrome = useCallback(() => setChrome(false), []);
+  const onVerticalScroll = useCallback((event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const st = autoScrollRef.current;
+    st.offset = contentOffset.y;
+    st.contentH = contentSize.height;
+    st.viewH = layoutMeasurement.height;
+  }, []);
   const handleZoomChange = useCallback((on: boolean) => {
     setZoomed(on);
     if (on) setChrome(false);
@@ -1126,6 +1246,8 @@ export default function MangaReaderScreen() {
               // viewport shifts the raw offset and the reader visibly jumps
               // mid-scroll. RN keeps the first visible item pinned instead.
               maintainVisibleContentPosition={maintainVisible}
+              scrollEventThrottle={16}
+              onScroll={onVerticalScroll}
               onScrollBeginDrag={() => {
                 beginInteraction();
                 setChrome(false);
@@ -1304,6 +1426,15 @@ export default function MangaReaderScreen() {
             <Text style={s.topSub} numberOfLines={1}>الفصل {chapterNumber}</Text>
           </Pressable>
           <Pressable
+            style={[s.roundBtn, autoOn && s.roundBtnActive]}
+            onPress={toggleAuto}
+            accessibilityRole="button"
+            accessibilityLabel={autoOn ? t.mangaAutoScrollStop : t.mangaAutoScrollStart}
+            accessibilityState={{ selected: autoOn }}
+          >
+            <Ionicons name={autoOn ? "stop" : "play"} size={18} color={M.white} />
+          </Pressable>
+          <Pressable
             style={s.roundBtn}
             onPress={() => setSettingsOpen(true)}
             accessibilityRole="button"
@@ -1366,6 +1497,50 @@ export default function MangaReaderScreen() {
             <Ionicons name="chevron-back" size={18} color={M.white} />
             <Text style={s.toolLabel}>التالي</Text>
           </Pressable>
+        </View>
+      )}
+
+      {/* auto-scroll controls — visible while auto-scroll is armed */}
+      {autoOn && pages && (
+        <View
+          style={[s.autoPill, { bottom: chrome || screenReader ? insets.bottom + 96 : insets.bottom + 16 }]}
+          pointerEvents="box-none"
+        >
+          <View style={s.autoPillInner}>
+            <Pressable style={s.autoPillBtn} onPress={stopAuto} hitSlop={4} accessibilityRole="button" accessibilityLabel={t.mangaAutoScrollStop}>
+              <Ionicons name="close" size={18} color={M.nightMuted} />
+            </Pressable>
+            <Pressable
+              style={[s.autoPillBtn, prefs.autoSpeed <= 1 && s.roundBtnDim]}
+              disabled={prefs.autoSpeed <= 1}
+              onPress={() => changeAutoSpeed(-1)}
+              hitSlop={4}
+              accessibilityRole="button"
+              accessibilityLabel={t.mangaAutoSlower}
+            >
+              <Ionicons name="remove" size={20} color={M.white} />
+            </Pressable>
+            <Text style={s.autoPillSpeed} accessibilityLabel={`${t.mangaAutoSpeed} ${prefs.autoSpeed}`}>{`×${prefs.autoSpeed}`}</Text>
+            <Pressable
+              style={[s.autoPillBtn, prefs.autoSpeed >= AUTO_LEVELS && s.roundBtnDim]}
+              disabled={prefs.autoSpeed >= AUTO_LEVELS}
+              onPress={() => changeAutoSpeed(1)}
+              hitSlop={4}
+              accessibilityRole="button"
+              accessibilityLabel={t.mangaAutoFaster}
+            >
+              <Ionicons name="add" size={20} color={M.white} />
+            </Pressable>
+            <Pressable
+              style={[s.autoPillBtn, s.autoPillPlay]}
+              onPress={() => setAutoPaused((p) => !p)}
+              hitSlop={4}
+              accessibilityRole="button"
+              accessibilityLabel={autoPaused ? t.mangaAutoResume : t.mangaAutoPause}
+            >
+              <Ionicons name={autoPaused ? "play" : "pause"} size={18} color={M.white} />
+            </Pressable>
+          </View>
         </View>
       )}
 
@@ -1511,6 +1686,50 @@ export default function MangaReaderScreen() {
                 label={t.mangaRotationLocked}
                 active={prefs.rotation === "locked"}
                 onPress={() => setPrefs((p) => ({ ...p, rotation: "locked" }))}
+              />
+            </SettingBlock>
+
+            <SettingBlock label={t.mangaAutoSpeed}>
+              <View style={s.speedRow}>
+                <Pressable
+                  style={[s.speedBtn, prefs.autoSpeed <= 1 && s.roundBtnDim]}
+                  disabled={prefs.autoSpeed <= 1}
+                  onPress={() => changeAutoSpeed(-1)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.mangaAutoSlower}
+                >
+                  <Ionicons name="remove" size={20} color={M.ink} />
+                </Pressable>
+                <View style={s.speedBars}>
+                  {Array.from({ length: AUTO_LEVELS }, (_, i) => (
+                    <Pressable
+                      key={i}
+                      onPress={() => setPrefs((p) => ({ ...p, autoSpeed: i + 1 }))}
+                      hitSlop={{ top: 12, bottom: 12 }}
+                      style={[s.speedBar, { height: 10 + i * 2.6 }, i + 1 <= prefs.autoSpeed && s.speedBarOn]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${t.mangaAutoSpeed} ${i + 1}`}
+                    />
+                  ))}
+                </View>
+                <Pressable
+                  style={[s.speedBtn, prefs.autoSpeed >= AUTO_LEVELS && s.roundBtnDim]}
+                  disabled={prefs.autoSpeed >= AUTO_LEVELS}
+                  onPress={() => changeAutoSpeed(1)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.mangaAutoFaster}
+                >
+                  <Ionicons name="add" size={20} color={M.ink} />
+                </Pressable>
+              </View>
+              <ChoiceChip
+                label={autoOn ? t.mangaAutoScrollStop : t.mangaAutoScrollStart}
+                icon={autoOn ? "stop" : "play"}
+                active={autoOn}
+                onPress={() => {
+                  toggleAuto();
+                  setSettingsOpen(false);
+                }}
               />
             </SettingBlock>
 
@@ -1990,6 +2209,17 @@ const s = StyleSheet.create({
   topProgressFill: { height: 3, backgroundColor: M.nightAccent },
   roundBtn: { minWidth: 48, minHeight: 48, borderRadius: 4, alignItems: "center", justifyContent: "center", backgroundColor: M.nightPanel },
   roundBtnDim: { opacity: 0.35 },
+  roundBtnActive: { backgroundColor: M.accent },
+  autoPill: { position: "absolute", left: 0, right: 0, alignItems: "center" },
+  autoPillInner: { direction: "ltr", flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingVertical: 6, borderRadius: 28, backgroundColor: "rgba(12,13,18,0.88)", borderWidth: 1, borderColor: M.nightLine },
+  autoPillBtn: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", marginHorizontal: 2 },
+  autoPillPlay: { backgroundColor: M.accent, marginLeft: 6 },
+  autoPillSpeed: { ...MT.number, minWidth: 40, textAlign: "center", color: M.nightAccent },
+  speedRow: { direction: "ltr", width: "100%", flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  speedBtn: { width: 48, height: 48, borderRadius: 4, alignItems: "center", justifyContent: "center", backgroundColor: M.sheet, borderWidth: 1, borderColor: M.line },
+  speedBars: { flex: 1, flexDirection: "row", alignItems: "flex-end", justifyContent: "center", marginHorizontal: 12 },
+  speedBar: { width: 14, marginHorizontal: 3, borderRadius: 2, backgroundColor: M.line },
+  speedBarOn: { backgroundColor: M.accent },
   bottomBar: { position: "absolute", bottom: 0, left: 0, right: 0, flexDirection: "row-reverse", alignItems: "stretch", justifyContent: "space-between", gap: 6, paddingHorizontal: 12, paddingTop: 12, backgroundColor: M.night, borderTopWidth: 1, borderColor: M.nightLine },
   toolBtn: { flex: 1, minWidth: 48, minHeight: 56, borderRadius: 4, alignItems: "center", justifyContent: "center", backgroundColor: M.nightPanel },
   toolLabel: { ...MT.caption, fontSize: 11, color: M.nightMuted },

@@ -764,6 +764,8 @@ export const ar = {
   // Crowd server health
   healthFastest: "الأسرع الآن",
   healthUnstable: "غير مستقر الآن",
+  // Measured on this connection (lib/linkSpeed): can't keep up with the video.
+  serverSlowLink: "بطيء على شبكتك",
   healthWorks: (pct: number) => `يعمل ${pct}%`,
   // Settings
   settingsSkipFiller: "المحتوى الأصلي فقط",

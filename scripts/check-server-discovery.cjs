@@ -246,6 +246,8 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
     useCallback: (fn) => fn, loadGenerationRef: { current: guard },
     _cancelBackground: () => {}, stopPrefetch: () => {}, selectServer: (idx) => { selected = idx; },
     setPicked: (value) => { picked = value; }, setNoServersFinal: () => {},
+    // Link-speed guard (lib/linkSpeed): no readings here, nothing is slow.
+    servers: [], isSlowServer: () => false, manualSlowPickRef: { current: null },
   });
   vm.runInContext(ts.transpileModule('const ' + pick + '; pickServer(0);', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },

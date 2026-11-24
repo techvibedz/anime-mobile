@@ -263,7 +263,8 @@ test("warmup validates only the three best native candidates", () => {
     { name: "Wish", provider: "streamwish", iframeUrl: "https://hgcloud.to/e/1" },
     { name: "Anime3rb", provider: "vid3rb", iframeUrl: "https://vid3rb.com/player/1" },
   ]);
-  assert.deepEqual(warmup.map((server) => server.provider), ["vid3rb", "mp4upload", "streamwish"]);
+  // One per provider, in rank order (generic is not a direct provider).
+  assert.deepEqual(warmup.map((server) => server.provider), ["vid3rb", "mp4upload", "streamwish", "voe"]);
 });
 
 test("merges all usable providers and deduplicates equivalent embeds", () => {

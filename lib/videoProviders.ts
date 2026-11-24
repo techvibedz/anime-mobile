@@ -204,8 +204,25 @@ export function sortVideoServers<T extends { name: string; provider: string }>(s
     providerRank(a.provider) - providerRank(b.provider) || qualityScore(b.name) - qualityScore(a.name));
 }
 
-export function selectWarmupServers<T extends { name: string; provider: string }>(servers: T[], limit = 3): T[] {
-  return sortVideoServers(servers.filter((server) => isDirectProvider(server.provider))).slice(0, limit);
+export function selectWarmupServers<T extends { name: string; provider: string }>(servers: T[], limit = 5): T[] {
+  // One server per provider before a second quality of the same one: the
+  // three vid3rb qualities share ONE file box, so warming all three said
+  // nothing new when that box's route crawled, and the first alternative was
+  // only resolved (and speed-measured) after the user sat through it.
+  const sorted = sortVideoServers(servers.filter((server) => isDirectProvider(server.provider)));
+  const picked: T[] = [];
+  const seenProviders = new Set<string>();
+  for (const server of sorted) {
+    if (picked.length >= limit) break;
+    if (seenProviders.has(server.provider)) continue;
+    seenProviders.add(server.provider);
+    picked.push(server);
+  }
+  for (const server of sorted) {
+    if (picked.length >= limit) break;
+    if (!picked.includes(server)) picked.push(server);
+  }
+  return picked;
 }
 
 export function selectServerCandidates<T extends { provider: string }>(servers: readonly T[]): T[] {

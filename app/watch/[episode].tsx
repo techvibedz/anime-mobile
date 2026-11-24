@@ -66,6 +66,7 @@ import { useAuth } from "../../lib/auth";
 import { useWatchPartySync, createRoom } from "../../lib/watchParty";
 import { C, R, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
+import { subscribeSpeed, groupHosts, groupKey, serverVerdict, isMeasuring } from "../../lib/linkSpeed";
 import { useReducedMotion } from "../../lib/motion";
 import {
   witanimeGateSource,
@@ -400,6 +401,13 @@ export default function WatchScreen() {
   }, []);
   // Picker order mirror, readable from the failover effect (declared earlier).
   const orderedRef = useRef<{ s: ServerState; orig: number }[]>([]);
+  // Measured link speed per stream (lib/linkSpeed); bumped on every reading so
+  // the picker re-ranks crawling hosts last.
+  const [speedTick, setSpeedTick] = useState(0);
+  useEffect(() => subscribeSpeed(() => setSpeedTick((n) => n + 1)), []);
+  // A server the user tapped while it was already labeled slow is theirs to
+  // wait on — never switched away for speed.
+  const manualSlowPickRef = useRef<string | null>(null);
   // One server attempt = one health report (ok + time-to-first-frame, or fail).
   const attemptRef = useRef<{
     id: string; source?: string; provider?: string; t0: number; done: boolean; n: number;
@@ -852,6 +860,37 @@ export default function WatchScreen() {
         i === idx ? { ...s, status: failStatus(p[idx]?.server.provider), videoUrl: null } : s));
     };
 
+    // Link-speed guard (lib/linkSpeed): this server was measured unable to
+    // sustain its bitrate and a server not known to be slow is available.
+    // Waiting out the 14s+3×8s startup extensions and in-place heals on a
+    // crawling host is what made "servers don't work"; switch instead.
+    // orderedRef is refreshed every render, so it sees readings that landed
+    // after this effect started.
+    const startedAt = Date.now();
+    let loadingSince = 0;
+    const linkTooSlow = (): boolean => {
+      const rows = orderedRef.current;
+      const cur = rows.find((x) => x.orig === idx)?.s;
+      if (!cur || manualSlowPickRef.current === cur.server.iframeUrl) return false;
+      const hosts = groupHosts(rows.map((x) => x.s.server));
+      const slow = (st: ServerState) => serverVerdict({ ...st.server, videoUrl: st.videoUrl }, hosts.get(groupKey(st.server))) === "slow";
+      if (!slow(cur)) return false;
+      return rows.some((x) => x.orig !== idx && x.s.status !== "failed" && !slow(x.s));
+    };
+    const switchForSpeed = (why: string) => {
+      if (cancelled) return;
+      cancelled = true;
+      void remoteLog("info", "video", "link too slow — switching server", { provider: prov, why });
+      const handoffMs = Math.max(lastPosMs, playbackPositionMsRef.current);
+      if (handoffMs > 0) {
+        pendingSeekRef.current = handoffMs;
+        setServerStartPositionMs(handoffMs);
+      }
+      // "failed" (not the provider's webview fallback): the embed would play
+      // from the same crawling host.
+      setServers((p) => p.map((s, i) => i === idx ? { ...s, status: "failed", videoUrl: null } : s));
+    };
+
     const heal = async () => {
       if (healing || cancelled) return;
       healing = true;
@@ -932,6 +971,15 @@ export default function WatchScreen() {
           }
         } catch {}
         try {
+          const st = player.status as string;
+          if (hasStarted && st === "loading") {
+            if (!loadingSince) loadingSince = Date.now();
+            else if (Date.now() - loadingSince > 6000 && linkTooSlow()) { switchForSpeed("rebuffering"); return; }
+          } else {
+            loadingSince = 0;
+          }
+        } catch {}
+        try {
           if ((player.status as string) === "error") {
             if (!errorSince) errorSince = Date.now();
             else if (Date.now() - errorSince >= 1500) { errorSince = 0; void heal(); }
@@ -954,6 +1002,7 @@ export default function WatchScreen() {
       // producing bytes — keep pushing the deadline out or the watchdog would
       // "heal" a healthy held stream and churn through every server.
       if (waitingForHostRef.current) { graceUntil = Date.now() + failMs; return; }
+      if (Date.now() - startedAt > 5000 && linkTooSlow()) { switchForSpeed("startup"); return; }
       if (Date.now() < graceUntil) return;
       try {
         // Keep waiting while the player is loading. bufferedPosition is NOT a
@@ -1577,6 +1626,14 @@ export default function WatchScreen() {
     }
   }, [servers, activeIdx, picked, prepareServerHandoff]);
 
+  // Measured too slow on this connection (lib/linkSpeed), directly or via
+  // its host's reading.
+  const isSlowServer = useCallback((s: ServerState) => {
+    const hosts = groupHosts(servers.map((x) => x.server));
+    return serverVerdict({ ...s.server, videoUrl: s.videoUrl }, hosts.get(groupKey(s.server))) === "slow";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [servers, speedTick]);
+
   const selectServer = useCallback((idx: number) => {
     if (idx !== activeIdx) prepareServerHandoff();
     // A failed server gets a fresh chance when the user explicitly taps it —
@@ -1591,18 +1648,22 @@ export default function WatchScreen() {
 
   // Pick a server from the selection layout → resolve + play it directly.
   const pickServer = useCallback((idx: number) => {
+    const tapped = servers[idx];
+    manualSlowPickRef.current = tapped && isSlowServer(tapped) ? tapped.server.iframeUrl : null;
     // Release the picker's warm-up download first — vid3rb answers 503 to a
     // second concurrent connection, and the cached bytes are what we want.
     stopPrefetch();
     _cancelBackground();
     selectServer(idx);
     setPicked(true);
-  }, [selectServer]);
+  }, [selectServer, servers, isSlowServer]);
 
   // Servers ordered for the selection layout: anime3rb (recommended) first,
   // then by quality FHD → HD → SD, with provider rank as a final tiebreak.
   // `orig` keeps the index into `servers` so a tap maps back to the right one.
   const orderedServers = useMemo(() => {
+    const speedHosts = groupHosts(servers.map((x) => x.server));
+    const speedOf = (s: ServerState) => serverVerdict({ ...s.server, videoUrl: s.videoUrl }, speedHosts.get(groupKey(s.server)));
     const live = (s: ServerState) => !isKnownDeadEmbed(getIframeUrl(s.server));
     // Embed-only (WebView) servers are a last resort: offered only when no
     // native-player server exists for this episode.
@@ -1617,11 +1678,21 @@ export default function WatchScreen() {
       // Deleted uploads (proven dead during validation) are never offered.
       .filter(({ s }) => live(s) && (!hasNative || !isEmbedOnly(s)))
       .sort((a, b) => {
+        // Measured on THIS connection unable to sustain its bitrate (or on a
+        // host that crawled for a sibling) → after everything else, even the
+        // pinned anime3rb: a recommended server that can't play isn't one.
+        const sa = speedOf(a.s) === "slow" ? 1 : 0;
+        const sb = speedOf(b.s) === "slow" ? 1 : 0;
+        if (sa !== sb) return sa - sb;
         if (!a3rbUnstable) {
           const ra = a.s.server.source === "anime3rb" ? 0 : 1;
           const rb = b.s.server.source === "anime3rb" ? 0 : 1;
           if (ra !== rb) return ra - rb;
         }
+        // Proven to keep up → ahead of unmeasured ones.
+        const fa = speedOf(a.s) === "fast" ? 0 : 1;
+        const fb = speedOf(b.s) === "fast" ? 0 : 1;
+        if (fa !== fb) return fa - fb;
         // Crowd says this host is failing today → bottom of its group.
         const ua = healthTier(statOf(a.s)) === "unstable" ? 1 : 0;
         const ub = healthTier(statOf(b.s)) === "unstable" ? 1 : 0;
@@ -1646,7 +1717,7 @@ export default function WatchScreen() {
         const pb = providerRank(b.s.server.provider);
         return pa - pb;
       });
-  }, [servers, serverHealth]);
+  }, [servers, serverHealth, speedTick]);
 
   orderedRef.current = orderedServers;
 
@@ -1659,8 +1730,11 @@ export default function WatchScreen() {
   // While the picker is open, warm the recommended (top anime3rb) stream into
   // the disk cache so tapping it starts at once — a long movie's MP4 index
   // alone is ~9 MB on vid3rb's throttled CDN.
+  // Held while the stream's speed probe runs (vid3rb 503s a second connection
+  // to the same file) and never spent on a server measured too slow.
   const warmPickUrl = !picked
-    ? orderedServers.find(({ s }) => s.server.source === "anime3rb" && s.videoUrl)?.s
+    ? orderedServers.find(({ s }) => s.server.source === "anime3rb" && s.videoUrl
+        && !isMeasuring(s.server.iframeUrl) && !isSlowServer(s))?.s
     : undefined;
   useEffect(() => {
     if (!warmPickUrl?.videoUrl || !focusedRef.current) return;
@@ -2795,6 +2869,13 @@ export default function WatchScreen() {
   // Crowd health chip: "fastest now" (one server), "unstable now", or the
   // live success rate once enough devices have tried this host today.
   const renderHealthBadge = (s: ServerState) => {
+    if (isSlowServer(s)) {
+      return (
+        <View style={[ss.healthBadge, ss.healthBadgeBad]} accessibilityLabel={t.serverSlowLink}>
+          <Text style={[ss.healthBadgeText, { color: C.gold }]}>🐢 {t.serverSlowLink}</Text>
+        </View>
+      );
+    }
     const key = healthKey(s.server.source, s.server.provider);
     const stat = serverHealth.get(key);
     const tier = healthTier(stat);
@@ -2876,10 +2957,11 @@ export default function WatchScreen() {
   // at the top, then the rest, each group ordered by quality (FHD → HD → SD).
   // Picking one resolves + plays it directly.
   if (!picked) {
-    const recRows = orderedServers.filter((x) => x.s.server.source === "anime3rb");
-    const otherRows = orderedServers.filter((x) => x.s.server.source !== "anime3rb");
+    const isRec = (x: { s: ServerState }) => x.s.server.source === "anime3rb" && !isSlowServer(x.s);
+    const recRows = orderedServers.filter(isRec);
+    const otherRows = orderedServers.filter((x) => !isRec(x));
     const renderRow = ({ s, orig }: { s: ServerState; orig: number }) => {
-      const recommended = s.server.source === "anime3rb";
+      const recommended = isRec({ s });
       const q = qualityLabel(s.server.name);
       const initial = (getDisplayName(s.server).charAt(0) || "S").toUpperCase();
       return (

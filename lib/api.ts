@@ -71,6 +71,7 @@ import { readCloudHome, writeCloudHome } from "./homeCloudCache";
 import { loadWitanimeHome, mergeRecentEpisodes } from "./homeSourceSelection";
 import { filterFinishedEpisodes } from "./airing";
 import { remoteLog } from "./remoteLog";
+import { measureServerSpeed, recordUnresponsive } from "./linkSpeed";
 import { cleanSynopsis } from "./animeDetail";
 import { createRequestCache, withTimeout } from "./requestCache";
 import {
@@ -1597,11 +1598,18 @@ async function resolveDirectServerUrl(
   );
   const videoUrl = result.success ? result.data?.videoUrl || null : null;
   if (!videoUrl) return null;
-  const reachable = await probeMediaUrl(
-    videoUrl,
-    videoPlaybackHeaders(videoUrl, server.iframeUrl, server.provider),
-  );
-  return reachable ? videoUrl : null;
+  const headers = videoPlaybackHeaders(videoUrl, server.iframeUrl, server.provider);
+  const reachable = await probeMediaUrl(videoUrl, headers);
+  if (!reachable) {
+    recordUnresponsive(server.iframeUrl);
+    return null;
+  }
+  // Reachable isn't playable: measure what the link really delivers so the
+  // picker ranks a crawling host last. Started BEFORE the playable broadcast
+  // so the screen sees it in flight and holds its vid3rb prefetch (a second
+  // connection to the same file gets a 503) until the probe ends.
+  void measureServerSpeed(server, videoUrl, headers);
+  return videoUrl;
 }
 
 /** Discover every applicable source concurrently and return one complete,

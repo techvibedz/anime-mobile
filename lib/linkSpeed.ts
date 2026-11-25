@@ -53,11 +53,26 @@ function qualityOf(name: string): number {
   return 0;
 }
 
+// Runtime of the episode being watched, for turning a file's size into its
+// bitrate: the player sets it from saved progress / the player once known.
+const DEFAULT_DURATION_SEC = 24 * 60;
+let expectedDurationSec = DEFAULT_DURATION_SEC;
+export function setExpectedDurationSec(sec: number | null | undefined): void {
+  expectedDurationSec = sec && Number.isFinite(sec) && sec > 60 ? sec : DEFAULT_DURATION_SEC;
+}
+
 /** KB/s a progressive file needs. vid3rb signs `speed=` = 2.4× the file's
- * average bitrate into its URL (720p speed=189 ↔ 110.7MB / 23.5min). */
-export function progressiveNeedKbps(name: string, videoUrl: string): number {
+ * average bitrate into its URL (720p speed=189 ↔ 110.7MB / 23.5min).
+ * Otherwise file size ÷ runtime is the real average bitrate — the quality
+ * label lies (desktop 2026-11-25: an mp4upload "FHD" file was 465MB for
+ * 24 min = 323KB/s, not the 180 guessed from "FHD"; a 238KB/s link was ranked
+ * fast and stalled every few seconds). The label is the last resort. */
+export function progressiveNeedKbps(name: string, videoUrl: string, totalBytes = 0): number {
   const speed = /[?&]speed=(\d+)/.exec(videoUrl);
   if (speed && /vid3rb\.com/i.test(videoUrl)) return Math.max(20, Math.round(Number(speed[1]) / 2.4));
+  if (totalBytes > 8_000_000) {
+    return Math.min(2500, Math.max(30, Math.round(totalBytes / 1024 / expectedDurationSec)));
+  }
   const q = qualityOf(name);
   if (q >= 1080) return 180;
   if (q >= 720) return 90;
@@ -72,6 +87,24 @@ function fresh(s: SpeedSample | undefined): s is SpeedSample {
 export function verdictOf(sample: SpeedSample | null | undefined): SpeedVerdict | null {
   if (!sample || sample.kbps < 0 || sample.needKbps <= 0) return null;
   return sample.kbps >= sample.needKbps * SPEED_HEADROOM ? "fast" : "slow";
+}
+
+/** Graded headroom (desktop parity): pass/fail let a 52KB/s anime3rb file at
+ * 2× its bitrate outrank a 1.9MB/s anime4up stream at 20×. great ≥3×,
+ * good ≥2×, ok ≥1.3×. */
+export type SpeedTier = "great" | "good" | "ok" | "slow";
+export function tierOf(sample: SpeedSample | null | undefined): SpeedTier | null {
+  if (!sample || sample.kbps < 0 || sample.needKbps <= 0) return null;
+  const ratio = sample.kbps / sample.needKbps;
+  if (ratio >= 3) return "great";
+  if (ratio >= 2) return "good";
+  if (ratio >= SPEED_HEADROOM) return "ok";
+  return "slow";
+}
+
+/** Sort key: proven headroom first, unmeasured in the middle, slow last. */
+export function tierRank(tier: SpeedTier | null): number {
+  return tier === "great" ? 0 : tier === "good" ? 1 : tier === "ok" ? 2 : tier === "slow" ? 4 : 3;
 }
 
 export function speedSampleFor(iframeUrl: string): SpeedSample | null {
@@ -102,6 +135,14 @@ export function recordUnresponsive(iframeUrl: string): void {
   recordSpeed(iframeUrl, { kbps: 0, needKbps: 1, host: "" });
 }
 
+/** Playback itself proved this stream can't keep up (it kept rebuffering).
+ * That beats any probe — a probe sees a connection's opening seconds,
+ * playback the sustained rate. No host: siblings can live on other boxes. */
+export function markPlaybackSlow(iframeUrl: string, needKbps = 1): void {
+  const need = Math.max(1, needKbps);
+  recordSpeed(iframeUrl, { kbps: Math.round(need * 0.9), needKbps: need, host: "" });
+}
+
 /** Media host of the first measured server in each source+provider group —
  * an episode's servers from one provider share a CDN box (vid3rb: all three
  * qualities on the same files-N host). */
@@ -129,14 +170,24 @@ export function serverVerdict(
   server: { name: string; iframeUrl: string; provider: string; videoUrl?: string | null },
   groupHost?: string | null,
 ): SpeedVerdict | null {
+  const tier = serverTier(server, groupHost);
+  return tier == null ? null : tier === "slow" ? "slow" : "fast";
+}
+
+/** Graded counterpart of serverVerdict, same host inheritance. An inherited
+ * reading never vouches for more than "ok": the sibling's file is unproven. */
+export function serverTier(
+  server: { name: string; iframeUrl: string; provider: string; videoUrl?: string | null },
+  groupHost?: string | null,
+): SpeedTier | null {
   const own = speedSampleFor(server.iframeUrl);
-  if (own) return verdictOf(own);
+  if (own) return tierOf(own);
   const host = groupHost ? hostSample(groupHost) : null;
   if (!host) return null;
-  const hostVerdict = verdictOf(host);
-  if (hostVerdict !== "fast") return hostVerdict;
-  if (server.provider !== "vid3rb" && !server.videoUrl) return hostVerdict;
-  return verdictOf({ ...host, needKbps: progressiveNeedKbps(server.name, server.videoUrl || "") });
+  const hostTier = tierOf(host);
+  if (hostTier == null || hostTier === "slow") return hostTier;
+  if (server.provider !== "vid3rb" && !server.videoUrl) return "ok";
+  return tierOf({ ...host, needKbps: progressiveNeedKbps(server.name, server.videoUrl || "") }) === "slow" ? "slow" : "ok";
 }
 
 // ── Measurement ──────────────────────────────────────────────────────────────
@@ -168,7 +219,7 @@ async function readRate(reader: Reader, deadline: number): Promise<{ bytes: numb
   return { bytes, kbps: Math.round(steady / 1024) };
 }
 
-type Probe = { kbps: number; needKbps: number; host: string; hls?: boolean } | null;
+type Probe = { kbps: number; needKbps: number; host: string; hls?: boolean; totalBytes?: number } | null;
 
 const hostOf = (u: string) => { try { return new URL(u).host; } catch { return ""; } };
 
@@ -198,8 +249,10 @@ export async function probeThroughput(
     const ctype = (first.headers.get("content-type") || "").toLowerCase();
     if (!isHls && !/mpegurl/.test(ctype)) {
       if (!first.body) return null;
+      // Full file size (Content-Range total) → real bitrate, not the label.
+      const total = Number(/\/(\d+)\s*$/.exec(first.headers.get("content-range") || "")?.[1] || 0);
       const { kbps } = await readRate(first.body.getReader() as unknown as Reader, deadline);
-      return { kbps, needKbps: 0, host: lastHost };
+      return { kbps, needKbps: 0, host: lastHost, totalBytes: total };
     }
     let text = await first.text();
     let needKbps = 0;
@@ -277,7 +330,7 @@ export function measureServerSpeed(
   const p = withProbeSlot(() => probe(videoUrl, headers, isHls))
     .then((r) => {
       if (!r) return null;
-      const needKbps = r.hls ? (r.needKbps || 90) : progressiveNeedKbps(server.name, videoUrl);
+      const needKbps = r.hls ? (r.needKbps || 90) : progressiveNeedKbps(server.name, videoUrl, r.totalBytes || 0);
       return recordSpeed(server.iframeUrl, { kbps: r.kbps, needKbps, host: r.host });
     })
     .catch(() => null)

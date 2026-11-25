@@ -64,7 +64,7 @@ import { useAuth } from "../../lib/auth";
 import { useWatchPartySync, createRoom } from "../../lib/watchParty";
 import { C, R, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
-import { subscribeSpeed, groupHosts, groupKey, serverVerdict, isMeasuring } from "../../lib/linkSpeed";
+import { subscribeSpeed, groupHosts, groupKey, serverVerdict, serverTier, tierRank, isMeasuring, markPlaybackSlow, speedSampleFor, progressiveNeedKbps, setExpectedDurationSec } from "../../lib/linkSpeed";
 import { useReducedMotion } from "../../lib/motion";
 import {
   witanimeGateSource,
@@ -868,6 +868,32 @@ export default function WatchScreen() {
       if (!slow(cur)) return false;
       return rows.some((x) => x.orig !== idx && x.s.status !== "failed" && !slow(x.s));
     };
+    // Can't-keep-up detector (desktop parity). linkTooSlow only fires when a
+    // PROBE already called this server slow; a server whose probe read fine
+    // (an mp4upload "FHD" whose real bitrate was nearly double its label
+    // guess) rebuffered every few seconds and was never switched. Two real
+    // rebuffers (≥2s, not right after a seek) within 90s prove the link can't
+    // keep up → move to a server MEASURED to keep up, marking this one slow.
+    const rebufferTimes: number[] = [];
+    let countedThisStall = false;
+    let lastSeekAt = 0;
+    let prevCt = -1;
+    let prevTickAt = 0;
+    const fasterAvailable = (): boolean => {
+      const rows = orderedRef.current;
+      const cur = rows.find((x) => x.orig === idx)?.s;
+      if (!cur || manualSlowPickRef.current === cur.server.iframeUrl) return false;
+      const hosts = groupHosts(rows.map((x) => x.s.server));
+      return rows.some((x) => x.orig !== idx && x.s.status !== "failed"
+        && tierRank(serverTier({ ...x.s.server, videoUrl: x.s.videoUrl }, hosts.get(groupKey(x.s.server)))) <= 2);
+    };
+    const markCurrentSlow = () => {
+      const srv = servers[idx]?.server;
+      if (!srv) return;
+      const need = speedSampleFor(srv.iframeUrl)?.needKbps
+        || (/\.m3u8(\?|$)/i.test(videoUrl) ? 90 : progressiveNeedKbps(srv.name, videoUrl));
+      markPlaybackSlow(srv.iframeUrl, need);
+    };
     const switchForSpeed = (why: string) => {
       if (cancelled) return;
       cancelled = true;
@@ -963,11 +989,32 @@ export default function WatchScreen() {
         } catch {}
         try {
           const st = player.status as string;
+          const now = Date.now();
+          // A jump bigger than the elapsed time is a seek — its refill is not
+          // the link failing.
+          const ct = player.currentTime;
+          if (prevCt >= 0 && Math.abs(ct - prevCt) > (now - prevTickAt) / 1000 + 3) lastSeekAt = now;
+          prevCt = ct;
+          prevTickAt = now;
           if (hasStarted && st === "loading") {
-            if (!loadingSince) loadingSince = Date.now();
-            else if (Date.now() - loadingSince > 6000 && linkTooSlow()) { switchForSpeed("rebuffering"); return; }
+            if (!loadingSince) loadingSince = now;
+            else if (now - loadingSince > 6000 && linkTooSlow()) { switchForSpeed("rebuffering"); return; }
+            if (!countedThisStall && loadingSince && now - loadingSince >= 2000 && now - lastSeekAt > 8000) {
+              countedThisStall = true;
+              rebufferTimes.push(now);
+            }
           } else {
             loadingSince = 0;
+            countedThisStall = false;
+          }
+          while (rebufferTimes.length && now - rebufferTimes[0] > 90_000) rebufferTimes.shift();
+          if (rebufferTimes.length >= 2) {
+            if (fasterAvailable()) {
+              markCurrentSlow();
+              switchForSpeed(`rebuffered ${rebufferTimes.length}x in 90s`);
+              return;
+            }
+            rebufferTimes.length = 0; // no proven-faster server: don't re-fire on the same evidence
           }
         } catch {}
         try {
@@ -1041,6 +1088,18 @@ export default function WatchScreen() {
         : ScreenOrientation.OrientationLock.PORTRAIT_UP,
     ).catch(() => {});
   }, [picked]);
+
+  // File size ÷ runtime = a progressive server's real bitrate (lib/linkSpeed):
+  // saved progress knows the runtime of a resumed episode.
+  useEffect(() => {
+    setExpectedDurationSec(null);
+    if (!episode) return;
+    let alive = true;
+    getProgress(decodeURIComponent(episode)).then((entry) => {
+      if (alive && entry && entry.durationMs > 60_000) setExpectedDurationSec(entry.durationMs / 1000);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [episode]);
 
   // Load saved progress for every episode route, including in-place next/prev
   // navigation where this component remains mounted.
@@ -1653,6 +1712,7 @@ export default function WatchScreen() {
   const orderedServers = useMemo(() => {
     const speedHosts = groupHosts(servers.map((x) => x.server));
     const speedOf = (s: ServerState) => serverVerdict({ ...s.server, videoUrl: s.videoUrl }, speedHosts.get(groupKey(s.server)));
+    const tierOfRow = (s: ServerState) => tierRank(serverTier({ ...s.server, videoUrl: s.videoUrl }, speedHosts.get(groupKey(s.server))));
     const live = (s: ServerState) => !isKnownDeadEmbed(getIframeUrl(s.server));
     // Embed-only (WebView) servers are a last resort: offered only when no
     // native-player server exists for this episode.
@@ -1673,14 +1733,19 @@ export default function WatchScreen() {
         const sa = speedOf(a.s) === "slow" ? 1 : 0;
         const sb = speedOf(b.s) === "slow" ? 1 : 0;
         if (sa !== sb) return sa - sb;
+        // Measured at 3×+ its bitrate → ahead of even the pinned anime3rb: a
+        // 20× stream starts and seeks instantly where a 2× file crawls.
+        const ga = tierOfRow(a.s) === 0 ? 0 : 1;
+        const gb = tierOfRow(b.s) === 0 ? 0 : 1;
+        if (ga !== gb) return ga - gb;
         if (!a3rbUnstable) {
           const ra = a.s.server.source === "anime3rb" ? 0 : 1;
           const rb = b.s.server.source === "anime3rb" ? 0 : 1;
           if (ra !== rb) return ra - rb;
         }
-        // Proven to keep up → ahead of unmeasured ones.
-        const fa = speedOf(a.s) === "fast" ? 0 : 1;
-        const fb = speedOf(b.s) === "fast" ? 0 : 1;
+        // Proven to keep up → ahead of unmeasured ones, more headroom first.
+        const fa = tierOfRow(a.s);
+        const fb = tierOfRow(b.s);
         if (fa !== fb) return fa - fb;
         // Crowd says this host is failing today → bottom of its group.
         const ua = healthTier(statOf(a.s)) === "unstable" ? 1 : 0;

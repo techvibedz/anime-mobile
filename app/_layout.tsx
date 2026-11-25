@@ -3,7 +3,7 @@
 import "react-native-url-polyfill/auto";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments, usePathname, ThemeProvider, DarkTheme } from "expo-router";
-import { pauseGlassForTransition } from "../lib/glassPause";
+import { pauseGlassForTransition, glassTransitionStart, glassTransitionEnd } from "../lib/glassPause";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -364,6 +364,12 @@ function AuthGate() {
     <ThemeProvider value={NAV_THEME}>
       <Stack
         screenLayout={({ children }) => <GlassScreenLayout>{children}</GlassScreenLayout>}
+        // Hold the Liquid Glass pause until the native fade has really ended
+        // (lib/glassPause) — a fixed timer let slow first opens go black.
+        screenListeners={({ route }) => ({
+          transitionStart: () => glassTransitionStart(route.key),
+          transitionEnd: () => glassTransitionEnd(route.key),
+        })}
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: C.bg },

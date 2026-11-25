@@ -1,50 +1,105 @@
 // Global pause switch for Liquid Glass backdrop capture during navigation.
 //
-// Why: on Android the glass library captures the whole window with a software
-// draw every frame. When a screen-transition animation (react-native-screens'
-// fade) finishes INSIDE that capture pass, the real hardware pass never gets
-// the final frame, and the pushed screen stays partly transparent forever
-// (measured: content stuck at ~75% opacity — looked like a grey wash over a
-// white window, dimmed over a dark one). Pausing capture while a transition
-// runs lets the animation end on a real frame. iOS ignores `paused`.
+// Why: on Android the glass library captures the window with a software draw
+// every frame. A software draw also advances react-native-screens' legacy fade
+// Animation; when the fade FINISHES inside that capture pass, the real hardware
+// pass never repaints the final frame and the pushed screen stays stuck at
+// whatever alpha it last had — a grey wash (~75%) or, when it was caught near
+// the start of a fade-in, a BLACK screen (the dark window shows through).
+// Pausing capture until the transition has really ended lets it finish on a
+// real frame. iOS ignores `paused`.
+//
+// A fixed timer was not enough: on a slow phone a heavy screen (first open
+// from the sidebar) can take longer than the timer just to build its native
+// views, so its fade started AFTER glass had resumed → black screen. We now
+// hold the pause until react-native-screens reports the transition ended
+// (native-stack transitionStart/transitionEnd), with timers only as fallbacks.
 import { useSyncExternalStore } from "react";
 
-const TRANSITION_MS = 700; // > rn-screens' fade (~250–350ms) with headroom
+/** Waiting for a transition that hasn't reported transitionStart yet. */
+const START_GRACE_MS = 2500;
+/** Hard cap: never stay paused longer than this (lost end events). */
+const MAX_PAUSE_MS = 4000;
+/** After the last transitionEnd, let a couple of real frames land first. */
+const SETTLE_MS = 120;
 const REFRESH_AFTER_MS = 500;
 
 let paused = false;
-let timer: ReturnType<typeof setTimeout> | null = null;
-let generation = 0; // bumps per transition so a stale refresh frame can't unpause a newer one
+let generation = 0; // bumps per pause so stale timers/frames can't unpause a newer one
+const active = new Set<string>(); // route keys mid-transition
+let graceTimer: ReturnType<typeof setTimeout> | null = null;
+let capTimer: ReturnType<typeof setTimeout> | null = null;
+let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 
-/** Call on every route change. */
-export function pauseGlassForTransition(ms = TRANSITION_MS) {
-  if (timer) clearTimeout(timer);
+function clear(t: ReturnType<typeof setTimeout> | null) {
+  if (t) clearTimeout(t);
+  return null;
+}
+
+function setPaused(v: boolean) {
+  if (paused === v) return;
+  paused = v;
+  emit();
+}
+
+function hold(graceMs: number) {
   const gen = ++generation;
-  if (!paused) {
-    paused = true;
-    emit();
-  }
-  timer = setTimeout(() => {
-    paused = false;
-    emit();
-    // Refresh pulse: on BACK navigation the revealed screen's glass resumes
-    // while the popped screen may still be on its way out, and then nothing
-    // invalidates it again — it froze showing the old page's chrome (a grey
-    // capsule-in-capsule). Re-pause for one frame a bit later so every glass
-    // view takes a fresh capture of the settled screen.
-    timer = setTimeout(() => {
-      paused = true;
-      emit();
+  releaseTimer = clear(releaseTimer);
+  graceTimer = clear(graceTimer);
+  setPaused(true);
+  // No transition reported yet → resume after the grace period (screens with
+  // animation:"none" never send transition events).
+  graceTimer = setTimeout(() => {
+    graceTimer = null;
+    if (gen === generation && active.size === 0) release(gen);
+  }, graceMs);
+  capTimer = clear(capTimer);
+  capTimer = setTimeout(() => {
+    capTimer = null;
+    if (gen !== generation) return;
+    active.clear();
+    release(gen);
+  }, MAX_PAUSE_MS);
+}
+
+function release(gen: number) {
+  releaseTimer = clear(releaseTimer);
+  releaseTimer = setTimeout(() => {
+    if (gen !== generation || active.size > 0) return;
+    graceTimer = clear(graceTimer);
+    capTimer = clear(capTimer);
+    setPaused(false);
+    // Refresh pulse: on BACK the revealed screen's glass resumes while the
+    // popped screen may still be on its way out; re-pause for one frame a bit
+    // later so every glass view takes a fresh capture of the settled screen.
+    releaseTimer = setTimeout(() => {
+      releaseTimer = null;
+      if (gen !== generation) return;
+      setPaused(true);
       requestAnimationFrame(() => {
-        if (gen !== generation) return;
-        timer = null;
-        paused = false;
-        emit();
+        if (gen === generation) setPaused(false);
       });
     }, REFRESH_AFTER_MS);
-  }, ms);
+  }, SETTLE_MS);
+}
+
+/** Call on every (animated) route change. */
+export function pauseGlassForTransition() {
+  hold(START_GRACE_MS);
+}
+
+/** native-stack `transitionStart` listener. */
+export function glassTransitionStart(routeKey: string | undefined) {
+  active.add(routeKey ?? "?");
+  if (!paused || releaseTimer) hold(MAX_PAUSE_MS);
+}
+
+/** native-stack `transitionEnd` listener. */
+export function glassTransitionEnd(routeKey: string | undefined) {
+  active.delete(routeKey ?? "?");
+  if (active.size === 0 && paused && !releaseTimer) release(generation);
 }
 
 export function useGlassPaused(): boolean {

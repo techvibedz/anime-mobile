@@ -8,7 +8,6 @@ import {
   TextInput,
   Pressable,
   FlatList,
-  ScrollView,
   ActivityIndicator,
   RefreshControl,
   StyleSheet,
@@ -31,7 +30,7 @@ import { useCardLayout, type CardLayout } from "../../lib/cardLayout";
 import { StateView } from "../../components/StateView";
 import { Rise } from "../../components/Rise";
 import { useSidebarActions } from "../../components/Sidebar";
-import { C, S, R, TAr, ELEVATION_GLOW, ABSOLUTE_FILL } from "../../lib/theme";
+import { C, S, R, TAr, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { useReducedMotion } from "../../lib/motion";
 

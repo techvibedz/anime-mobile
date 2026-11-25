@@ -31,7 +31,7 @@ import {
 } from "../lib/watchParty";
 import { normalizePartyCode, partyInviteLink } from "../lib/watchPartySync";
 import { setPendingInvite, takePendingInvite } from "../lib/partyInvite";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 

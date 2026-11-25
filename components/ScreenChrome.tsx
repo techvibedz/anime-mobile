@@ -4,10 +4,9 @@
 
 import { type ReactNode } from "react";
 import { View, Text, Pressable, StyleSheet } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { C, R, S, TAr, ABSOLUTE_FILL } from "../lib/theme";
+import { C, S, TAr } from "../lib/theme";
 import { useSidebarActions } from "./Sidebar";
 import { t } from "../lib/i18n";
 import { StateView } from "./StateView";

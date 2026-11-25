@@ -52,7 +52,7 @@ import { supabase } from "../lib/supabase";
 import { checkForApkUpdate, checkForOtaUpdate, downloadAndInstallApk, applyOtaUpdate } from "../lib/updater";
 import { useAuth } from "../lib/auth";
 import { isAdmin } from "../lib/presence";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, SectionLabel } from "../components/ScreenChrome";
 import { RewardedAdPreview } from "../components/RewardedAdPreview";
@@ -278,7 +278,7 @@ export default function SettingsScreen() {
   // Hidden entry to the scraper diagnostics screen: tap the version 7×.
   // (The old welcome-screen link was removed; this gives support a way to ask a
   // user to run the anime3rb chain test on their own device/network.)
-  const [verTaps, setVerTaps] = useState(0);
+  const [, setVerTaps] = useState(0);
   const onVersionTap = useCallback(() => {
     setVerTaps((n) => {
       const next = n + 1;

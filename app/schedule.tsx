@@ -16,7 +16,6 @@ import {
   Text,
   Pressable,
   FlatList,
-  ScrollView,
   RefreshControl,
   ActivityIndicator,
   StyleSheet,
@@ -27,7 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { fetchWeeklySchedule, type ScheduleDay, type ScheduleItem } from "../lib/schedule";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 import { MalScoreBadge, useMalRating } from "../components/MalRating";

@@ -20,7 +20,7 @@ import {
   type AppNotification,
 } from "../lib/notifications";
 import { toAnimeUrl } from "../lib/favorites";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, GlassIconButton } from "../components/ScreenChrome";
 import { StateView } from "../components/StateView";

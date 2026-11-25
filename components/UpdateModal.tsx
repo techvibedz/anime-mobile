@@ -4,7 +4,7 @@ import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { C, R, ELEVATION_GLOW } from "../lib/theme";
+import { C, R } from "../lib/theme";
 import type { UpdateInfo } from "../lib/updater";
 import { applyOtaUpdate, downloadAndInstallApk } from "../lib/updater";
 

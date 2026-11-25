@@ -168,11 +168,10 @@ function evaluateCandidate(
     if (gotSeason !== wantedSeason) return null;
   }
   let sc = titleScore;
-  let fmtOk = true;
   if (wantFmt) {
     const gotFmt = formatCat(r.type) || formatCat(r.title);
-    if (gotFmt) { sc += gotFmt === wantFmt ? 45 : -45; fmtOk = gotFmt === wantFmt; }
-    else { if (wantFmt !== "tv") sc -= 15; fmtOk = wantFmt === "tv"; } // unmarked ⇒ series
+    if (gotFmt) sc += gotFmt === wantFmt ? 45 : -45;
+    else if (wantFmt !== "tv") sc -= 15; // unmarked ⇒ series
   }
   return {
     href: r.href,

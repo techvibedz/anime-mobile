@@ -587,13 +587,6 @@ export default function WatchScreen() {
     }
   }, []);
 
-  // ≥90% into the episode — drives the end-of-season manga card.
-  const [nearEnd, setNearEnd] = useState(false);
-  useEffect(() => { setNearEnd(false); }, [episode]);
-  const maybeNearEnd = useCallback((pos: number, dur: number) => {
-    if (dur > 0 && pos / dur >= 0.9) setNearEnd(true);
-  }, []);
-
   // Tick the next-episode countdown; zero navigates via the shared goNext ref.
   // Cancel/watch-now clear the state; autoAdvancedRef stays burned so the
   // progress timers can never re-arm it for this episode.
@@ -1147,7 +1140,6 @@ export default function WatchScreen() {
           });
           maybeAutoAdvance(pos, dur);
           maybeMarkCompleted(pos, dur);
-          maybeNearEnd(pos, dur);
         }
       } catch {}
     }, 5000);
@@ -1226,7 +1218,6 @@ export default function WatchScreen() {
         });
         maybeAutoAdvance(pos, dur);
         maybeMarkCompleted(pos, dur);
-        maybeNearEnd(pos, dur);
       }
     }, 5000);
     return () => {

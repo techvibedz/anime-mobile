@@ -46,7 +46,7 @@ import { reconcileCompletionFromEpisodes, useCompletionLookup, type AnimeComplet
 import { CompletionBadge } from "../../components/CompletionBadge";
 import { PosterCard } from "../../components/PosterCard";
 import { StateView } from "../../components/StateView";
-import { C, S, R, T, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV, ABSOLUTE_FILL } from "../../lib/theme";
+import { C, S, R, TAr, ELEVATION_GLOW, ELEVATION_NAV, ABSOLUTE_FILL } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { checkOnline } from "../../lib/net";
 import { remoteLog, errText } from "../../lib/remoteLog";

@@ -12,7 +12,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getRail, type RailItem, type RailKind } from "../../lib/sourceRails";
 import { CatalogCard, type CatalogCardData } from "../../components/CatalogCard";
-import { C, S, R } from "../../lib/theme";
+import { C, S } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../../components/ScreenChrome";
 import { useOnlineStatus } from "../../lib/net";

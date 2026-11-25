@@ -21,7 +21,6 @@ import {
 import {
   searchAnime4upDirect,
   searchWitanimeDirect,
-  fetchHtml,
   fetchSourceHtml,
   getWitBase,
   rewriteWitUrl,
@@ -205,8 +204,6 @@ async function swr<T>(
     throw error;
   }
 }
-
-const UP4_BASE = "https://w1.anime4up.rest";
 
 /* ── Home types ─────────────────────────────── */
 

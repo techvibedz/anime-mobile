@@ -14,7 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
 import { isAdmin } from "../../lib/presence";
-import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { C, S, R } from "../../lib/theme";
 import { Aurora, ScreenHeader } from "../../components/ScreenChrome";
 import { supabase, isSupabaseConfigured } from "../../lib/supabase";
 

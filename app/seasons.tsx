@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  View, Text, Pressable, FlatList, ScrollView, RefreshControl,
+  View, Text, Pressable, FlatList, RefreshControl,
   StyleSheet,
 } from "react-native";
 import { router } from "expo-router";
@@ -17,7 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { fetchSeasonAnime, seasonOptions, type CatalogAnime } from "../lib/seasons";
 import { CatalogCard, type CatalogCardData } from "../components/CatalogCard";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
 import { Shimmer } from "../components/Shimmer";

@@ -11,7 +11,6 @@ import { StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import { C } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { posterUrl } from "../lib/img";
 import { GENRE_AR } from "../lib/wrapped";

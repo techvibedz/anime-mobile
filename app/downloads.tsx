@@ -14,7 +14,7 @@ import {
   getDownloads, subscribeDownloads, deleteDownload, retryDownload, formatBytes,
   type DownloadItem,
 } from "../lib/downloads";
-import { C, S, R, ELEVATION_CARD, ABSOLUTE_FILL } from "../lib/theme";
+import { C, S, R, ABSOLUTE_FILL } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 import { StateView } from "../components/StateView";

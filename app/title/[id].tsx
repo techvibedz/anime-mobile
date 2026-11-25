@@ -19,7 +19,7 @@ import { translateToArabic } from "../../lib/translate";
 import { arGenre, arFormat } from "../../lib/anilistLabels";
 import { LiquidGlass } from "../../components/LiquidGlass";
 import { MalBadge, MalCardBadge, useMalRating } from "../../components/MalRating";
-import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
+import { C, R, S } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { PosterCard, INLINE_POSTER_BADGE } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";

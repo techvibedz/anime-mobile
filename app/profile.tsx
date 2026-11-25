@@ -29,7 +29,7 @@ import { countCompletedAnime } from "../lib/completion";
 import { getFavorites } from "../lib/favorites";
 import { updateProfile, profileName, profileAvatar } from "../lib/profile";
 import { refreshUsageProfile } from "../lib/usage";
-import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
+import { C, S, R, ELEVATION_GLOW } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, SectionLabel, GlassIconButton } from "../components/ScreenChrome";
 import { HistoryCard } from "../components/HistoryCard";

@@ -5,7 +5,7 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
-import { C, R, S, ELEVATION_GLOW, ELEVATION_CARD } from "../../lib/theme";
+import { C, R, S } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora } from "../../components/ScreenChrome";
 import { authErrorKey, needsConfirmationHelp, type AuthErrorKey } from "../../lib/authErrors";

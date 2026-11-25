@@ -17,7 +17,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../../lib/auth";
 import { isAdmin } from "../../lib/presence";
 import { adminListChats, type AdminChatSummary } from "../../lib/adminChat";
-import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { C, S, R } from "../../lib/theme";
 import { t } from "../../lib/i18n";
 import { Aurora, ScreenHeader } from "../../components/ScreenChrome";
 

@@ -19,7 +19,7 @@ import { fetchHome, fetchRecent } from "../../lib/api";
 import type { AnimeItem, EpisodeItem, HomeSection } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
-import { C, S, R, ELEVATION_CARD } from "../../lib/theme";
+import { C, S, R } from "../../lib/theme";
 import { PosterCard, PosterPill, INLINE_POSTER_BADGE } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";
 import { useCardLayout, type CardLayout } from "../../lib/cardLayout";

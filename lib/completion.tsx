@@ -291,7 +291,6 @@ export async function recordAnimeCompletion(rec: {
     [...matches].sort((a, b) => b.lastEpNum - a.lastEpNum || b.updatedAt - a.updatedAt)[0];
   const key = existing?.key ?? anchor;
   if (!key) return;
-  const prev = existing;
   // Local history keeps only the newest MAX_ITEMS episodes: an anime finished
   // months ago no longer shows its finale as watched, and re-recording false
   // over the good record made its badge vanish for good. Keep the durable mark

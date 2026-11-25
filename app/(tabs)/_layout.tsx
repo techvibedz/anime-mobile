@@ -5,7 +5,7 @@ import { View, Text, StyleSheet, Pressable, Animated, Easing, type LayoutChangeE
 import { useReducedMotion } from "../../lib/motion";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { C, AR, ELEVATION_NAV } from "../../lib/theme";
+import { C, AR } from "../../lib/theme";
 import { M, MT } from "../../lib/manga/design";
 
 const TABS = [

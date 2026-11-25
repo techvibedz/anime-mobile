@@ -27,9 +27,8 @@ import {
   subscribeChatStatus,
   type Chat,
   type ChatMessage,
-  type ChatStatus,
 } from "../lib/adminChat";
-import { C, S, R, ELEVATION_GLOW } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 

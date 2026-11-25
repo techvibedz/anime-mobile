@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { fetchNewsPage, getCachedNewsFirstPage, resetNews, type NewsItem } from "../lib/news";
-import { C, R, S, AR, F, ELEVATION_CARD } from "../lib/theme";
+import { C, R, S, AR, F } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader, OfflineNotice } from "../components/ScreenChrome";
 import { useOnlineStatus } from "../lib/net";

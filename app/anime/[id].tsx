@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef, memo, startTransition } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, memo } from "react";
 import { Glass } from "../../components/Glass";
 import {
   View,
@@ -47,7 +47,7 @@ import { ShareCard } from "../../components/ShareCard";
 import { PosterCard, INLINE_POSTER_BADGE, GRID_TITLE_BAND } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";
 import { useCardLayout } from "../../lib/cardLayout";
-import { C, R, S, TAr, ELEVATION_CARD, ELEVATION_GLOW, ELEVATION_NAV, ABSOLUTE_FILL } from "../../lib/theme";
+import { C, R, S, TAr, ELEVATION_CARD, ELEVATION_NAV, ABSOLUTE_FILL } from "../../lib/theme";
 import { posterUrl } from "../../lib/img";
 import { t } from "../../lib/i18n";
 import { Rise } from "../../components/Rise";

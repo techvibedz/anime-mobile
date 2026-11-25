@@ -13,7 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../lib/auth";
 import { isAdmin, subscribeOnlineUsers, type OnlineUser } from "../lib/presence";
-import { C, S, R, ELEVATION_CARD, ELEVATION_GLOW } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 

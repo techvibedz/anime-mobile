@@ -17,7 +17,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../lib/auth";
 import { isAdmin, subscribeOnlineUsers, type OnlineUser } from "../lib/presence";
 import { fetchAllUsage, type UsageRow } from "../lib/usage";
-import { C, S, R, ELEVATION_CARD } from "../lib/theme";
+import { C, S, R } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { Aurora, ScreenHeader } from "../components/ScreenChrome";
 import { AdminMangaTab } from "../components/AdminMangaTab";

@@ -32,8 +32,6 @@ import {
 } from "../../lib/playerExtras";
 import { askCompanion } from "../../lib/companion";
 import { dismissRecapOffer, getRecapOffer, type RecapOffer } from "../../lib/recap";
-import { bridgeIsShowable, getMangaBridge, type BridgeInfo } from "../../lib/mangaBridge";
-import { MangaBridgeCard } from "../../components/MangaBridgeCard";
 import {
   REACTIONS,
   addLocalReaction,
@@ -2092,28 +2090,6 @@ export default function WatchScreen() {
     void dismissRecapOffer(fillerTitle || companionCtx.title, fillerHref);
   }, [fillerTitle, companionCtx.title, fillerHref]);
 
-  // ── End of the season → continue in the manga ──
-  // Only the last available episode looks the bridge up (cached per season,
-  // shared with the detail page); the card shows once playback passes 90%.
-  const [endBridge, setEndBridge] = useState<BridgeInfo | null>(null);
-  const [endBridgeDismissed, setEndBridgeDismissed] = useState(false);
-  const isLastEpisode = !localUri && !loading && (nextEpParam === "" || (noServersFinal && !nextEpisodeHref));
-  useEffect(() => { setEndBridge(null); setEndBridgeDismissed(false); }, [episode]);
-  useEffect(() => {
-    if (!isLastEpisode || !nearEnd || endBridge) return;
-    const title = fillerTitle || companionCtx.title;
-    if (!title) return;
-    let alive = true;
-    void getMangaBridge({
-      animeTitle: title,
-      altTitle: companionCtx.altTitle || undefined,
-      season: companionCtx.season || 0,
-    }).then((info) => {
-      if (alive && info && bridgeIsShowable(info.payload) && info.view.continueChapter != null) setEndBridge(info);
-    });
-    return () => { alive = false; };
-  }, [isLastEpisode, nearEnd, endBridge, fillerTitle, companionCtx]);
-
   // Current index inside the fetched list (href match first, episode number as
   // fallback for cross-source href shapes).
   const currentEpIdx = useMemo(() => {
@@ -3312,23 +3288,6 @@ export default function WatchScreen() {
               );
               });
             })()}
-          </View>
-        </View>
-      )}
-
-      {/* Last episode, ≥90%: the story continues in the manga */}
-      {(isPlaying || isWebView) && nearEnd && endBridge && !endBridgeDismissed && !isPartyClient && !locked && (
-        <View style={ss.bridgeOverlay} pointerEvents="box-none">
-          <View style={ss.bridgeOverlayCard}>
-            <MangaBridgeCard
-              info={endBridge}
-              animeTitle={fillerTitle || companionCtx.title}
-              compact
-              beforeOpen={() => { try { player?.pause(); } catch {} }}
-            />
-            <Pressable onPress={() => setEndBridgeDismissed(true)} style={ss.bridgeClose} hitSlop={10} accessibilityLabel={t.close}>
-              <Ionicons name="close" size={14} color={C.white} />
-            </Pressable>
           </View>
         </View>
       )}
@@ -4589,14 +4548,6 @@ const ss = StyleSheet.create({
   trayBtnMine: { backgroundColor: "rgba(139,147,255,0.22)" },
   trayGlyph: { fontSize: 26 },
   floatGlyph: { position: "absolute", bottom: 0, fontSize: 30 },
-  // End-of-season manga card (player overlay)
-  bridgeOverlay: { position: "absolute", right: 24, bottom: 96, zIndex: 9, maxWidth: 380 },
-  bridgeOverlayCard: { position: "relative" },
-  bridgeClose: {
-    position: "absolute", top: -10, left: -10, width: 26, height: 26, borderRadius: 13,
-    alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.85)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
-  },
   // "Previously on…" recap card (server picker)
   recapCard: {
     padding: 14, borderRadius: 16, marginBottom: 14,

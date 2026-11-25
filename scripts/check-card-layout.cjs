@@ -179,6 +179,7 @@ const theme = loadUi("lib/theme.ts", {});
     "react-native": native,
     "@expo/vector-icons": { Ionicons: "Icon" },
     "../lib/theme": theme,
+    "./LiquidGlass": { LiquidGlass: "LiquidGlass" },
     "../lib/cardLayout": cardLayoutModule,
     "../lib/i18n": { t: { cardLayout: "Layout", cardLayoutCompact: "Compact", cardLayoutComfortable: "Large", cardLayoutList: "List", cardLayoutHint: "Tap to cycle" } },
   });
@@ -186,7 +187,8 @@ const theme = loadUi("lib/theme.ts", {});
     const controlTree = control.CardLayoutControl({ layout: from, onChange: value => changes.push(value) });
     assert(!nodes(controlTree).some(node => node.type === "Modal"), "the layout control must not open a sheet");
     const trigger = nodes(controlTree).find(node => node.type === "Pressable");
-    const buttonStyle = trigger.props.style({ pressed: false })[0];
+    // The Pressable wraps a LiquidGlass chip that carries the 48dp size.
+    const buttonStyle = nodes(controlTree).find(node => node.type === "LiquidGlass").props.style;
     assert.equal(buttonStyle.width, 48, "the selector must be a compact toolbar action");
     assert.equal(buttonStyle.height, 48);
     assert.equal(trigger.props.accessibilityRole, "button");

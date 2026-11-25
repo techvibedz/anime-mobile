@@ -26,6 +26,9 @@ function startup(loaded, error = null) {
       if (name === "react") return { useEffect: fn => effects.push(fn) };
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx };
       if (name === "react-native") return { I18nManager: { isRTL: false } };
+      // Module-level navigation theme (NAV_THEME) reads these at import time.
+      if (name === "expo-router") return { DarkTheme: { colors: {} } };
+      if (name === "../lib/theme") return { C: {} };
       if (name === "expo-splash-screen") return {
         preventAutoHideAsync: () => Promise.resolve(),
         hideAsync: () => { hides++; return Promise.resolve(); },

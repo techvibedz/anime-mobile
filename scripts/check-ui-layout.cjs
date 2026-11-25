@@ -42,7 +42,7 @@ for(width of [320,390,800]){
   assert.equal(tree.type,'Modal','drawer must sit above native navigation and handle Android Back');
   tree.props.onRequestClose();
   const nodes=walk(tree);
-  const panel=nodes.find(n=>style(n).right===0&&style(n).backgroundColor===theme.C.surfaceContainer);
+  const panel=nodes.find(n=>style(n).right===0&&style(n).backgroundColor===theme.C.glassSheet);
   assert.ok(panel,'drawer panel missing');
   assert.ok(style(panel).width<=width-32&&style(panel).width<=380,'drawer must fit and leave a reachable backdrop');
   assert.ok(nodes.some(n=>n.type==='Image'&&n.props.source==='bundled-app-logo'),'drawer must show the actual app icon');

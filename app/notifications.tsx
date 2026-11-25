@@ -106,7 +106,7 @@ export default function NotificationsScreen() {
               onRefresh={onRefresh}
               tintColor={C.accent}
               colors={[C.accent]}
-              progressBackgroundColor={C.surface}
+              progressBackgroundColor={C.void}
             />
           }
           contentContainerStyle={{ padding: S.paddingContent, paddingBottom: insets.bottom + 30, gap: 10 }}

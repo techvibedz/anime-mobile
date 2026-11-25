@@ -410,7 +410,7 @@ const s = StyleSheet.create({
   composer: {
     flexDirection: "row", direction: "ltr", alignItems: "flex-end",
     paddingHorizontal: 16, paddingTop: 12,
-    backgroundColor: C.bg,
+    backgroundColor: C.glassBar,
     borderTopWidth: 1, borderTopColor: C.borderSoft,
   },
   input: {

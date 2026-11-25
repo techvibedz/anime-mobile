@@ -133,7 +133,7 @@ const st = StyleSheet.create({
     width: "100%",
     maxWidth: 380,
     maxHeight: "100%",
-    backgroundColor: C.surfaceContainer,
+    backgroundColor: C.glassSheet,
     borderRadius: R.xl,
     padding: 20,
     borderWidth: 1,

@@ -213,7 +213,7 @@ export default function ForYouScreen() {
           maxToRenderPerBatch={6}
           windowSize={7}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.void} />
           }
         />
       )}

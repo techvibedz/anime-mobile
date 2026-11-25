@@ -5,6 +5,7 @@
 // and never re-hits the network. Renders nothing for finished/non-airing anime,
 // so it's safe to drop in unconditionally without reserving layout.
 
+import { Glass } from "./Glass";
 import { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, AppState } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -94,10 +95,10 @@ export function AiringCountdown({ title, lastEpisode }: { title: string | null |
 
   if (msLeft <= 0) {
     return (
-      <View style={[styles.card, styles.liveCard]}>
+      <Glass radius={R.lg} style={[styles.card, styles.liveCard]}>
         <View style={styles.liveDot} />
         <Text style={styles.liveText}>{t.airingNow(info.episode)}</Text>
-      </View>
+      </Glass>
     );
   }
 
@@ -110,7 +111,7 @@ export function AiringCountdown({ title, lastEpisode }: { title: string | null |
   ];
 
   return (
-    <View style={styles.card}>
+    <Glass radius={R.lg} style={styles.card}>
       <View style={styles.header}>
         <Ionicons name="time-outline" size={14} color={C.violet} />
         <Text style={styles.label}>{t.nextEpIn(info.episode)}</Text>
@@ -123,7 +124,7 @@ export function AiringCountdown({ title, lastEpisode }: { title: string | null |
           </View>
         ))}
       </View>
-    </View>
+    </Glass>
   );
 }
 
@@ -136,8 +137,6 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingHorizontal: 14,
     paddingVertical: 16,
-    borderRadius: R.lg,
-    backgroundColor: C.surfaceContainer,
   },
   header: { flexDirection: "row-reverse", alignItems: "center", gap: 5 },
   label: {

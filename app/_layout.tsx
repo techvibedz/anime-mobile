@@ -1,8 +1,9 @@
 // Global URL polyfill before anything else: with inline requires (metro.config.js)
 // lib/supabase — which used to install it at boot — now loads on first use.
 import "react-native-url-polyfill/auto";
-import { useEffect, useRef, useState } from "react";
-import { Stack, useRouter, useSegments } from "expo-router";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Stack, useRouter, useSegments, usePathname, ThemeProvider, DarkTheme } from "expo-router";
+import { pauseGlassForTransition } from "../lib/glassPause";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -59,11 +60,36 @@ import { syncDownloads } from "../lib/downloads";
 import { takePendingInvite } from "../lib/partyInvite";
 import { takePendingMoment } from "../lib/moments";
 import "../global.css";
+import { GlassScreenLayout } from "../components/ScreenCanvas";
+
+// Dark navigation theme: screens are transparent over their layout canvas, so
+// any navigator container must paint the dark canvas too (the default LIGHT
+// theme bled rgb(242,242,242) through as a grey screen background).
+// Bottom-tab routes (app/(tabs)) — switching among these is instant, no fade.
+const TAB_PATHS = new Set(["/", "/search", "/manga", "/mylist"]);
+
+const NAV_THEME = {
+  ...DarkTheme,
+  colors: { ...DarkTheme.colors, background: C.void, card: C.void, primary: C.accent, text: C.text, border: C.line },
+};
 
 function AuthGate() {
   const { user, ready, isConfigured } = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  // Stack pushes/pops run a fade transition; suspend Liquid Glass capture until
+  // it settles (see lib/glassPause — Android stuck-transparency bug). Switching
+  // between the bottom tabs has NO animation, so it must not pause: pausing
+  // there froze the tab bar showing the previous tab's content.
+  const pathname = usePathname();
+  const prevPath = useRef(pathname);
+  useLayoutEffect(() => {
+    const prev = prevPath.current;
+    prevPath.current = pathname;
+    if (prev === pathname) return;
+    if (TAB_PATHS.has(prev) && TAB_PATHS.has(pathname)) return;
+    pauseGlassForTransition();
+  }, [pathname]);
 
   useEffect(() => {
     if (!ready) return;
@@ -328,15 +354,16 @@ function AuthGate() {
 
   if (!ready) {
     return (
-      <View style={{ flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center" }}>
+      <View style={{ flex: 1, backgroundColor: C.void, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator size="large" color={C.accent} />
       </View>
     );
   }
 
   return (
-    <>
+    <ThemeProvider value={NAV_THEME}>
       <Stack
+        screenLayout={({ children }) => <GlassScreenLayout>{children}</GlassScreenLayout>}
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: C.bg },
@@ -418,7 +445,7 @@ function AuthGate() {
           }
         }} 
       />
-    </>
+    </ThemeProvider>
   );
 }
 

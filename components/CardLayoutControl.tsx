@@ -1,6 +1,8 @@
 import { Pressable, StyleSheet } from "react-native";
+import { LiquidGlass } from "./LiquidGlass";
 import { Ionicons } from "@expo/vector-icons";
-import { C, R } from "../lib/theme";
+import { C } from "../lib/theme";
+
 import { nextCardLayout, type CardLayout } from "../lib/cardLayout";
 import { t } from "../lib/i18n";
 
@@ -22,14 +24,16 @@ export function CardLayoutControl({ layout, onChange }: {
       accessibilityLabel={`${t.cardLayout}: ${current.label}`}
       accessibilityHint={t.cardLayoutHint}
       onPress={() => onChange(nextCardLayout(layout))}
-      style={({ pressed }) => [s.trigger, pressed && s.pressed]}
+      style={({ pressed }) => [pressed && s.pressed]}
     >
-      <Ionicons name={current.icon} size={21} color={C.accent} />
+      <LiquidGlass preset="compactControl" radius={24} interactive edgeReflectionStrength={0.3} style={s.trigger}>
+        <Ionicons name={current.icon} size={21} color={C.accent} />
+      </LiquidGlass>
     </Pressable>
   );
 }
 
 const s = StyleSheet.create({
-  trigger: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: R.circle, backgroundColor: "rgba(255,255,255,0.07)", borderWidth: 1, borderColor: "rgba(255,255,255,0.10)" },
-  pressed: { opacity: 0.75 },
+  trigger: { width: 48, height: 48, alignItems: "center", justifyContent: "center" },
+  pressed: { transform: [{ scale: 0.94 }] },
 });

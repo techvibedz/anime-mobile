@@ -1,9 +1,11 @@
 import { Stack } from "expo-router";
 import { C } from "../../lib/theme";
+import { GlassScreenLayout } from "../../components/ScreenCanvas";
 
 export default function AuthLayout() {
   return (
     <Stack
+      screenLayout={({ children }) => <GlassScreenLayout>{children}</GlassScreenLayout>}
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: C.bg },

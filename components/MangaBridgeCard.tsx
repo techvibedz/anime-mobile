@@ -5,6 +5,7 @@
 // the next chapter. Users can correct the chapter (one vote each); enough
 // agreeing votes override the AI's answer for everyone.
 
+import { Glass } from "./Glass";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -99,7 +100,7 @@ export function MangaBridgeCard({
   }
 
   return (
-    <View style={ss.card}>
+    <Glass radius={R.lg} style={ss.card}>
       <View style={ss.head}>
         <View style={ss.icon}>
           <Ionicons name="book-outline" size={18} color={C.mint} />
@@ -153,7 +154,7 @@ export function MangaBridgeCard({
             accessibilityLabel={t.bridgeChapterPlaceholder}
           />
           <Pressable onPress={submit} style={ss.sendBtn} disabled={sending} accessibilityRole="button">
-            {sending ? <ActivityIndicator size="small" color={C.bg} /> : <Text style={ss.sendText}>{t.bridgeSend}</Text>}
+            {sending ? <ActivityIndicator size="small" color={C.textOnAccent} /> : <Text style={ss.sendText}>{t.bridgeSend}</Text>}
           </Pressable>
         </View>
       ) : (
@@ -179,14 +180,13 @@ export function MangaBridgeCard({
         </View>
       )}
       {msg ? <Text style={ss.msg}>{msg}</Text> : null}
-    </View>
+    </Glass>
   );
 }
 
 const ss = StyleSheet.create({
   card: {
-    marginTop: 16, padding: 14, borderRadius: R.lg,
-    backgroundColor: "rgba(94,234,212,0.06)", borderWidth: 1, borderColor: "rgba(94,234,212,0.26)",
+    marginTop: 16, padding: 14,
   },
   head: { direction: "ltr", flexDirection: "row-reverse", alignItems: "center" },
   icon: {
@@ -227,7 +227,7 @@ const ss = StyleSheet.create({
     minHeight: 44, minWidth: 72, paddingHorizontal: 14, borderRadius: 12, marginRight: 8,
     alignItems: "center", justifyContent: "center", backgroundColor: C.mint,
   },
-  sendText: { color: C.bg, fontSize: 13, fontFamily: "Cairo_700Bold" },
+  sendText: { color: C.textOnAccent, fontSize: 13, fontFamily: "Cairo_700Bold" },
   msg: { color: C.textSecondary, fontSize: 12, lineHeight: 19, fontFamily: "Cairo_500Medium", textAlign: "right", marginTop: 8 },
   compact: {
     direction: "ltr", flexDirection: "row-reverse", alignItems: "center",

@@ -3061,7 +3061,7 @@ export default function WatchScreen() {
               </View>
               {nextCanonNum != null && !isPartyClient && (
                 <Pressable onPress={skipFillerNow} style={ss.fillerBannerBtn} accessibilityRole="button">
-                  <Ionicons name="play-skip-forward" size={13} color={C.bg} />
+                  <Ionicons name="play-skip-forward" size={13} color={C.textOnAccent} />
                   <Text style={ss.fillerBannerBtnText}>{t.fillerSkipTo(nextCanonNum)}</Text>
                 </Pressable>
               )}
@@ -4641,7 +4641,7 @@ const ss = StyleSheet.create({
     flexDirection: "row", alignItems: "center",
     paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: C.gold,
   },
-  fillerBannerBtnText: { color: C.bg, fontSize: 12, fontFamily: "Cairo_700Bold", marginLeft: 6 },
+  fillerBannerBtnText: { color: C.textOnAccent, fontSize: 12, fontFamily: "Cairo_700Bold", marginLeft: 6 },
   // Crowd health chip (server picker rows)
   healthBadge: {
     flexDirection: "row", alignItems: "center",

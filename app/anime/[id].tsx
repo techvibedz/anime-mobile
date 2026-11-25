@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef, memo, startTransition } from "react";
+import { Glass } from "../../components/Glass";
 import {
   View,
   Text,
@@ -40,7 +41,7 @@ import { AniListPosterCard } from "../../components/AniListPosterCard";
 import { isPendingAniListHref, pendingAniListEntry, resolveEntryToSource } from "../../lib/anilistResolve";
 import { AiringCountdown } from "../../components/AiringCountdown";
 import { Shimmer } from "../../components/Shimmer";
-import { GlassFill } from "../../components/GlassFill";
+import { LiquidGlass } from "../../components/LiquidGlass";
 import { DownloadPicker } from "../../components/DownloadPicker";
 import { ShareCard } from "../../components/ShareCard";
 import { PosterCard, INLINE_POSTER_BADGE, GRID_TITLE_BAND } from "../../components/PosterCard";
@@ -519,7 +520,7 @@ export default function AnimeDetailScreen() {
             onRefresh={reload}
             tintColor={C.accent}
             colors={[C.accent]}
-            progressBackgroundColor={C.surface}
+            progressBackgroundColor={C.void}
           />
         }
       >
@@ -537,7 +538,7 @@ export default function AnimeDetailScreen() {
             />
           ) : null}
           <LinearGradient
-            colors={["rgba(8,9,12,0.35)", "rgba(8,9,12,0.05)", "rgba(8,9,12,0.7)", C.bg]}
+            colors={["rgba(8,9,12,0.35)", "rgba(8,9,12,0.05)", "rgba(8,9,12,0.7)", C.void]}
             locations={[0, 0.4, 0.8, 1]}
             style={ABSOLUTE_FILL}
           />
@@ -647,7 +648,7 @@ export default function AnimeDetailScreen() {
         <View style={ss.glowLine} />
 
         {/* ── Tab Bar ───────────────────────── */}
-        <View style={ss.tabBar}>
+        <Glass radius={R.pill} style={ss.tabBar}>
           {tabs.map((tab) => {
             const active = activeTab === tab.key;
             return (
@@ -665,7 +666,7 @@ export default function AnimeDetailScreen() {
               </Pressable>
             );
           })}
-        </View>
+        </Glass>
 
         {/* ── Tab Content ───────────────────── */}
         <View
@@ -697,7 +698,7 @@ export default function AnimeDetailScreen() {
       {/* Header scrim — fades in once the banner scrolls away so the status bar
           and the floating buttons never sit on top of posters/text. */}
       <Animated.View pointerEvents="none" style={[ss.headerScrim, { height: insets.top + 64, opacity: headerScrim }]}>
-        <LinearGradient colors={[C.bg, C.bg, "rgba(8,9,12,0)"]} locations={[0, 0.62, 1]} style={ABSOLUTE_FILL} />
+        <LinearGradient colors={[C.void, C.void, "rgba(8,9,12,0)"]} locations={[0, 0.62, 1]} style={ABSOLUTE_FILL} />
       </Animated.View>
 
       {/* ── Floating top bar — back + menu ──── */}
@@ -716,8 +717,7 @@ export default function AnimeDetailScreen() {
       )}
 
       {/* ── Floating action bar — playback is always one tap away ── */}
-      <View style={[ss.actionBar, { paddingBottom: insets.bottom + 10 }]}>
-        <GlassFill intensity={26} />
+      <LiquidGlass preset="floatingTabBar" variant="clear" radius={30} tintColor="rgba(10,10,14,0.18)" legibilityFloor={0.3} edgeReflectionStrength={0.35} style={[ss.actionBar, { bottom: insets.bottom + 10 }]}>
         <Pressable
           style={ss.actionPlayWrap}
           onPress={() => firstPlayable?.href && router.push(`/watch/${encodeURIComponent(firstPlayable.href)}`)}
@@ -742,7 +742,7 @@ export default function AnimeDetailScreen() {
         <Pressable style={ss.actionIcon} onPress={() => setShareCardOpen(true)}>
           <Ionicons name="share-outline" size={19} color={C.text} />
         </Pressable>
-      </View>
+      </LiquidGlass>
 
       {/* ── Add-to-list picker (slide-up sheet) ───────────────── */}
       {pickerOpen && (
@@ -882,10 +882,9 @@ function ListPickerSheet({ title, onPick, onClose }: { title: string; onPick: (l
 function GlassCircleBtn({ icon, color = C.text, onPress }: { icon: string; color?: string; onPress?: () => void }) {
   return (
     <Pressable onPress={onPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={icon === "menu" ? t.menu : t.back}>
-      <View style={ss.glassCircle}>
-        <GlassFill intensity={16} />
+      <LiquidGlass preset="compactControl" radius={23} interactive style={ss.glassCircle}>
         <Ionicons name={icon as any} size={20} color={color} />
-      </View>
+      </LiquidGlass>
     </Pressable>
   );
 }
@@ -1225,7 +1224,7 @@ function EpisodesTab({
             accessibilityState={{ checked: canonOnly }}
             accessibilityLabel={t.canonOnly}
           >
-            <Ionicons name={canonOnly ? "checkmark-circle" : "cut-outline"} size={13} color={canonOnly ? C.bg : C.mint} />
+            <Ionicons name={canonOnly ? "checkmark-circle" : "cut-outline"} size={13} color={canonOnly ? C.textOnAccent : C.mint} />
             <Text style={[ss.sortChipText, canonOnly && ss.canonChipTextActive]}>{t.canonOnly}</Text>
           </Pressable>
           <View style={ss.fillerInfo}>
@@ -1678,7 +1677,7 @@ const ss = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 
   // Banner
-  banner: { width: "100%", height: BANNER_H, backgroundColor: C.surface, overflow: "hidden" },
+  banner: { width: "100%", height: BANNER_H, backgroundColor: C.void, overflow: "hidden", borderBottomLeftRadius: R.xxl, borderBottomRightRadius: R.xxl },
   meshBg: { ...ABSOLUTE_FILL },
 
   // Hero — poster overlaps the banner base, title/meta beside it (RTL).
@@ -1769,22 +1768,20 @@ const ss = StyleSheet.create({
   btnPrimaryText: { color: C.textOnAccent, fontSize: 14, fontWeight: "600", fontFamily: "Cairo_600SemiBold" },
 
   // Floating action bar — frosted, pinned to the bottom over the scroll.
+  // Floating Liquid Glass capsule (iOS 26 style), inset from the edges.
   actionBar: {
-    position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 40,
-    flexDirection: "row", alignItems: "center", gap: 10,
-    paddingHorizontal: PAD, paddingTop: 12, overflow: "hidden",
-    borderTopWidth: 1, borderColor: C.glassBorder,
-    ...ELEVATION_NAV,
+    position: "absolute", left: 14, right: 14, zIndex: 40,
+    flexDirection: "row", alignItems: "center", gap: 8,
+    padding: 8,
   },
-  actionPlayWrap: { flex: 1, borderRadius: R.md },
+  actionPlayWrap: { flex: 1, borderRadius: 22 },
   actionPlayGrad: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    minHeight: 52, paddingVertical: 14, borderRadius: R.md, overflow: "hidden",
+    minHeight: 46, paddingVertical: 12, borderRadius: 22, overflow: "hidden",
   },
   actionIcon: {
-    width: 52, height: 50, alignItems: "center", justifyContent: "center",
-    borderRadius: R.md, backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.borderSoft,
+    width: 46, height: 46, alignItems: "center", justifyContent: "center",
+    borderRadius: 23, backgroundColor: "rgba(255,255,255,0.10)",
   },
   actionIconCompleted: { backgroundColor: C.mintSoft, borderColor: C.mintGlow },
 
@@ -1811,8 +1808,7 @@ const ss = StyleSheet.create({
   // Segmented pill tabs — first tab on the right (RTL), active = filled accent.
   tabBar: {
     flexDirection: "row-reverse", marginTop: 22, marginHorizontal: PAD,
-    padding: 4, borderRadius: R.pill, backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.borderSoft,
+    padding: 4,
   },
   tabItem: {
     flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
@@ -1958,7 +1954,7 @@ const ss = StyleSheet.create({
   fillerInfoText: { color: C.text, fontSize: 12, fontFamily: "Cairo_600SemiBold", textAlign: "right" },
   fillerSourceText: { color: C.textMuted, fontSize: 10, fontFamily: "Cairo_500Medium", textAlign: "right" },
   canonChipActive: { backgroundColor: C.mint, borderColor: "transparent" },
-  canonChipTextActive: { color: C.bg, fontFamily: "Cairo_700Bold" },
+  canonChipTextActive: { color: C.textOnAccent, fontFamily: "Cairo_700Bold" },
   fillerBadge: {
     position: "absolute", bottom: 6, right: 8,
     paddingHorizontal: 7, paddingVertical: 2, borderRadius: R.pill,
@@ -1998,9 +1994,8 @@ const ss = StyleSheet.create({
     flexDirection: "row", justifyContent: "space-between",
   },
   glassCircle: {
-    width: 46, height: 46, borderRadius: R.circle, overflow: "hidden",
+    width: 46, height: 46,
     alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: C.glassBorder,
   },
 
   // Error
@@ -2018,7 +2013,7 @@ const ss = StyleSheet.create({
   },
   pickerSheet: {
     width: "100%", maxWidth: 380,
-    backgroundColor: C.bg, borderRadius: R.xl, padding: 20,
+    backgroundColor: C.glassSheet, borderRadius: R.xl, padding: 20,
     borderWidth: 1, borderColor: C.border, gap: 10,
   },
   pickerTitle: {
@@ -2053,11 +2048,11 @@ const ss = StyleSheet.create({
   },
 
   // Slide-up bottom sheet (add-to-list) — matches the home episode sheet.
-  sheetBackdrop: { backgroundColor: "rgba(0,0,0,0.72)" },
+  sheetBackdrop: { backgroundColor: "rgba(6,7,18,0.62)" },
   sheetAnchor: { flex: 1, justifyContent: "flex-end", paddingTop: 24 },
   sheetPanel: {
     maxHeight: "100%",
-    backgroundColor: C.playerSheet,
+    backgroundColor: C.glassSheet,
     borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
     paddingHorizontal: 20, paddingTop: 12,
     borderTopWidth: 1, borderColor: C.border, gap: 10,

@@ -53,6 +53,7 @@ import { remoteLog, errText } from "../../lib/remoteLog";
 import { useReducedMotion } from "../../lib/motion";
 import { posterUrl } from "../../lib/img";
 import { Rise } from "../../components/Rise";
+import { LiquidGlass } from "../../components/LiquidGlass";
 import { RtlRow } from "../../components/RtlRow";
 import { AnimeOfTheDay } from "../../components/AnimeOfTheDay";
 
@@ -142,7 +143,7 @@ const HeroCarousel = memo(function HeroCarousel({ featured, topInset }: { featur
         scrollEventThrottle={16}
       >
         {featured.map((item, i) => (
-          <HeroSlide key={item.href || i} item={item} width={SW} height={heroH} near={Math.abs(i - heroIndex) <= 1 || (heroIndex === featured.length - 1 && i === 0)} />
+          <HeroSlide key={item.href || i} item={item} width={SW} height={heroH} near={Math.abs(i - heroIndex) <= 1 || (heroIndex === featured.length - 1 && i === 0)} active={i === heroIndex} />
         ))}
       </ScrollView>
       {featured.length > 1 && (
@@ -183,8 +184,8 @@ function openHeroItem(item: FeaturedItem, details: boolean) {
   }
 }
 
-const HeroSlide = memo(function HeroSlide({ item, width, height, near }: {
-  item: FeaturedItem; width: number; height: number; near: boolean;
+const HeroSlide = memo(function HeroSlide({ item, width, height, near, active }: {
+  item: FeaturedItem; width: number; height: number; near: boolean; active: boolean;
 }) {
   // Full-bleed art is the biggest bitmap on the page (~1.5x screen width).
   // Only the visible slide and its neighbours hold one; a far slide keeps its
@@ -206,7 +207,7 @@ const HeroSlide = memo(function HeroSlide({ item, width, height, near }: {
       <LinearGradient colors={["rgba(8,9,12,0.78)", "rgba(8,9,12,0)"]} style={ss.heroTopScrim} />
       {/* Bottom scrim — title, synopsis and CTAs always sit on a dark plate (AA). */}
       <LinearGradient
-        colors={["rgba(8,9,12,0)", "rgba(8,9,12,0.6)", "rgba(8,9,12,0.94)", C.bg]}
+        colors={["rgba(8,9,12,0)", "rgba(8,9,12,0.6)", "rgba(8,9,12,0.94)", C.void]}
         locations={[0, 0.38, 0.74, 1]}
         style={[ss.heroBottomScrim, { height: height * 0.72 }]}
       />
@@ -231,10 +232,21 @@ const HeroSlide = memo(function HeroSlide({ item, width, height, near }: {
               accessibilityRole="button"
               accessibilityLabel={t.openAnimePage}
               onPress={() => openHeroItem(item, true)}
-              style={({ pressed }) => [ss.heroSecondary, pressed && ss.pressedSoft]}
+              style={({ pressed }) => [{ flex: 1 }, pressed && ss.pressedSoft]}
             >
-              <Ionicons name="information-circle-outline" size={19} color={C.text} />
-              <Text style={ss.heroSecondaryText}>{t.heroDetails}</Text>
+              {/* Live Liquid Glass only on the visible slide (one capture view in
+                  the carousel); neighbours keep the matching static look. */}
+              {active ? (
+                <LiquidGlass preset="cardOverMedia" radius={26} interactive style={ss.heroSecondary}>
+                  <Ionicons name="information-circle-outline" size={19} color={C.text} />
+                  <Text style={ss.heroSecondaryText}>{t.heroDetails}</Text>
+                </LiquidGlass>
+              ) : (
+                <View style={[ss.heroSecondary, ss.heroSecondaryGlass]}>
+                  <Ionicons name="information-circle-outline" size={19} color={C.text} />
+                  <Text style={ss.heroSecondaryText}>{t.heroDetails}</Text>
+                </View>
+              )}
             </Pressable>
           ) : null}
         </View>
@@ -449,13 +461,19 @@ export default function HomeScreen() {
   // Animates only when crossing the threshold, never per frame.
   const topBarSolid = useRef(new Animated.Value(0)).current;
   const topBarShown = useRef(false);
+  // The bar's Liquid Glass only exists while the bar is shown — each live glass
+  // view costs per-frame capture + shader work, even at opacity 0.
+  const [barGlass, setBarGlass] = useState(false);
   const onFeedScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     noteScrollActivity();
     heroOffscreen.current = e.nativeEvent.contentOffset.y > HERO_H;
     const show = e.nativeEvent.contentOffset.y > HERO_H - 320; // before the hero title reaches the bar
     if (show === topBarShown.current) return;
     topBarShown.current = show;
-    Animated.timing(topBarSolid, { toValue: show ? 1 : 0, duration: 180, useNativeDriver: true }).start();
+    if (show) setBarGlass(true);
+    Animated.timing(topBarSolid, { toValue: show ? 1 : 0, duration: 180, useNativeDriver: true }).start(({ finished }) => {
+      if (finished && !topBarShown.current) setBarGlass(false);
+    });
   }, [topBarSolid]);
 
   // Show only the known witanime rails, in the payload's (display) order.
@@ -485,13 +503,17 @@ export default function HomeScreen() {
     <View style={ss.root}>
       {/* ── Top Bar — floats over the full-bleed hero, turns solid past it ── */}
       <View style={[ss.topBar, ss.topBarFloating, { paddingTop: insets.top + 8 }]}>
-        <Animated.View pointerEvents="none" style={[ABSOLUTE_FILL, ss.topBarSolid, { opacity: topBarSolid }]} />
+        <Animated.View pointerEvents="none" style={[ABSOLUTE_FILL, { opacity: topBarSolid }]}>
+          {barGlass ? (
+            <LiquidGlass preset="navigationBar" variant="clear" radius={0} tintColor="rgba(8,9,12,0.40)" legibilityFloor={0.2} edgeReflectionStrength={0} style={[ABSOLUTE_FILL, ss.topBarSolid]} />
+          ) : null}
+        </Animated.View>
         <View style={ss.topBarInner}>
           <PantoufaWordmark />
           {/* Actions consolidated into one frosted segmented cluster — a single
               premium control instead of three scattered circles. Each segment
               keeps its own 44px hit target + handler. */}
-          <View style={ss.actionCluster}>
+          <LiquidGlass preset="compactControl" variant="clear" radius={24} legibilityFloor={0.3} tintColor="rgba(10,10,14,0.14)" edgeReflectionStrength={0.25} style={ss.actionCluster}>
             <Pressable accessibilityRole="button" accessibilityLabel={t.scheduleTitle} style={ss.clusterBtn} onPress={() => router.push("/schedule")} hitSlop={8}>
               <Ionicons name="calendar-outline" size={18} color={C.text} />
             </Pressable>
@@ -508,7 +530,7 @@ export default function HomeScreen() {
             <Pressable accessibilityRole="button" accessibilityLabel={t.menu} style={ss.clusterBtn} onPress={openSidebar} hitSlop={8}>
               <Ionicons name="menu" size={20} color={C.text} />
             </Pressable>
-          </View>
+          </LiquidGlass>
         </View>
       </View>
 
@@ -523,7 +545,7 @@ export default function HomeScreen() {
             onRefresh={() => { setRefreshing(true); reload(); }}
             tintColor={C.accent}
             colors={[C.accent]}
-            progressBackgroundColor={C.surface}
+            progressBackgroundColor={C.void}
           />
         }
       >
@@ -1136,6 +1158,8 @@ function resumeEntry(entry: WatchEntry) {
 
 const ContinueCard = memo(function ContinueCard({ entry, onRemove, onOpen }: { entry: WatchEntry; onRemove: (href: string) => void; onOpen: (entry: WatchEntry) => void }) {
   const pct = progressPercent(entry);
+  // Dead/expired thumbnails (old source CDNs) left a blank black card.
+  const [imgFailed, setImgFailed] = useState(false);
   const remainMs = entry.durationMs - entry.positionMs;
   const remainMin = Math.max(1, Math.round(remainMs / 60000));
   const epNum = episodeNumberFor(entry);
@@ -1158,15 +1182,13 @@ const ContinueCard = memo(function ContinueCard({ entry, onRemove, onOpen }: { e
       style={({ pressed }) => ({ width: EP_W, opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] })}
     >
       <View style={ss.epCard}>
-        {entry.image ? (
-          <Image source={{ uri: posterUrl(entry.image, EP_W) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={entry.episodeHref} transition={200} />
+        {entry.image && !imgFailed ? (
+          <Image source={{ uri: posterUrl(entry.image, EP_W) }} style={ABSOLUTE_FILL} contentFit="cover" cachePolicy="memory-disk" recyclingKey={entry.episodeHref} transition={200} onError={() => setImgFailed(true)} />
         ) : (
-          <LinearGradient
-            colors={[C.surface, C.surfaceLight]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={ABSOLUTE_FILL}
-          />
+          <View style={[ABSOLUTE_FILL, ss.epFallback]}>
+            <LinearGradient colors={["rgba(139,147,255,0.18)", "rgba(255,255,255,0.03)"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={ABSOLUTE_FILL} />
+            <Ionicons name="film-outline" size={26} color={C.textMuted} />
+          </View>
         )}
         <LinearGradient colors={["rgba(8,9,12,0)", "rgba(8,9,12,0.75)"]} style={ss.epScrim} pointerEvents="none" />
         <View style={[ss.epPill, ss.epPillResume]} pointerEvents="none">
@@ -1261,7 +1283,7 @@ const ss = StyleSheet.create({
 
   // Top bar
   topBar: {
-    zIndex: 50, backgroundColor: C.bg,
+    zIndex: 50, backgroundColor: C.glassBar,
   },
   topBarInner: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -1276,8 +1298,7 @@ const ss = StyleSheet.create({
   // Frosted segmented action cluster — one connected control, three 44px segments.
   actionCluster: {
     flexDirection: "row", alignItems: "center", height: 48, paddingHorizontal: 4,
-    borderRadius: R.pill, overflow: "hidden", backgroundColor: "rgba(20,22,28,0.85)",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.10)",
+    borderRadius: R.pill,
   },
   clusterBtn: {
     width: 44, height: 48, alignItems: "center", justifyContent: "center",
@@ -1287,7 +1308,7 @@ const ss = StyleSheet.create({
     position: "absolute", top: 5, right: 5,
     minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4,
     backgroundColor: C.accent, alignItems: "center", justifyContent: "center",
-    borderWidth: 1.5, borderColor: C.bg,
+    borderWidth: 1.5, borderColor: C.void,
   },
   notifBadgeText: {
     color: C.textOnAccent, fontSize: 9, fontWeight: "800", fontFamily: "Cairo_700Bold",
@@ -1295,10 +1316,10 @@ const ss = StyleSheet.create({
 
   // Floating top bar over the hero
   topBarFloating: { position: "absolute", top: 0, left: 0, right: 0, backgroundColor: "transparent" },
-  topBarSolid: { backgroundColor: C.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.line },
+  topBarSolid: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "rgba(255,255,255,0.18)" },
 
   // Hero — full-bleed art, text block anchored bottom-right (RTL).
-  heroSlide: { backgroundColor: C.surface, overflow: "hidden" },
+  heroSlide: { backgroundColor: C.void, overflow: "hidden", borderBottomLeftRadius: R.xxl, borderBottomRightRadius: R.xxl },
   heroTopScrim: { position: "absolute", top: 0, left: 0, right: 0, height: 150 },
   heroBottomScrim: { position: "absolute", left: 0, right: 0, bottom: 0 },
   heroContent: {
@@ -1332,8 +1353,12 @@ const ss = StyleSheet.create({
   heroPrimaryText: { ...TAr.label, color: C.textOnAccent, fontFamily: "Cairo_700Bold", marginRight: 8 },
   heroSecondary: {
     flex: 1, flexDirection: "row-reverse", alignItems: "center", justifyContent: "center",
-    height: 52, borderRadius: R.pill,
-    backgroundColor: "rgba(255,255,255,0.12)", borderWidth: 1, borderColor: "rgba(255,255,255,0.18)",
+    height: 52,
+  },
+  // Static twin of the live glass button, for the off-screen carousel slides.
+  heroSecondaryGlass: {
+    borderRadius: 26, backgroundColor: "rgba(255,255,255,0.14)", borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)", borderTopColor: "rgba(255,255,255,0.45)",
   },
   heroSecondaryText: { ...TAr.label, color: C.text, marginRight: 6 },
   pressedSoft: { opacity: 0.85, transform: [{ scale: 0.98 }] },
@@ -1348,8 +1373,10 @@ const ss = StyleSheet.create({
     paddingHorizontal: PAD, marginBottom: 14,
   },
 
+  epFallback: { alignItems: "center", justifyContent: "center", backgroundColor: C.surface },
+
   // Sections
-  section: { marginTop: 36 },
+  section: { marginTop: 30 },
   sectionHeader: {
     flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: PAD, marginBottom: 14,
@@ -1439,11 +1466,11 @@ const ss = StyleSheet.create({
   },
 
   // Episode action bottom sheet
-  sheetBackdrop: { backgroundColor: "rgba(0,0,0,0.72)" },
+  sheetBackdrop: { backgroundColor: "rgba(6,7,18,0.62)" },
   sheetAnchor: { flex: 1, justifyContent: "flex-end", paddingTop: 24 },
   sheetPanel: {
     maxHeight: "100%",
-    backgroundColor: C.playerSheet,
+    backgroundColor: C.glassSheet,
     borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
     paddingHorizontal: 20, paddingTop: 12,
     borderTopWidth: 1, borderColor: C.border,

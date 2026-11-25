@@ -71,7 +71,7 @@ export default function NewsDetailScreen() {
           <View style={s.hero}>
             <Image source={{ uri: item.image }} style={StyleSheet.absoluteFill} contentFit="cover" transition={180} />
             <LinearGradient
-              colors={["rgba(10,10,11,0.45)", "transparent", C.bg]}
+              colors={["rgba(10,10,11,0.45)", "transparent", C.void]}
               locations={[0, 0.45, 1]}
               style={StyleSheet.absoluteFill}
             />

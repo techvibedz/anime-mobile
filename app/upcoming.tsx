@@ -183,7 +183,7 @@ export default function UpcomingScreen() {
             </View>
           }
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.void} />
           }
           ListEmptyComponent={<OfflineNotice offline={online === false} onRetry={onRefresh} />}
           ListFooterComponent={loadingMore ? <ActivityIndicator color={C.accent} style={{ marginVertical: 20 }} /> : null}

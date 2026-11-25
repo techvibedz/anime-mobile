@@ -4,19 +4,20 @@
 
 export const C = {
   // Backgrounds — neutral near-black "void" the glass floats over
-  bg: "#08090C",            // void — default canvas (neutral near-black, OLED-true)
+  bg: "transparent",        // screens are transparent; each screen's layout paints C.void underneath
+  void: "#08090C",          // the opaque near-black under the backdrop (use where a SOLID dark is needed)
   bgDeep: "#050507",        // deepest void
-  surface: "#14161C",       // raised opaque panel — cards/fallbacks (safe default)
-  surfaceLight: "#1C1F27",  // pressed / elevated opaque
-  surfaceElevated: "#1C1F27",
-  surfaceContainer: "#101218",
-  surfaceGlass: "rgba(255,255,255,0.08)",  // TRUE glass (pair with expo-blur)
-  surfaceCard: "rgba(255,255,255,0.06)",
+  surface: "rgba(255,255,255,0.07)",       // frosted glass panel — cards/fallbacks
+  surfaceLight: "rgba(255,255,255,0.12)",  // pressed / elevated glass
+  surfaceElevated: "rgba(255,255,255,0.12)",
+  surfaceContainer: "rgba(255,255,255,0.05)",
+  surfaceGlass: "rgba(255,255,255,0.10)",  // TRUE glass (pair with expo-blur)
+  surfaceCard: "rgba(255,255,255,0.07)",
 
   // Holo-native background aliases (new code may read these for intent)
   ink: "#08090C",
-  inkRaised: "#14161C",
-  inkHigh: "#1C1F27",
+  inkRaised: "rgba(255,255,255,0.07)",
+  inkHigh: "rgba(255,255,255,0.12)",
 
   // Accent — PERIWINKLE. The primary spatial spark: Play · active · live · CTA.
   // Holo is two-hue: periwinkle primary + mint secondary (see below), used in
@@ -60,17 +61,21 @@ export const C = {
   black: "#000000",
 
   // Borders — bright glass rim-lights (light edge that catches the "light")
-  border: "rgba(255,255,255,0.10)",
-  borderSoft: "rgba(255,255,255,0.06)",
-  borderLight: "rgba(255,255,255,0.16)",   // top glass rim
+  border: "rgba(255,255,255,0.14)",
+  borderSoft: "rgba(255,255,255,0.09)",
+  borderLight: "rgba(255,255,255,0.24)",   // top glass rim
   borderAccent: "rgba(139,147,255,0.35)",
   borderViolet: "rgba(139,147,255,0.25)",
   glowLine: "rgba(139,147,255,0.12)",
   line: "rgba(255,255,255,0.09)",
 
   // Glass — the Holo signature (purposeful frosted panels, pair with expo-blur)
-  glass: "rgba(255,255,255,0.07)",
-  glassBorder: "rgba(255,255,255,0.14)",
+  glass: "rgba(255,255,255,0.09)",
+  glassBorder: "rgba(255,255,255,0.20)",
+  // Near-opaque frosted surfaces for things that sit OVER content (modals,
+  // sheets, sticky bars, drawers) — translucent glass there would be unreadable.
+  glassSheet: "rgba(28,28,32,0.97)",
+  glassBar: "rgba(12,12,15,0.90)",
 
   // Overlays — traced back to the void so everything stays chromatically coherent
   overlay: "rgba(8,9,12,0.92)",

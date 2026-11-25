@@ -124,7 +124,7 @@ const ss = StyleSheet.create({
     width: "100%",
     maxWidth: 340,
     maxHeight: "100%",
-    backgroundColor: C.surface,
+    backgroundColor: C.glassSheet,
     borderRadius: R.xl,
     padding: 24,
     alignItems: "center",

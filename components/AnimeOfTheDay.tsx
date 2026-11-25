@@ -19,6 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Rise } from "./Rise";
+import { Glass } from "./Glass";
 import { C, R, TAr } from "../lib/theme";
 import { t } from "../lib/i18n";
 import { dailyCandidates, localDayKey, localDayNumber } from "../lib/dailyPick";
@@ -203,7 +204,7 @@ export function AnimeOfTheDay() {
         <Text style={s.sub}>{t.dailySub}</Text>
       </View>
 
-      <View style={s.card}>
+      <Glass style={s.card} radius={R.xl}>
         {pick.poster ? (
           <Image
             source={{ uri: posterUrl(pick.poster, POSTER_W) }}
@@ -263,13 +264,13 @@ export function AnimeOfTheDay() {
             </Pressable>
           </View>
         </View>
-      </View>
+      </Glass>
     </Rise>
   );
 }
 
 const s = StyleSheet.create({
-  section: { marginTop: 36 },
+  section: { marginTop: 30 },
   header: { paddingHorizontal: 20, marginBottom: 14 },
   titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 10 },
   tick: { width: 4, height: 20, borderRadius: 2, backgroundColor: C.accent },
@@ -279,8 +280,6 @@ const s = StyleSheet.create({
   card: {
     flexDirection: "row-reverse", gap: 14, // poster on the right (RTL)
     marginHorizontal: 20, padding: 12,
-    borderRadius: R.lg, backgroundColor: C.surface,
-    borderWidth: 1, borderColor: C.borderSoft,
   },
   poster: { width: POSTER_W, height: POSTER_H, borderRadius: R.md, backgroundColor: C.surfaceLight },
   posterFallback: { alignItems: "center", justifyContent: "center" },

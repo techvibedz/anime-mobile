@@ -102,7 +102,7 @@ export default function PopularScreen() {
           contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4, rowGap: GAP }}
           columnWrapperStyle={cards.columnWrapperStyle}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.void} />
           }
           ListHeaderComponent={listHeader}
           ListEmptyComponent={<OfflineNotice offline={online === false} onRetry={onRefresh} />}

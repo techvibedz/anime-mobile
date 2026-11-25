@@ -149,7 +149,7 @@ function Sidebar() {
           width: panelWidth, paddingTop: insets.top + 12, paddingBottom: insets.bottom + 8,
           transform: [{ translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [panelWidth + 8, 0] }) }],
         }]} pointerEvents={open ? "auto" : "none"}>
-          <LinearGradient colors={["rgba(139,147,255,0.12)", "transparent"]} style={st.brandGlow} pointerEvents="none" />
+          <LinearGradient colors={["rgba(255,255,255,0.06)", "transparent"]} style={st.brandGlow} pointerEvents="none" />
           <View style={st.header}>
             <Pressable onPress={closeSidebar} accessibilityRole="button" accessibilityLabel={t.close} style={({ pressed }) => [st.closeBtn, pressed && st.pressed]}>
               <Ionicons name="close" size={21} color={C.textSecondary} />
@@ -206,8 +206,8 @@ function Sidebar() {
 
 const st = StyleSheet.create({
   overlay: { flex: 1 },
-  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)" },
-  panel: { position: "absolute", top: 0, bottom: 0, right: 0, backgroundColor: C.surfaceContainer,
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)" },
+  panel: { position: "absolute", top: 0, bottom: 0, right: 0, backgroundColor: C.glassSheet,
     borderTopLeftRadius: 28, borderBottomLeftRadius: 28, borderLeftWidth: 1, borderColor: C.borderLight, overflow: "hidden" },
   brandGlow: { position: "absolute", top: 0, right: 0, left: 0, height: 230 },
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 18, paddingBottom: 18 },

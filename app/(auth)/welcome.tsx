@@ -62,7 +62,7 @@ export default function Welcome() {
           ))}
         </View>
         <LinearGradient
-          colors={["rgba(8,9,12,0.35)", "rgba(8,9,12,0.55)", C.bg]}
+          colors={["rgba(8,9,12,0.35)", "rgba(8,9,12,0.55)", C.void]}
           locations={[0, 0.55, 1]}
           style={ABSOLUTE_FILL}
         />

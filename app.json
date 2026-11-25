@@ -119,7 +119,8 @@
         }
       ],
       "./plugins/withAndroidDoH",
-    "./plugins/withAsyncStorageSize"
+      "./plugins/withAsyncStorageSize",
+      "./plugins/withDarkWindowBackground"
     ],
     "owner": "houdeifa515"
   }

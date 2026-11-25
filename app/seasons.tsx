@@ -121,7 +121,7 @@ export default function SeasonsScreen() {
         contentContainerStyle={{ paddingHorizontal: PAD, paddingBottom: insets.bottom + 24, paddingTop: 4, rowGap: GAP }}
         columnWrapperStyle={cards.columnWrapperStyle}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.surface} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} colors={[C.accent]} progressBackgroundColor={C.void} />
         }
         ListHeaderComponent={
           <View style={s.listHead}>

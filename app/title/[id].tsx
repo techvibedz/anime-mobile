@@ -17,7 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchAniListDetail, formatStartDate, type AniListDetail } from "../../lib/seasons";
 import { translateToArabic } from "../../lib/translate";
 import { arGenre, arFormat } from "../../lib/anilistLabels";
-import { GlassFill } from "../../components/GlassFill";
+import { LiquidGlass } from "../../components/LiquidGlass";
 import { MalBadge, MalCardBadge, useMalRating } from "../../components/MalRating";
 import { C, R, S, ELEVATION_CARD, ELEVATION_GLOW } from "../../lib/theme";
 import { t } from "../../lib/i18n";
@@ -143,7 +143,7 @@ export default function TitleDetailScreen() {
             <View style={[{ width: "100%", height: BANNER_H }, { backgroundColor: C.surface }]} />
           )}
           <LinearGradient
-            colors={["rgba(0,0,0,0.25)", "transparent", "rgba(10,10,11,0.6)", C.bg]}
+            colors={["rgba(0,0,0,0.25)", "transparent", "rgba(10,10,11,0.6)", C.void]}
             locations={[0, 0.3, 0.7, 1]}
             style={StyleSheet.absoluteFill}
           />
@@ -299,15 +299,14 @@ export default function TitleDetailScreen() {
       </ScrollView>
 
       {/* Status-bar scrim so scrolled text never sits under the clock / back button */}
-      <LinearGradient pointerEvents="none" colors={[C.bg, "rgba(8,9,12,0.75)", "rgba(8,9,12,0)"]} locations={[0, 0.55, 1]} style={[ss.topScrim, { height: insets.top + 72 }]} />
+      <LinearGradient pointerEvents="none" colors={[C.void, "rgba(8,9,12,0.75)", "rgba(8,9,12,0)"]} locations={[0, 0.55, 1]} style={[ss.topScrim, { height: insets.top + 72 }]} />
 
       {/* Floating back button */}
       <View style={[ss.topBar, { top: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={6} accessibilityRole="button" accessibilityLabel={t.back}>
-          <View style={ss.glassCircle}>
-            <GlassFill intensity={16} />
+          <LiquidGlass preset="compactControl" radius={23} interactive style={ss.glassCircle}>
             <Ionicons name="chevron-forward" size={20} color={C.text} />
-          </View>
+          </LiquidGlass>
         </Pressable>
       </View>
     </View>

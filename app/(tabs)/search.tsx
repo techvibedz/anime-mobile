@@ -1,4 +1,6 @@
 import { useState, useCallback, useRef, useEffect, memo, startTransition } from "react";
+import { GlassIconButton } from "../../components/ScreenChrome";
+import { Glass } from "../../components/Glass";
 import { noteScrollActivity } from "../../lib/scrollIdle";
 import {
   View,
@@ -22,7 +24,6 @@ import { searchAnime, fetchAllAnime, fetchGenre } from "../../lib/api";
 import type { SearchResult } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
-import { GlassFill } from "../../components/GlassFill";
 import { RtlRow } from "../../components/RtlRow";
 import { PosterCard, PosterPill, INLINE_POSTER_BADGE } from "../../components/PosterCard";
 import { CardLayoutControl } from "../../components/CardLayoutControl";
@@ -429,9 +430,7 @@ export default function SearchScreen() {
       <View style={ss.header}>
         <Rise style={ss.headerTop}>
           <View style={ss.headerActions}>
-          <Pressable accessibilityRole="button" accessibilityLabel={t.menu} onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
-            <Ionicons name="menu" size={20} color={C.text} />
-          </Pressable>
+          <GlassIconButton icon="menu" size={20} label={t.menu} onPress={openSidebar} />
           <CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />
           </View>
           <View style={ss.headerTitleRow}>
@@ -446,7 +445,7 @@ export default function SearchScreen() {
         <Text style={ss.intro}>{t.searchSub}</Text>
 
         {/* Glass search field — the hero control */}
-        <View style={[ss.searchBar, searching && ss.searchBarActive]}>
+        <Glass radius={R.pill} style={[ss.searchBar, searching && ss.searchBarActive]}>
           <View style={[ss.searchIcon, searching && ss.searchIconActive]}>
             {searching ? (
               <ActivityIndicator size="small" color={C.accent} />
@@ -484,7 +483,7 @@ export default function SearchScreen() {
               <Ionicons name="close-circle" size={18} color={C.textMuted} />
             </Pressable>
           )}
-        </View>
+        </Glass>
 
         {/* Genre filter strip — part of the console, prevents vertical scroll capture */}
         <View style={ss.chipContainer}>
@@ -547,7 +546,7 @@ export default function SearchScreen() {
               onRefresh={onRefresh}
               tintColor={C.accent}
               colors={[C.accent]}
-              progressBackgroundColor={C.surface}
+              progressBackgroundColor={C.void}
             />
           }
           ListHeaderComponent={showingSearch ? (
@@ -582,7 +581,7 @@ const ss = StyleSheet.create({
   // Search console — a cohesive surface on the opaque canvas, softly lifted over
   // the scrolling grid (opaque bg so scrolled content never bleeds through).
   header: {
-    backgroundColor: C.bg, zIndex: 10,
+    backgroundColor: C.void, zIndex: 10,
   },
   headerTop: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -610,10 +609,9 @@ const ss = StyleSheet.create({
   searchBar: {
     flexDirection: "row-reverse", alignItems: "center", gap: 6,
     marginHorizontal: PAD, marginBottom: 14,
-    borderRadius: R.pill, height: 56, paddingHorizontal: 8, backgroundColor: C.surface,
-    overflow: "hidden", borderWidth: 1, borderColor: C.borderSoft,
+    height: 56, paddingHorizontal: 8,
   },
-  searchBarActive: { borderColor: C.borderAccent, backgroundColor: C.surfaceLight },
+  searchBarActive: { borderColor: C.borderAccent, borderTopColor: "rgba(139,147,255,0.6)" },
   searchIcon: {
     width: 40, height: 40, borderRadius: 20,
     alignItems: "center", justifyContent: "center", backgroundColor: C.accentSoft,

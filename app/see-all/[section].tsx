@@ -204,7 +204,7 @@ export default function SeeAllScreen() {
             onRefresh={onRefresh}
             tintColor={C.accent}
             colors={[C.accent]}
-            progressBackgroundColor={C.surface}
+            progressBackgroundColor={C.void}
           />
         }
         ListHeaderComponent={<Text style={s.resultCount}>{isEpisodeType ? t.episodeCount(items.length) : t.scheduleCount(items.length)}</Text>}
@@ -279,7 +279,7 @@ const s = StyleSheet.create({
   },
   modalSheet: {
     width: "100%", maxWidth: 360, maxHeight: "100%",
-    backgroundColor: C.bg, borderRadius: R.xl, padding: 20,
+    backgroundColor: C.glassSheet, borderRadius: R.xl, padding: 20,
     borderWidth: 1, borderColor: C.border,
     alignItems: "stretch", gap: 10,
   },

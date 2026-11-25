@@ -11,17 +11,14 @@ import { C, R, S, TAr, ABSOLUTE_FILL } from "../lib/theme";
 import { useSidebarActions } from "./Sidebar";
 import { t } from "../lib/i18n";
 import { StateView } from "./StateView";
+import { LiquidGlass } from "./LiquidGlass";
 
-/* Quiet tonal backdrop; never intercepts touches. */
+/* Former tonal top wash. Liquid Glass screens sit on the plain dark canvas, and
+ * a full-screen LinearGradient here broke under the glass library's per-frame
+ * software capture (the whole screen washed grey) — so it renders nothing now.
+ * Kept as a component so existing screens don't change. */
 export function Aurora() {
-  return (
-    <View style={ABSOLUTE_FILL} pointerEvents="none">
-      <LinearGradient
-        colors={[C.surfaceContainer, C.bg]}
-        style={{ position: "absolute", top: 0, left: 0, right: 0, height: 240 }}
-      />
-    </View>
-  );
+  return null;
 }
 
 /* ── Circular glass icon button ───────────────── */
@@ -44,9 +41,11 @@ export function GlassIconButton({
       hitSlop={8}
       accessibilityRole="button"
       accessibilityLabel={label ?? (icon === "menu" ? t.menu : t.back)}
-      style={({ pressed }) => [hs.iconBtn, pressed && hs.iconBtnPressed]}
+      style={({ pressed }) => [pressed && hs.iconBtnPressed]}
     >
-      <Ionicons name={icon} size={size} color={tint ?? C.text} />
+      <LiquidGlass preset="compactControl" radius={ICON_BTN / 2} interactive edgeReflectionStrength={0.3} style={hs.iconBtn}>
+        <Ionicons name={icon} size={size} color={tint ?? C.text} />
+      </LiquidGlass>
     </Pressable>
   );
 }
@@ -129,17 +128,15 @@ const hs = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 16,
   },
+  // Live Liquid Glass circle. Cheap here: the header behind it is still, and
+  // the glass skips repainting when its backdrop hasn't changed.
   iconBtn: {
     width: ICON_BTN,
     height: ICON_BTN,
-    borderRadius: R.circle,
-    backgroundColor: "rgba(255,255,255,0.07)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
   },
-  iconBtnPressed: { backgroundColor: C.surfaceLight, transform: [{ scale: 0.94 }] },
+  iconBtnPressed: { transform: [{ scale: 0.94 }] },
 
   // A right-aligned title stays anchored to the Arabic reading edge.
   title: { ...TAr.h1, fontSize: 22, lineHeight: 34, flex: 1, minWidth: 0, marginHorizontal: 12, textAlign: "right", color: C.bone },

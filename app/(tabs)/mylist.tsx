@@ -1,4 +1,5 @@
 import { useState, useCallback, memo } from "react";
+import { GlassIconButton } from "../../components/ScreenChrome";
 import { noteScrollActivity } from "../../lib/scrollIdle";
 import {
   View,
@@ -90,9 +91,7 @@ export default function MyListScreen() {
       <View style={ss.headerSurface}>
         <Rise style={ss.header}>
           <View style={ss.headerActions}>
-          <Pressable accessibilityRole="button" accessibilityLabel={t.menu} onPress={openSidebar} hitSlop={8} style={ss.menuBtn}>
-            <Ionicons name="menu" size={20} color={C.text} />
-          </Pressable>
+          <GlassIconButton icon="menu" size={20} label={t.menu} onPress={openSidebar} />
           <CardLayoutControl layout={cards.layout} onChange={cards.setLayout} />
           </View>
           <View style={ss.headerTitleWrap}>
@@ -159,7 +158,7 @@ export default function MyListScreen() {
               onRefresh={onRefresh}
               tintColor={C.accent}
               colors={[C.accent]}
-              progressBackgroundColor={C.surface}
+              progressBackgroundColor={C.void}
             />
           }
           renderItem={({ item }) => ("key" in item
@@ -242,7 +241,7 @@ const ss = StyleSheet.create({
   // Collection header — cohesive surface on the opaque canvas, softly lifted
   // over the scrolling grid (matches the search console for cross-tab coherence).
   headerSurface: {
-    backgroundColor: C.bg, zIndex: 10,
+    backgroundColor: C.void, zIndex: 10,
   },
   headerEdge: { height: 0.5, backgroundColor: C.line },
   header: {

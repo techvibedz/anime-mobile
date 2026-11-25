@@ -425,7 +425,7 @@ const s = StyleSheet.create({
     position: "absolute", right: 0, bottom: 0,
     width: 34, height: 34, borderRadius: R.circle,
     backgroundColor: C.accent, alignItems: "center", justifyContent: "center",
-    borderWidth: 3, borderColor: C.bg, ...ELEVATION_GLOW,
+    borderWidth: 3, borderColor: C.void, ...ELEVATION_GLOW,
   },
   // Name now wraps (was numberOfLines={1} → long Arabic names truncated).
   name: {

@@ -17,6 +17,9 @@ import { EXTRACT_RENDERED_HTML } from "./scripts";
 import { fuzzyScore, fuzzyScoreNormalized, normFuzzy, sourceSearchQueries } from "../fuzzy";
 import { A3RB_CATALOG_SEED } from "./a3rbCatalogSeed";
 import { remoteLog } from "../remoteLog";
+import { hostLabel, recordTiming, type TimingOutcome } from "./timing";
+import { isCfBlocked, markCfBlocked } from "./cfGate";
+import { hedge } from "./hedge";
 import { classifyProvider, classifyProviderWithName, probeMediaUrl, videoPlaybackHeaders, VIDEO_USER_AGENT as BROWSER_UA } from "../videoProviders";
 import {
   candidateForAttempt,
@@ -153,7 +156,31 @@ export async function fetchHtml(
   extraHeaders?: Record<string, string>,
 ): Promise<string | null> {
   if (!attemptTimeouts.length) return null;
-  const candidates = await getSourceCandidates(url);
+  const started = Date.now();
+  let outcome: TimingOutcome = "error";
+  try {
+    const html = await fetchHtmlAttempts(url, referer, attemptTimeouts, extraHeaders, (o) => { outcome = o; });
+    if (html) outcome = "ok";
+    return html;
+  } finally {
+    recordTiming({ kind: "direct", host: hostLabel(url), ms: Date.now() - started, outcome });
+  }
+}
+
+async function fetchHtmlAttempts(
+  url: string,
+  referer: string | undefined,
+  attemptTimeouts: readonly number[],
+  extraHeaders: Record<string, string> | undefined,
+  setOutcome: (o: TimingOutcome) => void,
+): Promise<string | null> {
+  // Hosts Cloudflare is currently challenging are skipped: the caller's
+  // WebView fallback starts now instead of after a doomed GET (see cfGate.ts).
+  const candidates = (await getSourceCandidates(url)).filter((c) => !isCfBlocked(c));
+  if (!candidates.length) {
+    setOutcome("skipped");
+    return null;
+  }
   const ATTEMPTS = Math.max(attemptTimeouts.length, candidates.length);
   const deadline = Date.now() + Math.max(attemptTimeouts.reduce((sum, ms) => sum + ms, 0), attemptTimeouts[0] * candidates.length);
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
@@ -188,16 +215,31 @@ export async function fetchHtml(
           return html;
         }
         void clearSourcePreference(attemptUrl).catch(() => {});
+        if (looksLikeCfChallenge(html)) {
+          markCfBlocked(attemptUrl);
+          setOutcome("cf");
+        } else setOutcome("empty");
         if (attempt === ATTEMPTS || (looksLikeCfChallenge(html) && candidates.length === 1)) return null;
         throw new Error("unexpected source content");
       }
+      setOutcome("http");
       if (res.status === 404 || res.status === 410) return null;
+      // Cloudflare's managed challenge answers 403/503 with the challenge page.
+      if (res.status === 403 || res.status === 503) {
+        const body = await res.text().catch(() => "");
+        if (looksLikeCfChallenge(body)) {
+          markCfBlocked(attemptUrl);
+          setOutcome("cf");
+          if (candidates.length === 1) return null;
+        }
+      }
       const retryable = isRetryableSourceStatus(res.status);
       if (!retryable || attempt === ATTEMPTS) return null;
       if (res.status === 429 || res.status === 503) {
         retryDelayMs = Math.max(retryAfterMs(res.headers.get("retry-after")), 1200 * attempt);
       }
-    } catch {
+    } catch (e) {
+      if (!(e instanceof Error && e.message === "unexpected source content")) setOutcome(controller.signal.aborted ? "timeout" : "error");
       void clearSourcePreference(attemptUrl).catch(() => {});
       if (attempt === ATTEMPTS) return null;
     } finally {
@@ -251,9 +293,28 @@ async function takeA3rbSlot(background: boolean): Promise<boolean> {
 }
 
 async function rawGetA3rb(url: string, background = false): Promise<{ html: string | null; status: number }> {
+  const started = Date.now();
+  const r = await rawGetA3rbAttempts(url, background);
+  recordTiming({
+    kind: "direct",
+    host: hostLabel(url),
+    ms: Date.now() - started,
+    outcome: r.html ? "ok" : r.status === CF_SKIPPED_STATUS ? "skipped" : r.status === 403 || r.status === 503 ? "cf" : r.status === 0 ? "timeout" : "http",
+  });
+  return r;
+}
+
+// Synthetic status for "skipped: host is CF-blocked" — not 404/410/429, so
+// fetchAnime3rbHtml escalates straight to the WebView.
+const CF_SKIPPED_STATUS = 403;
+
+async function rawGetA3rbAttempts(url: string, background: boolean): Promise<{ html: string | null; status: number }> {
   const ATTEMPT_TIMEOUTS = [8000, 20000];
   const ATTEMPTS = ATTEMPT_TIMEOUTS.length;
-  const candidates = await getSourceCandidates(url);
+  const candidates = (await getSourceCandidates(url)).filter((c) => !isCfBlocked(c));
+  // Known-challenged host: skip the doomed GET (and save the shared anime3rb
+  // rate budget) — the caller renders it in the WebView instead.
+  if (!candidates.length) return { html: null, status: CF_SKIPPED_STATUS };
   let lastStatus = 0;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     if (!(await takeA3rbSlot(background))) return { html: null, status: 429 };
@@ -273,6 +334,15 @@ async function rawGetA3rb(url: string, background = false): Promise<{ html: stri
       lastStatus = res.status;
       // Rate-limited: a retry 0.5s later lands in the same window — stop.
       if (res.status === 429) return { html: null, status: 429 };
+      // Cloudflare challenge: a retry is challenged too — hand over to the
+      // WebView now and remember the block for the next requests.
+      if (res.status === 403 || res.status === 503) {
+        const body = await res.text().catch(() => "");
+        if (looksLikeCfChallenge(body)) {
+          markCfBlocked(attemptUrl);
+          return { html: null, status: res.status };
+        }
+      }
       if (res.ok) {
         const html = await res.text();
         if (!identifySource(attemptUrl) ? !looksLikeCfChallenge(html) : isValidSourceHtml("anime3rb", html)) {
@@ -280,6 +350,10 @@ async function rawGetA3rb(url: string, background = false): Promise<{ html: stri
           return { html, status: res.status };
         }
         void clearSourcePreference(attemptUrl).catch(() => {});
+        if (looksLikeCfChallenge(html)) {
+          markCfBlocked(attemptUrl);
+          return { html: null, status: 403 };
+        }
       }
       // 404/410 won't change on retry — bail immediately so a wrong slug probe
       // stays cheap and does NOT escalate to a WebView load.
@@ -298,7 +372,7 @@ async function rawGetA3rb(url: string, background = false): Promise<{ html: stri
 // One-shot WebView render: loads the URL in the hidden real-browser pool and
 // returns its fully-rendered HTML once `marker` appears (CF solved). Returns
 // null on timeout/error so callers degrade gracefully.
-async function fetchHtmlViaWebView(url: string, marker: string, priority = false, timeoutMs = 25000): Promise<string | null> {
+async function fetchHtmlViaWebView(url: string, marker: string, priority = false, timeoutMs = 25000, signal?: AbortSignal): Promise<string | null> {
   try {
     const r = (await enqueue({
       url,
@@ -306,7 +380,7 @@ async function fetchHtmlViaWebView(url: string, marker: string, priority = false
       injectAfter: EXTRACT_RENDERED_HTML(marker, false, timeoutMs - 1000),
       timeoutMs,
       priority,
-    })) as { html?: string } | null;
+    }, signal)) as { html?: string } | null;
     const html = r?.html || null;
     return html && !looksLikeCfChallenge(html) && (!marker || html.includes(marker)) ? html : null;
   } catch {
@@ -316,9 +390,19 @@ async function fetchHtmlViaWebView(url: string, marker: string, priority = false
 
 // Cross-source discovery must survive the same Cloudflare blocks as playback.
 export async function fetchSourceHtml(url: string, referer: string, marker: string): Promise<string | null> {
-  const html = await fetchHtml(url, referer, [8000]);
-  return html && (!marker || html.includes(marker)) ? html : fetchHtmlViaWebView(url, marker, true);
+  return hedge<string>(
+    async () => {
+      const html = await fetchHtml(url, referer, [8000]);
+      return html && (!marker || html.includes(marker)) ? html : null;
+    },
+    (signal) => fetchHtmlViaWebView(url, marker, true, 25000, signal),
+    { delayMs: DIRECT_HEDGE_MS },
+  );
 }
+
+// Same value as scraper/index.ts DIRECT_HEDGE_MS (not imported: index imports
+// this module, and the cycle would leave it undefined at load time).
+const DIRECT_HEDGE_MS = 5000;
 
 // anime3rb/vid3rb HTML with automatic WebView escalation. `marker` is a
 // substring that proves the real content rendered (e.g. "video_url" on an
@@ -327,15 +411,34 @@ export async function fetchSourceHtml(url: string, referer: string, marker: stri
 // challenge. Otherwise — block, challenge, timeout, or marker-missing — render
 // it in the WebView. A clean 404 short-circuits to null (genuine miss).
 async function fetchAnime3rbHtml(url: string, marker: string, priority = false, background = false): Promise<string | null> {
-  const { html, status } = await rawGetA3rb(url, background);
-  if (html && !looksLikeCfChallenge(html) && (!marker || html.indexOf(marker) >= 0)) return html;
-  // 429: the WebView shares this IP's limit — rendering there only adds a ~25s
-  // stall before failing the same way.
-  if (status === 404 || status === 410 || status === 429) return null;
-  const viaWv = await fetchHtmlViaWebView(url, marker, priority);
-  if (viaWv) return viaWv;
-  // Last resort: hand back the raw body (may still parse) rather than nothing.
-  return html;
+  const good = (h: string | null): h is string => !!h && !looksLikeCfChallenge(h) && (!marker || h.indexOf(marker) >= 0);
+  // 404/410: genuine miss. 429: the WebView shares this IP's limit — rendering
+  // there only adds a ~25s stall before failing the same way.
+  const terminal = (status: number) => status === 404 || status === 410 || status === 429;
+  if (!priority) {
+    // Background reads stay strictly sequential: running the WebView alongside
+    // would spend the shared anime3rb rate budget twice.
+    const { html, status } = await rawGetA3rb(url, background);
+    if (good(html)) return html;
+    if (terminal(status)) return null;
+    const viaWv = await fetchHtmlViaWebView(url, marker, priority);
+    // Last resort: hand back the raw body (may still parse) rather than nothing.
+    return viaWv || html;
+  }
+  // User-facing (Play / detail open): hedge. A hung GET used to hold the
+  // WebView back for up to 8s + 20s; now the WebView joins after
+  // DIRECT_HEDGE_MS, or immediately on a challenge.
+  let raw: { html: string | null; status: number } | null = null;
+  const result = await hedge<string>(
+    async () => {
+      raw = await rawGetA3rb(url, background);
+      return good(raw.html) ? raw.html : null;
+    },
+    (signal) => (raw && terminal(raw.status) ? Promise.resolve(null) : fetchHtmlViaWebView(url, marker, priority, 25000, signal)),
+    { delayMs: DIRECT_HEDGE_MS },
+  );
+  const last = raw as { html: string | null; status: number } | null;
+  return result ?? (last && !terminal(last.status) ? last.html : null);
 }
 
 /* ── witanime: direct static-HTML listings & search ──

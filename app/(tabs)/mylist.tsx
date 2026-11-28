@@ -12,6 +12,7 @@ import {
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { warmAnimeDetail } from "../../lib/api";
 import { getFavorites, removeFavorite } from "../../lib/favorites";
 import type { FavoriteAnime, FavoriteList } from "../../lib/favorites";
 import { MalCardBadge } from "../../components/MalRating";
@@ -190,6 +191,7 @@ const MyListCard = memo(function MyListCard({
       image={item.image}
       title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+      onPressIn={() => warmAnimeDetail(item.href)}
       onLongPress={() => onRemove(item.href)}
       width={width}
       layout={layout}
@@ -225,6 +227,7 @@ const CompletedCard = memo(function CompletedCard({ item, width, layout }: {
       image={item.image}
       title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+      onPressIn={() => warmAnimeDetail(item.href)}
       width={width}
       layout={layout}
       recyclingKey={`done:${item.key}`}

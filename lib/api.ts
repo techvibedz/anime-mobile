@@ -16,8 +16,10 @@ import {
   scrapeVideoServers,
   findCrossSourceUrl,
   extractVideoUrl as scrapeExtractVideoUrl,
+  DIRECT_HEDGE_MS,
   type RawServer,
 } from "./scraper";
+import { hedge } from "./scraper/hedge";
 import {
   searchAnime4upDirect,
   searchWitanimeDirect,
@@ -401,8 +403,8 @@ async function fetchHomeFresh(): Promise<HomePayload> {
       const direct = await fetchWitHomeDirect();
       return sourceHomeHasContent(direct) ? direct : null;
     },
-    async () => {
-      const viaWebView = await scrapeWitanimeHome();
+    async (signal?: AbortSignal) => {
+      const viaWebView = await scrapeWitanimeHome(signal);
       return sourceHomeHasContent(viaWebView) ? viaWebView : null;
     },
     [fetchAnime4upHomeDirect, fetchAnime3rbHomeDirect],
@@ -741,6 +743,30 @@ function fetchEpisodesFreshOnce(animeUrl: string, priority = false): Promise<Epi
 export async function hasFreshEpisodes(animeUrl: string): Promise<boolean> {
   const entry = await readCacheEntry<EpisodesPayload>(DETAIL_CACHE_PREFIX + animeUrl, DETAIL_CACHE_TTL).catch(() => null);
   return !!entry?.data?.success && (entry.data.data?.episodes?.length ?? 0) > 0;
+}
+
+// Press-in warm-up (Phase 4 of the speed pass): a poster's detail load starts
+// on touch-down instead of after the tap + screen transition, so the opened
+// page joins a request that is already in flight (fetchEpisodesFreshOnce is
+// single-flight). Speculative, so it is cheap by construction: skipped when a
+// fresh payload is on disk, at most once per href per 2 minutes, and globally
+// rate-limited so a scroll that brushes many cards can't start a burst.
+const warmedDetailAt = new Map<string, number>();
+let lastDetailWarmAt = 0;
+export function warmAnimeDetail(animeUrl: string | null | undefined): void {
+  if (!animeUrl || !/^https?:\/\//i.test(animeUrl)) return;
+  const now = Date.now();
+  if (now - lastDetailWarmAt < 1200) return;
+  const last = warmedDetailAt.get(animeUrl);
+  if (last && now - last < 120_000) return;
+  lastDetailWarmAt = now;
+  warmedDetailAt.set(animeUrl, now);
+  if (warmedDetailAt.size > 100) {
+    for (const [k, ts] of warmedDetailAt) if (now - ts > 120_000) warmedDetailAt.delete(k);
+  }
+  void hasFreshEpisodes(animeUrl)
+    .then((fresh) => (fresh ? null : fetchEpisodes(animeUrl)))
+    .catch(() => {});
 }
 
 export async function fetchEpisodes(animeUrl: string, onUpdated?: (p: EpisodesPayload) => void, options: { forceRefresh?: boolean } = {}): Promise<EpisodesPayload> {
@@ -1463,31 +1489,39 @@ export async function fetchVideoServers(episodeUrl: string, url4up?: string, for
 // returns it in well under a second — the WebView render takes many seconds
 // and often trips anime4up's ad gates. Fall back to the WebView scrape only
 // when the direct parse yields nothing.
+// Hedged (scraper/hedge.ts): the WebView starts as soon as the direct parse
+// fails, or after DIRECT_HEDGE_MS if it is still hanging; first list wins.
 async function scrapeUp4ServersFast(episodeUrl: string) {
-  try {
-    const direct = await scrapeAnime4upEpisodePageDirect(episodeUrl);
-    if (direct) {
-      return { source: "anime4up", servers: direct.servers, episodeTitle: direct.episodeTitle, animeTitle: direct.animeTitle, up4EpisodeUrl: null as string | null };
-    }
-  } catch { /* fall through to the WebView scrape */ }
-  return scrapeVideoServers(episodeUrl)
-    .then((r) => ({ source: "anime4up", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle, up4EpisodeUrl: null as string | null }))
-    .catch(() => null);
+  type R = { source: string; servers: any[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl: string | null };
+  return hedge<R>(
+    async () => {
+      const direct = await scrapeAnime4upEpisodePageDirect(episodeUrl).catch(() => null);
+      return direct ? { source: "anime4up", servers: direct.servers, episodeTitle: direct.episodeTitle, animeTitle: direct.animeTitle, up4EpisodeUrl: null } : null;
+    },
+    (signal) => scrapeVideoServers(episodeUrl, signal)
+      .then((r) => ({ source: "anime4up", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle, up4EpisodeUrl: null }))
+      .catch(() => null),
+    { delayMs: DIRECT_HEDGE_MS },
+  );
 }
 
 // Resolve WitAnime's current session-bound manifest/gates directly first. The
 // direct scraper returns the underlying provider embeds, which can be resolved
 // into native media URLs; WebView remains the compatibility fallback.
 async function scrapeWitServersFast(episodeUrl: string) {
-  try {
-    const direct = await scrapeWitanimeEpisodePageDirect(episodeUrl);
-    if (direct) {
-      return { source: "witanime", servers: direct.servers, episodeTitle: direct.episodeTitle, animeTitle: direct.animeTitle, up4EpisodeUrl: null as string | null, direct: true };
-    }
-  } catch { /* fall through to the WebView scrape */ }
-  return scrapeVideoServers(episodeUrl)
-    .then((r) => ({ source: "witanime", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle, up4EpisodeUrl: r.up4EpisodeUrl ?? null }))
-    .catch(() => null);
+  type R = { source: string; servers: any[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl: string | null; direct?: boolean };
+  return hedge<R>(
+    async () => {
+      const direct = await scrapeWitanimeEpisodePageDirect(episodeUrl).catch(() => null);
+      return direct ? { source: "witanime", servers: direct.servers, episodeTitle: direct.episodeTitle, animeTitle: direct.animeTitle, up4EpisodeUrl: null, direct: true } : null;
+    },
+    (signal) => scrapeVideoServers(episodeUrl, signal)
+      .then((r) => ({ source: "witanime", servers: r.servers, episodeTitle: r.episodeTitle, animeTitle: r.animeTitle, up4EpisodeUrl: r.up4EpisodeUrl ?? null }))
+      .catch(() => null),
+    // The witanime direct path resolves session-bound stream gates first, so
+    // it legitimately takes longer than anime4up's single GET.
+    { delayMs: DIRECT_HEDGE_MS + 3000 },
+  );
 }
 
 async function fetchVideoServersFresh(episodeUrl: string, url4up?: string): Promise<VideoServersPayload> {
@@ -2095,14 +2129,31 @@ export async function fetchAllAnime(page = 1): Promise<{
     `${LISTING_CACHE_PREFIX}all:${page}`,
     LISTING_CACHE_TTL,
     async () => {
-      // Fast path: parse the static all-anime page directly (no WebView).
-      const direct = await scrapeAllAnimeDirect(page).catch(() => null);
-      if (direct && direct.items.length > 0) {
-        const items: SearchResult[] = direct.items.map(toSearchResult);
-        return { success: true, data: { page, items, hasNext: direct.hasNext } };
+      // Fast path: parse the static all-anime page directly (no WebView);
+      // the WebView scrape is the hedged fallback (scraper/hedge.ts).
+      let webViewError: unknown = null;
+      const winner = await hedge<{ direct: true; items: WitCard[]; hasNext: boolean } | { direct: false; items: Awaited<ReturnType<typeof scrapeAllAnime>>["items"] }>(
+        async () => {
+          const d = await scrapeAllAnimeDirect(page).catch(() => null);
+          return d ? { direct: true as const, items: d.items, hasNext: d.hasNext } : null;
+        },
+        async (signal) => {
+          try {
+            const r = await scrapeAllAnime(page, signal);
+            return { direct: false as const, items: r.items };
+          } catch (e) {
+            webViewError = e;
+            return null;
+          }
+        },
+        { delayMs: DIRECT_HEDGE_MS + 3000, valid: (w) => w.items.length > 0 },
+      );
+      if (winner?.direct) {
+        const items: SearchResult[] = winner.items.map(toSearchResult);
+        return { success: true, data: { page, items, hasNext: winner.hasNext } };
       }
-      // Fallback: WebView scrape.
-      const r = await scrapeAllAnime(page);
+      if (!winner && webViewError) throw webViewError;
+      const r = { items: winner && !winner.direct ? winner.items : [] };
       const items: SearchResult[] = r.items.map((it) => ({
         title: it.title,
         href: it.href,

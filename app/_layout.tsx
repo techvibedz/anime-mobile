@@ -46,6 +46,7 @@ import { checkForApkUpdate, checkForOtaUpdate } from "../lib/updater";
 import type { UpdateInfo } from "../lib/updater";
 import { UpdateModal } from "../components/UpdateModal";
 import { ScraperHost } from "../lib/scraper";
+import { startCfWarmup } from "../lib/scraper/cfWarm";
 import { initAds } from "../lib/ads";
 import { SidebarProvider } from "../components/Sidebar";
 import { CompletionProvider } from "../lib/completion";
@@ -480,6 +481,10 @@ export default function RootLayout() {
     const timer = setTimeout(() => { initAds(); }, 3000);
     return () => clearTimeout(timer);
   }, []);
+
+  // Solve Cloudflare in the background for hosts that challenged us recently,
+  // and refresh the clearance on foreground before it expires (cfWarm.ts).
+  useEffect(() => startCfWarmup(), []);
 
   // Housekeeping: drop expired AsyncStorage cache entries so the (Android-
   // capped) DB never fills up — a full DB silently fails EVERY write, which

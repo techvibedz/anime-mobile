@@ -20,7 +20,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchHome } from "../../lib/api";
+import { fetchHome, warmAnimeDetail } from "../../lib/api";
 import type { FeaturedItem, HomeSection, AnimeItem, EpisodeItem } from "../../lib/api";
 import { episodeNumberFromUrl } from "../../lib/videoProviders";
 import { isEpisodeUrl, toAnimeUrl } from "../../lib/favorites";
@@ -795,6 +795,7 @@ const AnimeCardView = memo(function AnimeCardView({ item, rank }: { item: AnimeI
       image={item.image}
       title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+      onPressIn={() => warmAnimeDetail(item.href)}
       width={CARD_W}
       newBadge={item.isNew}
       recyclingKey={item.href}

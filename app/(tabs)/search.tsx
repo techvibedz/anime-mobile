@@ -19,7 +19,7 @@ import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { searchAnime, fetchAllAnime, fetchGenre } from "../../lib/api";
+import { searchAnime, fetchAllAnime, fetchGenre, warmAnimeDetail } from "../../lib/api";
 import type { SearchResult } from "../../lib/api";
 import { MalCardBadge } from "../../components/MalRating";
 import { CompletionBadge } from "../../components/CompletionBadge";
@@ -120,6 +120,7 @@ const ResultCard = memo(function ResultCard({ item, width, layout }: { item: Sea
       image={item.image}
       title={item.title}
       onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+      onPressIn={() => warmAnimeDetail(item.href)}
       width={width}
       layout={layout}
       subtitle={layout === "list" ? item.type : undefined}

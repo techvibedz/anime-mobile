@@ -5,6 +5,8 @@
 // `enqueue()` and await the result.
 
 import { getSourceCandidates } from "./sourceDomains";
+import { hostLabel, recordTiming, type TimingOutcome } from "./timing";
+import { markCfCleared } from "./cfGate";
 
 export type ScrapeJob = {
   id: string;
@@ -27,7 +29,29 @@ type Pending = {
   job: ScrapeJob;
   resolve: (value: any) => void;
   reject: (err: Error) => void;
+  enqueuedAt: number;
+  claimedAt?: number;
 };
+
+function classifyFailure(message: string): TimingOutcome {
+  if (/cancel|supersed/i.test(message)) return "cancelled";
+  if (/timeout|timed out/i.test(message)) return "timeout";
+  if (/challenge/i.test(message)) return "cf";
+  if (/HTTP \d/.test(message)) return "http";
+  return "error";
+}
+
+function recordJob(p: Pending, outcome: TimingOutcome) {
+  const now = Date.now();
+  const start = p.claimedAt ?? now;
+  recordTiming({
+    kind: p.job.injectBefore || p.job.allFrames ? "resolve" : "webview",
+    host: hostLabel(p.job.url),
+    ms: now - start,
+    waitMs: start - p.enqueuedAt,
+    outcome,
+  });
+}
 
 let _seq = 0;
 const _queue: Pending[] = [];
@@ -58,6 +82,7 @@ export function _claimNext(): Pending | null {
   if (idx === -1) idx = 0;
   const next = _queue.splice(idx, 1)[0];
   if (!next) return null;
+  next.claimedAt = Date.now();
   _inFlight.set(next.job.id, next);
   return next;
 }
@@ -78,6 +103,10 @@ export function _resolve(id: string, value: any) {
   const p = _inFlight.get(id);
   if (!p) return;
   _inFlight.delete(id);
+  recordJob(p, value == null ? "empty" : "ok");
+  // A real browser just completed a page here, so the shared cookie jar holds
+  // a fresh Cloudflare clearance: let the direct path try this host again.
+  for (const u of p.job.urls.length ? p.job.urls : [p.job.url]) markCfCleared(u);
   p.resolve(value);
   _onChange?.();
 }
@@ -86,6 +115,7 @@ export function _reject(id: string, message: string) {
   const p = _inFlight.get(id);
   if (!p) return;
   _inFlight.delete(id);
+  recordJob(p, classifyFailure(message));
   p.reject(new Error(message));
   _onChange?.();
 }
@@ -116,7 +146,26 @@ export function _consumeCancelled(id: string): boolean {
   return _cancelled.delete(id);
 }
 
-export async function enqueue(job: Omit<ScrapeJob, "id" | "urls">): Promise<any> {
+/** Cancel one job (queued or running). Its promise rejects with "cancelled". */
+function cancelJob(id: string, message: string) {
+  const qi = _queue.findIndex((p) => p.job.id === id);
+  if (qi >= 0) {
+    const [pending] = _queue.splice(qi, 1);
+    pending.reject(new Error(message));
+    _onChange?.();
+    return;
+  }
+  const running = _inFlight.get(id);
+  if (!running) return;
+  _inFlight.delete(id);
+  _cancelled.add(id);
+  recordJob(running, "cancelled");
+  running.reject(new Error(message));
+  _onChange?.();
+}
+
+export async function enqueue(job: Omit<ScrapeJob, "id" | "urls">, signal?: AbortSignal): Promise<any> {
+  if (signal?.aborted) throw new Error("cancelled: aborted before start");
   // A priority job is user-initiated (opening an episode / tapping a server).
   // Free the in-flight background slots it would otherwise wait behind — the
   // host only reserves one slot, so 3 long background scrapes could still delay
@@ -127,8 +176,13 @@ export async function enqueue(job: Omit<ScrapeJob, "id" | "urls">): Promise<any>
   if (job.priority && job.allFrames) _cancelBackground();
   const id = `s${++_seq}`;
   const urls = await getSourceCandidates(job.url);
+  if (signal?.aborted) throw new Error("cancelled: aborted before start");
   return new Promise((resolve, reject) => {
-    const entry = { job: { ...job, urls, id }, resolve, reject };
+    const entry: Pending = { job: { ...job, urls, id }, resolve, reject, enqueuedAt: Date.now() };
+    // Hedged callers (see hedge.ts) abort the WebView job once the direct
+    // fetch wins, so the slot goes back to work instead of finishing a page
+    // nobody is waiting for.
+    signal?.addEventListener("abort", () => cancelJob(id, "cancelled: superseded"), { once: true });
     if (job.priority) {
       // Place ahead of any non-priority jobs already queued.
       const at = _queue.findIndex((p) => !p.job.priority);

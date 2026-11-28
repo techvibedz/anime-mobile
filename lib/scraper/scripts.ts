@@ -728,6 +728,21 @@ _waitFor(
 );
 })();true;`;
 
+// Cloudflare warm-up: load a source's home page and report as soon as any
+// challenge has cleared and the document is parsed. The point is the side
+// effect: the shared cookie jar now holds a fresh cf_clearance for the host,
+// so the next direct fetch / scrape on it skips the challenge (see cfWarm.ts).
+export const WARM_CF = `(function(){${HELPERS}
+_waitFor(
+  function(){ return !!document.body; },
+  function(ok, reason){
+    if (ok) _send('result', { data: { ok: true } });
+    else _send('error', { message: reason === 'cf-still-active' ? 'source challenge did not finish verification' : 'warm-up timed out' });
+  },
+  25000, 300
+);
+})();true;`;
+
 // ──────────────────────────────────────────────────────────────
 // RECENT — paginated episode archive (.anime-card-container with episode hrefs)
 // ──────────────────────────────────────────────────────────────

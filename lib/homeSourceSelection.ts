@@ -1,14 +1,22 @@
 import { normFuzzy } from "./fuzzy";
 import { withTimeout } from "./requestCache";
+import { hedge } from "./scraper/hedge";
 
 const FALLBACK_STAGGER_MS = 1200;
+const HOME_HEDGE_MS = 6000;
 
 export async function loadWitanimeHome<T>(
   direct: () => Promise<T | null>,
-  webView: () => Promise<T | null>,
+  webView: (signal?: AbortSignal) => Promise<T | null>,
   fallbacks: (() => Promise<T | null>)[] = [],
 ): Promise<T | null> {
-  const primary = (async () => await direct().catch(() => null) || await webView().catch(() => null))();
+  // Direct first; the WebView joins if direct is slow/hung or fails (hedge.ts),
+  // instead of waiting out the direct fetch's whole retry ladder.
+  const primary = hedge<T>(
+    () => direct().catch(() => null),
+    (signal) => webView(signal).catch(() => null),
+    { delayMs: HOME_HEDGE_MS },
+  );
   if (!fallbacks.length) return primary;
   const secondary = Promise.any(fallbacks.map(async (load) => {
     // Stagger the fallbacks behind the primary direct fetch: three full-page

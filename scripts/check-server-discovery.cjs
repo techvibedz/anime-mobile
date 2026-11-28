@@ -137,7 +137,7 @@ async function check(project, desktop, primarySource, missingWit = false, witCac
     './bus': { enqueue: async (job) => { jobs.push(job); return { html: job.url.includes('witanime') ? witHtml : up4Html }; } },
     './scripts': { EXTRACT_RENDERED_HTML: (marker) => marker }, './a3rbCatalogSeed': { A3RB_CATALOG_SEED: '' },
     '../fuzzy': loadPure(path.join(root, 'lib/fuzzy.ts')),
-    '../remoteLog': { remoteLog: () => {} }, '../videoProviders': providers, './sourceDomains': domains,
+    '../remoteLog': { remoteLog: () => {} }, '../videoProviders': providers, './sourceDomains': domains, './timing': loadPure(path.join(root, 'lib/scraper/timing.ts')), './cfGate': loadPure(path.join(root, 'lib/scraper/cfGate.ts')), './hedge': loadPure(path.join(root, 'lib/scraper/hedge.ts')),
   }, { fetch: async () => ({ ok: !blocked, status: blocked ? 403 : 200, headers: { get: () => null }, text: async () => up4Html }) });
   assert.equal((await direct.searchWitanimeDirect('Show'))[0]?.title, 'Show');
   assert.equal(await direct.searchAnime4upDirect('Show'), 'https://w1.anime4up.rest/anime/show');

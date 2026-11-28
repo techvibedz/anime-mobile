@@ -62,6 +62,8 @@ export interface PosterCardProps {
   subtitle?: string;
   /** Recycling key for expo-image caching. */
   recyclingKey?: string;
+  /** Touch-down hook: screens start the detail load here (warmAnimeDetail). */
+  onPressIn?: () => void;
 }
 
 export const PosterCard = memo(function PosterCard({
@@ -85,6 +87,7 @@ export const PosterCard = memo(function PosterCard({
   titleLines = 2,
   subtitle,
   recyclingKey,
+  onPressIn,
 }: PosterCardProps) {
   // Serve witanime posters right-sized as WebP via Photon; fall back to the raw
   // URL if the sized fetch errors. failedUri self-resets on recycle because a
@@ -120,6 +123,7 @@ export const PosterCard = memo(function PosterCard({
   return (
     <Pressable
       disabled={disabled}
+      onPressIn={onPressIn}
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={300}

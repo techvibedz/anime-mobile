@@ -52,7 +52,7 @@ function direct(fetcher, browser) {
   return load('lib/scraper/direct.ts', {
     '@react-native-async-storage/async-storage': storage, './bus': { enqueue: browser },
     './scripts': { EXTRACT_RENDERED_HTML: marker => marker }, '../fuzzy': fuzzy, './a3rbCatalogSeed': { A3RB_CATALOG_SEED: '' }, '../remoteLog': { remoteLog() {} },
-    '../videoProviders': { ...providers, VIDEO_USER_AGENT: 'Mozilla/5.0' }, './sourceDomains': domains,
+    '../videoProviders': { ...providers, VIDEO_USER_AGENT: 'Mozilla/5.0' }, './sourceDomains': domains, './timing': load('lib/scraper/timing.ts'), './cfGate': load('lib/scraper/cfGate.ts'), './hedge': load('lib/scraper/hedge.ts'),
   }, { fetch: fetcher, ...(live ? {} : { setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)) }) });
 }
 function response(html, status = 200) { return { ok: status === 200, status, headers: { get: () => null }, text: async () => html }; }

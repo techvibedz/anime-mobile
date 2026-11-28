@@ -22,7 +22,7 @@ const direct = load("lib/scraper/direct.ts", {
   "@react-native-async-storage/async-storage": storage,
   "./bus": { enqueue: (job) => browser(job) }, "./scripts": scripts,
   "../fuzzy": { fuzzyScore: () => 0 }, "../remoteLog": { remoteLog: () => {} }, "./a3rbCatalogSeed": { A3RB_CATALOG_SEED: "" },
-  "../videoProviders": { VIDEO_USER_AGENT: "test-browser" }, "./sourceDomains": domains,
+  "../videoProviders": { VIDEO_USER_AGENT: "test-browser" }, "./sourceDomains": domains, "./timing": load("lib/scraper/timing.ts"), "./cfGate": load("lib/scraper/cfGate.ts"), "./hedge": load("lib/scraper/hedge.ts"),
 }, { ...shortTimers, fetch: (url, init) => { requests.push(url); return fetcher(url, init); } },
 "\nexport { rawGetA3rb, fetchWitPlayerResponse };\n");
 
@@ -173,7 +173,7 @@ async function main() {
   assert.equal(rows.at(-1).path, "/titles/show");
 
   // A dead primary does not delay the reachable secondary source to its timeout.
-  const homes = load("lib/homeSourceSelection.ts", { "./fuzzy": { normFuzzy: (s) => s }, "./requestCache": cache });
+  const homes = load("lib/homeSourceSelection.ts", { "./fuzzy": { normFuzzy: (s) => s }, "./requestCache": cache, "./scraper/hedge": load("lib/scraper/hedge.ts") });
   const good = { featured: ["secondary"] };
   const never = () => new Promise(() => {});
   assert.equal(await homes.loadWitanimeHome(never, never, [async () => good, async () => { throw Error("blocked"); }]), good);

@@ -24,7 +24,7 @@ import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, fetchWitanimeSections } from "../../lib/api";
+import { fetchEpisodes, fetchEpisodesUp4, fetchAnime3rbEpisodes, fetchWitanimeSections, warmAnimeDetail } from "../../lib/api";
 import type { AnimeDetail, Episode, RelatedAnimeCard } from "../../lib/api";
 import { addFavorite, removeFavorite, favoriteListOf, subscribeFavorites } from "../../lib/favorites";
 import type { FavoriteList } from "../../lib/favorites";
@@ -1511,6 +1511,7 @@ function RelatedTab({ items, loading }: { items: RelatedTabItem[]; loading: bool
               title={card.title}
               subtitle={card.type || undefined}
               onPress={() => router.push(`/anime/${encodeURIComponent(card.href)}`)}
+              onPressIn={() => warmAnimeDetail(card.href)}
               width={cards.cardWidth}
               layout={cards.layout}
               recyclingKey={card.href}
@@ -1581,6 +1582,7 @@ function MayLikeTab({ items, loading }: { items: RelatedAnimeCard[]; loading: bo
           title={item.title}
           subtitle={item.type || undefined}
           onPress={() => router.push(`/anime/${encodeURIComponent(item.href)}`)}
+          onPressIn={() => warmAnimeDetail(item.href)}
           width={cards.cardWidth}
           layout={cards.layout}
           recyclingKey={item.href}

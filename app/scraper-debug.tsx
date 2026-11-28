@@ -5,6 +5,8 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { scrapeWitanimeHome, extractVideoUrl } from "../lib/scraper";
 import { diagnoseAnime3rb } from "../lib/api";
+import { summarizeTimings, clearTimings, getTimings } from "../lib/scraper/timing";
+import { cfGateSnapshot } from "../lib/scraper/cfGate";
 import { C, R, F } from "../lib/theme";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
@@ -19,6 +21,23 @@ export default function ScraperDebug() {
   const [videoStatus, setVideoStatus] = useState<"idle" | "running" | "ok" | "err">("idle");
   const [videoResult, setVideoResult] = useState<string>("");
   const [videoMs, setVideoMs] = useState<number | null>(null);
+
+  // Speed pass: per-step scrape timings + Cloudflare gate state.
+  const [timingText, setTimingText] = useState("");
+  function refreshTimings() {
+    const rows = summarizeTimings();
+    const gate = cfGateSnapshot();
+    const lines = rows.length
+      ? rows.map((r) => {
+          const out = Object.entries(r.outcomes).map(([k, n]) => `${k}:${n}`).join(" ");
+          return `${r.key}  n=${r.count}  p50=${r.p50}ms  p90=${r.p90}ms  max=${r.max}ms${r.avgWait ? `  queued~${r.avgWait}ms` : ""}\n   ${out}`;
+        })
+      : ["(no samples yet — browse the app, then refresh)"];
+    const gateLines = gate.length
+      ? gate.map((g) => `${g.host}: ${g.blocked ? `BLOCKED ${g.blockedForS}s` : "open"}  last CF ${g.lastBlockedMinAgo ?? "-"}m ago  cleared ${g.lastClearedMinAgo ?? "-"}m ago`)
+      : ["(no Cloudflare challenges seen)"];
+    setTimingText(`${getTimings().length} samples\n\n${lines.join("\n")}\n\nCloudflare gate:\n${gateLines.join("\n")}`);
+  }
 
   // anime3rb chain diagnostic
   const [a3rbTitle, setA3rbTitle] = useState("Jujutsu Kaisen");
@@ -108,6 +127,21 @@ export default function ScraperDebug() {
             OTA update id: {(Updates.updateId as string) ?? "(none — running embedded bundle)"}{"\n"}
             OTA created: {Updates.createdAt ? new Date(Updates.createdAt).toLocaleString() : "(embedded)"}
           </Text>
+        </View>
+
+        {/* Speed pass timings */}
+        <View style={ss.card}>
+          <Text style={ss.cardTitle}>Scrape timings</Text>
+          <Text style={ss.cardSub}>How long each step took on this device (direct fetch, hidden WebView, video resolve, Cloudflare warm-up), slowest first.</Text>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <Pressable style={({ pressed }) => [ss.btn, { flex: 1 }, pressed && { opacity: 0.8 }]} onPress={refreshTimings}>
+              <Text style={ss.btnText}>Refresh</Text>
+            </Pressable>
+            <Pressable style={({ pressed }) => [ss.btn, { flex: 1, backgroundColor: C.surface }, pressed && { opacity: 0.8 }]} onPress={() => { clearTimings(); refreshTimings(); }}>
+              <Text style={[ss.btnText, { color: C.text }]}>Clear</Text>
+            </Pressable>
+          </View>
+          {!!timingText && <Text style={ss.result}>{timingText}</Text>}
         </View>
 
         {/* anime3rb chain diagnostic */}

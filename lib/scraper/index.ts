@@ -1,4 +1,5 @@
 import { enqueue } from "./bus";
+import { hedge } from "./hedge";
 import {
   fetchWitListingDirect,
   fetchAnime4upRecentPageDirect,
@@ -25,6 +26,12 @@ import {
 
 export { ScraperHost } from "./ScraperHost";
 
+// How long a direct (plain fetch) read gets on its own before the WebView
+// fallback is started alongside it (see hedge.ts). Direct reads of these
+// pages normally finish in well under a second; past a few seconds the
+// connection is usually hung or Cloudflare-blocked.
+export const DIRECT_HEDGE_MS = 5000;
+
 const UP4_BASE = "https://w1.anime4up.rest";
 
 /* ── HOME ──────────────────────────────────────── */
@@ -43,13 +50,13 @@ export type RawEpisodeCard = {
   animeTitle: string; animeHref: string; isNew: boolean;
 };
 
-export async function scrapeWitanimeHome() {
+export async function scrapeWitanimeHome(signal?: AbortSignal) {
   const base = await getWitBase();
   return enqueue({
     url: `${base}/`,
     injectAfter: EXTRACT_HOME_WIT,
     timeoutMs: 35000,
-  }) as Promise<{
+  }, signal) as Promise<{
     featured: RawFeatured[];
     animes: RawAnime[];
     episodes: RawEpisodeCard[];
@@ -83,19 +90,29 @@ export type RawDetail = {
 export async function scrapeEpisodesPage(animeUrl: string, priority = false) {
   const is4up = /anime4up/i.test(animeUrl);
   const isWit = /witanime\./i.test(animeUrl);
-  // Static HTML carries the full detail in <1s; the WebView render below is
-  // only the fallback (unknown layout, CF challenge, network failure).
+  const viaWebView = async (signal?: AbortSignal) => {
+    const url = isWit ? rewriteWitUrl(animeUrl, await getWitBase()) : animeUrl;
+    return enqueue({
+      url,
+      injectAfter: is4up ? EXTRACT_EPISODES_4UP : EXTRACT_EPISODES_WIT,
+      timeoutMs: 35000,
+      priority,
+    }, signal) as Promise<RawDetail>;
+  };
+  // Static HTML carries the full detail in <1s; the WebView render is the
+  // fallback (unknown layout, CF challenge, network failure). Hedged: a hung
+  // direct fetch no longer holds the WebView back for its whole retry ladder.
   if (isWit) {
-    const direct = await fetchWitDetailDirect(animeUrl).catch(() => null);
-    if (direct) return direct;
+    let webViewError: unknown = null;
+    const result = await hedge<RawDetail>(
+      () => fetchWitDetailDirect(animeUrl).catch(() => null),
+      (signal) => viaWebView(signal).catch((e) => { webViewError = e; return null; }),
+      { delayMs: DIRECT_HEDGE_MS },
+    );
+    if (result) return result;
+    throw webViewError instanceof Error ? webViewError : new Error("detail unavailable");
   }
-  const url = isWit ? rewriteWitUrl(animeUrl, await getWitBase()) : animeUrl;
-  return enqueue({
-    url,
-    injectAfter: is4up ? EXTRACT_EPISODES_4UP : EXTRACT_EPISODES_WIT,
-    timeoutMs: 35000,
-    priority,
-  }) as Promise<RawDetail>;
+  return viaWebView();
 }
 
 /* ── SEARCH ────────────────────────────────────── */
@@ -126,15 +143,24 @@ export async function scrapeSearchUp4(query: string) {
 /* ── RECENT (episode archive paginated) ────────── */
 
 export async function scrapeRecent(page = 1) {
-  const direct = await fetchAnime4upRecentPageDirect(page).catch(() => null);
-  if (direct?.episodes.length) return direct;
   const url = page === 1 ? `${UP4_BASE}/episode/` : `${UP4_BASE}/episode/page/${page}/`;
-  const result = await enqueue({
-    url,
-    injectAfter: EXTRACT_RECENT,
-    timeoutMs: 30000,
-  }) as { episodes: RawEpisodeCard[] };
-  return { ...result, hasNext: result.episodes.length > 0 };
+  let webViewError: unknown = null;
+  const result = await hedge<{ episodes: RawEpisodeCard[]; hasNext: boolean }>(
+    () => fetchAnime4upRecentPageDirect(page).catch(() => null),
+    async (signal) => {
+      try {
+        const r = await enqueue({ url, injectAfter: EXTRACT_RECENT, timeoutMs: 30000 }, signal) as { episodes: RawEpisodeCard[] };
+        return { ...r, hasNext: r.episodes.length > 0 };
+      } catch (e) {
+        webViewError = e;
+        return null;
+      }
+    },
+    { delayMs: DIRECT_HEDGE_MS, valid: (r) => r.episodes.length > 0 },
+  );
+  if (result) return result;
+  if (webViewError) throw webViewError;
+  return { episodes: [] as RawEpisodeCard[], hasNext: false };
 }
 
 /* ── GENRE / ALL-ANIME (paginated card grid) ───── */
@@ -170,14 +196,14 @@ export async function scrapeGenre(genre: string, page = 1) {
   }) as Promise<{ items: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: null }[] }>;
 }
 
-export async function scrapeAllAnime(page = 1) {
+export async function scrapeAllAnime(page = 1, signal?: AbortSignal) {
   const base = await getWitBase();
   const url = `${base}/browse?page=${page}`;
   return enqueue({
     url,
     injectAfter: EXTRACT_LISTING,
     timeoutMs: 30000,
-  }) as Promise<{ items: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: null }[] }>;
+  }, signal) as Promise<{ items: { title: string; href: string; image: string | null; type: string | null; status: string | null; synopsis: null }[] }>;
 }
 
 /* ── DIRECT (no-WebView) listing/search fast paths ──────────────
@@ -239,7 +265,7 @@ export async function findCrossSourceUrl(
 
 export type RawServer = { id: string; name: string; iframeUrl: string; provider: string; sandbox?: string | false; referrerPolicy?: string };
 
-export async function scrapeVideoServers(episodeUrl: string) {
+export async function scrapeVideoServers(episodeUrl: string, signal?: AbortSignal) {
   const url = /witanime\./i.test(episodeUrl)
     ? rewriteWitUrl(episodeUrl, await getWitBase())
     : episodeUrl;
@@ -251,7 +277,7 @@ export async function scrapeVideoServers(episodeUrl: string) {
     // a WebView slot reserved for priority work, so use it instead of sitting
     // behind unrelated background scrapes while that slot stays idle.
     priority: true,
-  }) as Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null; up4AnimeUrl?: string | null }>;
+  }, signal) as Promise<{ servers: RawServer[]; episodeTitle: string; animeTitle: string; up4EpisodeUrl?: string | null; up4AnimeUrl?: string | null }>;
 }
 
 /* ── VIDEO URL (m3u8/mp4 from embed) ──────────── */
